@@ -367,11 +367,21 @@ void testFieldWalk()
     CHECK(report.value("fieldMetrics").toObject().value("fieldDiffIre").toArray().size() == fields);
     CHECK(report.value("fieldMetrics").toObject().value("fieldDiffIre").toArray().at(0).isNull());
 
-    // A TBC whose length disagrees with the metadata is refused.
-    TbcMetaData shorter;
-    buildMetadata(shorter, fields - 1);
+    // A TBC with a trailing surplus (the decoder flushed its metadata before the
+    // last fields) is walked up to the metadata's count; a TBC holding fewer
+    // fields than the metadata describes is refused.
+    TbcMetaData shorterMeta;
+    buildMetadata(shorterMeta, fields - 1);
+    FieldMetrics prefix;
+    FieldWalkPool surplus(luma, QString(), 1, shorterMeta, geometryFromParameters(shorterMeta.getVideoParameters()));
+    CHECK(surplus.process(prefix));
+    CHECK(prefix.enabled && prefix.lumaMeanIre.size() == fields - 1);
+    CHECK(std::abs(prefix.lumaMeanIre[10] - 50.0) < 1.0);
+
+    TbcMetaData longerMeta;
+    buildMetadata(longerMeta, fields + 1);
     FieldMetrics unused;
-    FieldWalkPool bad(luma, QString(), 1, shorter, geometryFromParameters(shorter.getVideoParameters()));
+    FieldWalkPool bad(luma, QString(), 1, longerMeta, geometryFromParameters(longerMeta.getVideoParameters()));
     CHECK(!bad.process(unused));
 }
 

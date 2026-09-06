@@ -56,8 +56,11 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
 ```
 
 Exit status is 0 on success and 1 on any failure (unreadable metadata, no
-fields, an invalid `--start/--length`, a TBC whose field count disagrees with
-the metadata, an unwritable output).
+fields, an invalid `--start/--length`, a TBC holding fewer fields than the
+metadata describes, an unwritable output). A TBC holding *more* fields than the
+metadata is walked up to the metadata's count: the decoders flush metadata in
+batches, so a decode that was stopped early leaves a described prefix and an
+undescribed tail.
 
 ### Why the RF rate matters
 
@@ -118,5 +121,6 @@ event's severity (`detail.fieldDataCoincident`).
 fields, sync-loss runs, dropout storms, a 32-bit rollover round-tripped through
 JSON, `--start/--length` clipping) and a small synthetic luma + chroma TBC
 (scene change, snow, blank picture, missing burst, single- vs multi-threaded
-equality, field-count mismatch refused). `tbc-segments-smoke` runs the shipped
+equality, a short TBC refused, a TBC with a trailing surplus walked to the
+metadata's count). `tbc-segments-smoke` runs the shipped
 `test-data/ntsc/ve-snw-cut` fixture through both tiers.

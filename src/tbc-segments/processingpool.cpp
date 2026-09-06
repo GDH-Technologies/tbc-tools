@@ -51,16 +51,25 @@ bool FieldWalkPool::process(FieldMetrics &out)
         return false;
     }
     lastFieldNumber = metaData.getNumberOfFields();
-    if (lumaVideo.getNumberOfAvailableFields() != lastFieldNumber) {
-        qCritical().nospace() << "tbc-segments: TBC holds " << lumaVideo.getNumberOfAvailableFields()
+    const qint32 available = lumaVideo.getNumberOfAvailableFields();
+    if (available < lastFieldNumber) {
+        qCritical().nospace() << "tbc-segments: TBC holds only " << available
                               << " fields but the metadata describes " << lastFieldNumber
                               << "; refusing to guess the alignment";
         lumaVideo.close();
         return false;
     }
+    if (available > lastFieldNumber) {
+        // The decoders flush their metadata in batches, so a TBC that was cut
+        // short (or is still being written) carries a tail the metadata never
+        // describes. Field i of the TBC is still field i of the metadata:
+        // walk the described fields and leave the surplus alone.
+        qInfo().nospace() << "tbc-segments: TBC holds " << available << " fields, the metadata describes "
+                          << lastFieldNumber << "; walking the first " << lastFieldNumber;
+    }
     if (!chromaFilename.isEmpty()) {
         if (chromaVideo.open(chromaFilename, fieldLength, geometry.fieldWidth)
-            && chromaVideo.getNumberOfAvailableFields() == lastFieldNumber) {
+            && chromaVideo.getNumberOfAvailableFields() >= lastFieldNumber) {
             chromaOpen = true;
         } else {
             qWarning() << "tbc-segments: chroma TBC unusable; burst amplitude comes from the luma TBC";
