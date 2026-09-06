@@ -749,6 +749,50 @@
     </widget>
    </item>
    <item>
+    <layout class="QHBoxLayout" name="segmentsLayout">
+     <property name="spacing">
+      <number>6</number>
+     </property>
+     <item>
+      <widget class="QCheckBox" name="exportSegmentsCheckBox">
+       <property name="text">
+        <string>Export each segment as a separate file</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="segmentSelectionLabel">
+       <property name="text">
+        <string>Segments</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="segmentSelectionComboBox"/>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="appendSegmentTitleCheckBox">
+       <property name="text">
+        <string>Append title to file name</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="segmentsSummaryLabel">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+         <horstretch>1</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
     <layout class="QHBoxLayout" name="actionLayout">
      <property name="spacing">
       <number>2</number>

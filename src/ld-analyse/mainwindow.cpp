@@ -4299,6 +4299,9 @@ void MainWindow::applySegmentEdit(const QVector<TbcMetaData::Segment> &segments,
     updateMetadataStatusPanel();
     updateTimelineMarkers();
     updateBottomStatusReadout();
+    if (exportDialog) {
+        exportDialog->refreshSegmentsFromSource();
+    }
     if (!statusText.isEmpty()) {
         statusBar()->showMessage(statusText, 3000);
     }
