@@ -73,6 +73,7 @@ void Configuration::writeConfiguration(void)
     // View options
     configuration->beginGroup("viewOptions");
     configuration->setValue("toggleChromaDuringSeek", settings.viewOptions.toggleChromaDuringSeek);
+    configuration->setValue("skipBySegments", settings.viewOptions.skipBySegments);
     configuration->setValue("generateProxyEnabled", settings.viewOptions.generateProxyEnabled);
     configuration->setValue("exportProfileConfigEnabled", settings.viewOptions.exportProfileConfigEnabled);
     configuration->setValue("exportProfileConfigPath", settings.viewOptions.exportProfileConfigPath);
@@ -136,6 +137,7 @@ void Configuration::readConfiguration(void)
     // View options
     configuration->beginGroup("viewOptions");
     settings.viewOptions.toggleChromaDuringSeek = configuration->value("toggleChromaDuringSeek", false).toBool();
+    settings.viewOptions.skipBySegments = configuration->value("skipBySegments", true).toBool();
     settings.viewOptions.generateProxyEnabled = configuration->value("generateProxyEnabled", false).toBool();
     settings.viewOptions.exportProfileConfigEnabled = configuration->value("exportProfileConfigEnabled", false).toBool();
     settings.viewOptions.exportProfileConfigPath = configuration->value("exportProfileConfigPath", QString()).toString();
@@ -190,6 +192,7 @@ void Configuration::setDefault(void)
 
     // View options
     settings.viewOptions.toggleChromaDuringSeek = false;
+    settings.viewOptions.skipBySegments = true;
     settings.viewOptions.generateProxyEnabled = false;
     settings.viewOptions.exportProfileConfigEnabled = false;
     settings.viewOptions.exportProfileConfigPath = QString();
@@ -377,6 +380,16 @@ void Configuration::setToggleChromaDuringSeek(bool toggleChromaDuringSeek)
 bool Configuration::getToggleChromaDuringSeek(void)
 {
     return settings.viewOptions.toggleChromaDuringSeek;
+}
+
+void Configuration::setSkipBySegments(bool skipBySegments)
+{
+    settings.viewOptions.skipBySegments = skipBySegments;
+}
+
+bool Configuration::getSkipBySegments(void)
+{
+    return settings.viewOptions.skipBySegments;
 }
 
 void Configuration::setGenerateProxyEnabled(bool generateProxyEnabled)

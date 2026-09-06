@@ -13,6 +13,7 @@ set(ld-analyse_SOURCES
     metadataconversiondialog.cpp metadataconversiondialog.ui
     metadatastatusdialog.cpp metadatastatusdialog.ui
     notesviewerdialog.cpp notesviewerdialog.h
+    segmentsviewerdialog.cpp segmentsviewerdialog.h
     teletextviewerdialog.cpp teletextviewerdialog.h
     teletextnativeviewwidget.cpp teletextnativeviewwidget.h
     main.cpp

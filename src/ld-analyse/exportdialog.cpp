@@ -1508,6 +1508,24 @@ ExportDialog::ExportDialog(QWidget *parent) :
             tr("Eject the default tbc-video-export profile set to an editable JSON file."));
     }
     updateExportProfileConfigPathUi();
+    if (ui->segmentSelectionComboBox) {
+        ui->segmentSelectionComboBox->addItem(tr("Enabled clips"), QStringLiteral("enabled_clips"));
+        ui->segmentSelectionComboBox->addItem(tr("Enabled segments"), QStringLiteral("enabled"));
+        ui->segmentSelectionComboBox->addItem(tr("All segments"), QStringLiteral("all"));
+        ui->segmentSelectionComboBox->setToolTip(
+            tr("Which recording segments become files: enabled clips (blank/noise/unknown skipped), every enabled segment, or all of them."));
+        connect(ui->segmentSelectionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this](int) { updateSegmentExportControls(); });
+    }
+    if (ui->exportSegmentsCheckBox) {
+        ui->exportSegmentsCheckBox->setToolTip(
+            tr("Queue one tbc-video-export run per recording segment (<base>_<NN>[_<title>]), each with its own "
+               "--start/--length, chapters and audio trim. The In/Out range is ignored while checked."));
+    }
+    if (ui->appendSegmentTitleCheckBox) {
+        ui->appendSegmentTitleCheckBox->setChecked(true);
+        connect(ui->appendSegmentTitleCheckBox, &QCheckBox::toggled, this, [this](bool) { updateSegmentExportControls(); });
+    }
     if (ui->exportMetadataCheckBox) {
         ui->exportMetadataCheckBox->setChecked(true);
         ui->exportMetadataCheckBox->setToolTip(
@@ -3174,17 +3192,63 @@ void ExportDialog::on_exportButton_clicked()
     }
     bool overwriteExisting = false;
     const QString outputBase = sanitizeOutputBaseName(ui->outputLineEdit->text().trimmed());
+    if (outputBase.isEmpty()) {
+        cleanupTemporaryMetadataSnapshot();
+        const QString errorToShow = tr("Please provide an output base name.");
+        appendStatus(errorToShow);
+        appendLog(errorToShow);
+        QMessageBox::warning(this, tr("Error"), errorToShow);
+        return;
+    }
     const bool generateProxyRequested = shouldGenerateProxyForSelection();
     const QString selectedProxyCodec = selectedProxyCodecId();
-    const QString plannedProxyOutputPath = generateProxyRequested
-                                               ? proxyOutputPath(outputBase, selectedProxyCodec)
-                                               : QString();
+
+    // The jobs: one per selected recording segment, or the single In/Out range
+    QVector<ExportJob> jobs;
+    if (segmentExportSelected()) {
+        QStringList segmentNotes;
+        QString segmentError;
+        if (!buildSegmentExportJobs(outputBase, &jobs, &segmentNotes, &segmentError)) {
+            cleanupTemporaryMetadataSnapshot();
+            appendStatus(segmentError);
+            appendLog(segmentError);
+            QMessageBox::warning(this, tr("Error"), segmentError);
+            return;
+        }
+        for (const QString &note : segmentNotes) {
+            appendLog(note);
+        }
+        appendLog(tr("Per-segment export: %1 file(s) queued.").arg(jobs.size()));
+    } else {
+        const int totalFramesForRange = qMax(1, tbcSource->getNumberOfFrames());
+        int inPoint = ui->inPointSpinBox ? ui->inPointSpinBox->value() : 1;
+        int outPoint = ui->outPointSpinBox ? ui->outPointSpinBox->value() : totalFramesForRange;
+        inPoint = qBound(1, inPoint, totalFramesForRange);
+        outPoint = qBound(1, outPoint, totalFramesForRange);
+        if (outPoint < inPoint) {
+            cleanupTemporaryMetadataSnapshot();
+            const QString errorToShow = tr("Out point must be greater than or equal to In point.");
+            appendStatus(errorToShow);
+            appendLog(errorToShow);
+            QMessageBox::warning(this, tr("Error"), errorToShow);
+            return;
+        }
+        ExportJob job;
+        job.startFrameOneBased = inPoint;
+        job.lengthFrames = outPoint - inPoint + 1;
+        job.outputBase = outputBase;
+        jobs.append(job);
+    }
+
     QStringList existingOutputs;
-    findExistingOutputFiles(outputBase, &existingOutputs);
-    if (generateProxyRequested
-        && !plannedProxyOutputPath.isEmpty()
-        && QFileInfo::exists(plannedProxyOutputPath)) {
-        existingOutputs << plannedProxyOutputPath;
+    for (const ExportJob &job : jobs) {
+        findExistingOutputFiles(job.outputBase, &existingOutputs);
+        if (generateProxyRequested) {
+            const QString plannedProxyOutputPath = proxyOutputPath(job.outputBase, selectedProxyCodec);
+            if (!plannedProxyOutputPath.isEmpty() && QFileInfo::exists(plannedProxyOutputPath)) {
+                existingOutputs << plannedProxyOutputPath;
+            }
+        }
     }
     existingOutputs.removeDuplicates();
     if (!existingOutputs.isEmpty()) {
@@ -3364,76 +3428,8 @@ void ExportDialog::on_exportButton_clicked()
     if (isFfv1ProfileName(selectedProfile) && ui->ffv1SlicesSpinBox) {
         appendLog(tr("FFV1 slices override set to %1.").arg(ui->ffv1SlicesSpinBox->value()));
     }
-    const int totalFrames = qMax(1, tbcSource->getNumberOfFrames());
-    int inPoint = ui->inPointSpinBox ? ui->inPointSpinBox->value() : 1;
-    int outPoint = ui->outPointSpinBox ? ui->outPointSpinBox->value() : totalFrames;
-    inPoint = qBound(1, inPoint, totalFrames);
-    outPoint = qBound(1, outPoint, totalFrames);
-    if (outPoint < inPoint) {
-        cleanupTemporaryMetadataSnapshot();
-        const QString errorToShow = tr("Out point must be greater than or equal to In point.");
-        appendStatus(errorToShow);
-        appendLog(errorToShow);
-        QMessageBox::warning(this, tr("Error"), errorToShow);
-        return;
-    }
-    const int startFrameOneBased = inPoint;
-    const int rangeLength = outPoint - inPoint + 1;
-    const QString vitcFfmpegTimecode = firstValidVitcTimecodeForRange(metadataSnapshotPath,
-                                                                       startFrameOneBased,
-                                                                       rangeLength);
-    if (!vitcFfmpegTimecode.isEmpty()) {
-        appendLog(tr("VITC start timecode (FFmpeg style): %1").arg(vitcFfmpegTimecode));
-    } else {
-        appendLog(tr("VITC start timecode (FFmpeg style): unavailable for selected range."));
-    }
-
     QStringList exportAudioTracks = collectAudioTracks();
     audioConfiguredForCurrentRun = !exportAudioTracks.isEmpty();
-
-    QString errorMessage;
-    const QStringList arguments = buildArguments(&errorMessage,
-                                                 metadataSnapshotPath,
-                                                 overwriteExisting,
-                                                 configOverridePath,
-                                                 exportAudioTracks,
-                                                 startFrameOneBased,
-                                                 rangeLength);
-    if (arguments.isEmpty()) {
-        cleanupTemporaryMetadataSnapshot();
-        if (!errorMessage.isEmpty()) {
-            appendStatus(errorMessage);
-            appendLog(errorMessage);
-            QMessageBox::warning(this, tr("Error"), errorMessage);
-        }
-        return;
-    }
-
-    QStringList parallelProxyArguments;
-    if (generateProxyRequested) {
-        QString proxyArgsError;
-        const QString proxyProfile = proxyExportProfileName(selectedProxyCodec);
-        const QString proxyOutputBase = sanitizeOutputBaseName(plannedProxyOutputPath);
-        parallelProxyArguments = buildArguments(&proxyArgsError,
-                                                metadataSnapshotPath,
-                                                overwriteExisting,
-                                                configOverridePath,
-                                                exportAudioTracks,
-                                                startFrameOneBased,
-                                                rangeLength,
-                                                proxyProfile,
-                                                proxyOutputBase);
-        if (parallelProxyArguments.isEmpty()) {
-            cleanupTemporaryMetadataSnapshot();
-            const QString errorToShow = proxyArgsError.isEmpty()
-                                            ? tr("Could not prepare parallel proxy export arguments.")
-                                            : proxyArgsError;
-            appendStatus(errorToShow);
-            appendLog(errorToShow);
-            QMessageBox::warning(this, tr("Error"), errorToShow);
-            return;
-        }
-    }
 
     const QString exportPath = resolveVideoExportPath();
     if (exportPath.isEmpty()) {
@@ -3443,25 +3439,17 @@ void ExportDialog::on_exportButton_clicked()
         QMessageBox::warning(this, tr("Error"), tr("tbc-video-export not found in PATH or alongside ld-analyse."));
         return;
     }
-    QString programToRun;
-    QStringList argsToRun;
-    prepareVideoExportLaunch(exportPath, arguments, tr("main export"), &programToRun, &argsToRun);
-    appendLog(tr("Command: %1").arg(formatCommand(programToRun, argsToRun)));
 
-    QString proxyProgramToRun;
-    QStringList proxyArgsToRun;
-    if (generateProxyRequested && !parallelProxyArguments.isEmpty()) {
-        prepareVideoExportLaunch(exportPath, parallelProxyArguments, tr("parallel proxy export"),
-                                 &proxyProgramToRun, &proxyArgsToRun);
-        appendLog(tr("Parallel proxy command: %1")
-                      .arg(formatCommand(proxyProgramToRun, proxyArgsToRun)));
-    }
-    activeRunStage = RunStage::MainExport;
-    generateProxyForCurrentRun = generateProxyRequested;
-    overwriteExistingForCurrentRun = overwriteExisting;
-    outputBaseForCurrentRun = outputBase;
-    proxyCodecForCurrentRun = selectedProxyCodec;
-    proxyOutputPathForCurrentRun = plannedProxyOutputPath;
+    // Everything the jobs share, then the first job
+    exportQueue = jobs;
+    exportQueueIndex = 0;
+    queueSnapshotPath = metadataSnapshotPath;
+    queueConfigOverridePath = configOverridePath;
+    queueAudioTracks = exportAudioTracks;
+    queueExportPath = exportPath;
+    queueOverwriteExisting = overwriteExisting;
+    queueGenerateProxy = generateProxyRequested;
+    queueProxyCodec = selectedProxyCodec;
     splitStatsByFeed = generateProxyRequested;
     updateProcessStatsPaneMode();
     updateFeedLogPaneMode();
@@ -3474,6 +3462,122 @@ void ExportDialog::on_exportButton_clicked()
             ui->proxyLogTextEdit->clear();
         }
     }
+
+    QString jobError;
+    if (!startExportJob(exportQueue.first(), &jobError)) {
+        const QString errorToShow = jobError.isEmpty() ? tr("Failed to start tbc-video-export.") : jobError;
+        appendStatus(errorToShow);
+        appendLog(errorToShow);
+        showExportFailureNotification(tr("Export failed"),
+                                      tr("Failed to start tbc-video-export."),
+                                      errorToShow,
+                                      tr("tbc-video-export could not be started."));
+        clearRunState();
+        setBusy(false);
+        return;
+    }
+}
+
+// Launch one job of the queue. The snapshot, config, audio tracks and proxy
+// choice come from the queue; the frame range and output base from the job.
+bool ExportDialog::startExportJob(const ExportJob &job, QString *errorMessage)
+{
+    const bool queued = exportQueue.size() > 1;
+    const QString jobLabel = queued
+                                 ? tr("Segment %1 of %2 (%3)")
+                                       .arg(exportQueueIndex + 1)
+                                       .arg(exportQueue.size())
+                                       .arg(QFileInfo(job.outputBase).fileName())
+                                 : QString();
+    if (queued) {
+        appendStatus(tr("%1: starting...").arg(jobLabel));
+        appendLog(tr("%1: frames %2..%3 -> %4")
+                      .arg(jobLabel)
+                      .arg(job.startFrameOneBased)
+                      .arg(job.startFrameOneBased + job.lengthFrames - 1)
+                      .arg(QDir::toNativeSeparators(job.outputBase)));
+        if (ui && ui->segmentsSummaryLabel) {
+            ui->segmentsSummaryLabel->setText(tr("Exporting segment %1 / %2: %3")
+                                                  .arg(exportQueueIndex + 1)
+                                                  .arg(exportQueue.size())
+                                                  .arg(QFileInfo(job.outputBase).fileName()));
+        }
+    }
+
+    const QString vitcFfmpegTimecode = firstValidVitcTimecodeForRange(queueSnapshotPath,
+                                                                       job.startFrameOneBased,
+                                                                       job.lengthFrames);
+    if (!vitcFfmpegTimecode.isEmpty()) {
+        appendLog(tr("VITC start timecode (FFmpeg style): %1").arg(vitcFfmpegTimecode));
+    } else {
+        appendLog(tr("VITC start timecode (FFmpeg style): unavailable for selected range."));
+    }
+
+    QString argumentsError;
+    const QStringList arguments = buildArguments(&argumentsError,
+                                                 queueSnapshotPath,
+                                                 queueOverwriteExisting,
+                                                 queueConfigOverridePath,
+                                                 queueAudioTracks,
+                                                 job.startFrameOneBased,
+                                                 job.lengthFrames,
+                                                 QString(),
+                                                 job.outputBase);
+    if (arguments.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = argumentsError.isEmpty() ? tr("Could not prepare export arguments.") : argumentsError;
+        }
+        return false;
+    }
+
+    const QString plannedProxyOutputPath = queueGenerateProxy
+                                               ? proxyOutputPath(job.outputBase, queueProxyCodec)
+                                               : QString();
+    QStringList parallelProxyArguments;
+    if (queueGenerateProxy) {
+        QString proxyArgsError;
+        const QString proxyProfile = proxyExportProfileName(queueProxyCodec);
+        const QString proxyOutputBase = sanitizeOutputBaseName(plannedProxyOutputPath);
+        parallelProxyArguments = buildArguments(&proxyArgsError,
+                                                queueSnapshotPath,
+                                                queueOverwriteExisting,
+                                                queueConfigOverridePath,
+                                                queueAudioTracks,
+                                                job.startFrameOneBased,
+                                                job.lengthFrames,
+                                                proxyProfile,
+                                                proxyOutputBase);
+        if (parallelProxyArguments.isEmpty()) {
+            if (errorMessage) {
+                *errorMessage = proxyArgsError.isEmpty()
+                                    ? tr("Could not prepare parallel proxy export arguments.")
+                                    : proxyArgsError;
+            }
+            return false;
+        }
+    }
+
+    QString programToRun;
+    QStringList argsToRun;
+    prepareVideoExportLaunch(queueExportPath, arguments, tr("main export"), &programToRun, &argsToRun);
+    appendLog(tr("Command: %1").arg(formatCommand(programToRun, argsToRun)));
+
+    QString proxyProgramToRun;
+    QStringList proxyArgsToRun;
+    if (queueGenerateProxy && !parallelProxyArguments.isEmpty()) {
+        prepareVideoExportLaunch(queueExportPath, parallelProxyArguments, tr("parallel proxy export"),
+                                 &proxyProgramToRun, &proxyArgsToRun);
+        appendLog(tr("Parallel proxy command: %1")
+                      .arg(formatCommand(proxyProgramToRun, proxyArgsToRun)));
+    }
+    activeRunStage = RunStage::MainExport;
+    generateProxyForCurrentRun = queueGenerateProxy;
+    overwriteExistingForCurrentRun = queueOverwriteExisting;
+    outputBaseForCurrentRun = job.outputBase;
+    proxyCodecForCurrentRun = queueProxyCodec;
+    proxyOutputPathForCurrentRun = plannedProxyOutputPath;
+    startFrameForCurrentRun = job.startFrameOneBased;
+    lengthForCurrentRun = job.lengthFrames;
     resetProcessStats();
     initializeProcessStats();
 
@@ -3490,6 +3594,7 @@ void ExportDialog::on_exportButton_clicked()
     parallelProxySucceeded = false;
     mainExportFinished = false;
     mainExportSucceeded = false;
+    cancelRequested = false;
     setBusy(true);
     exportProcess->setWorkingDirectory(QFileInfo(currentInputFile).absolutePath());
     QProcessEnvironment launchEnvironment = QProcessEnvironment::systemEnvironment();
@@ -3505,23 +3610,19 @@ void ExportDialog::on_exportButton_clicked()
     }
     exportProcess->start(programToRun, argsToRun);
     if (!exportProcess->waitForStarted(5000)) {
-        cleanupTemporaryMetadataSnapshot();
-        appendStatus(tr("Failed to start tbc-video-export."));
-        appendLog(tr("Failed to start tbc-video-export."));
-        const QString startErrorText = exportProcess ? exportProcess->errorString().trimmed() : QString();
-        showExportFailureNotification(tr("Export failed"),
-                                      tr("Failed to start tbc-video-export."),
-                                      startErrorText,
-                                      tr("tbc-video-export could not be started."));
-        clearRunState();
-        setBusy(false);
-        return;
+        if (errorMessage) {
+            const QString startErrorText = exportProcess ? exportProcess->errorString().trimmed() : QString();
+            *errorMessage = startErrorText.isEmpty()
+                                ? tr("Failed to start tbc-video-export.")
+                                : tr("Failed to start tbc-video-export: %1").arg(startErrorText);
+        }
+        return false;
     }
 
-    appendStatus(tr("Export running..."));
+    appendStatus(queued ? tr("%1: export running...").arg(jobLabel) : tr("Export running..."));
     appendLog(tr("Export running..."));
 
-    if (generateProxyRequested && !parallelProxyArguments.isEmpty()) {
+    if (queueGenerateProxy && !parallelProxyArguments.isEmpty()) {
         parallelProxyProcess->setWorkingDirectory(QFileInfo(currentInputFile).absolutePath());
         parallelProxyProcess->setProcessEnvironment(launchEnvironment);
         parallelProxyProcess->start(proxyProgramToRun, proxyArgsToRun);
@@ -3529,12 +3630,184 @@ void ExportDialog::on_exportButton_clicked()
             parallelProxyRunning = true;
             generateProxyForCurrentRun = false;
             appendLog(tr("Parallel proxy export running using profile '%1'.")
-                          .arg(proxyExportProfileName(selectedProxyCodec)));
+                          .arg(proxyExportProfileName(queueProxyCodec)));
         } else {
             appendLog(tr("Parallel proxy export failed to start; falling back to post-export proxy re-run via tbc-video-export."));
         }
     }
+    return true;
 }
+
+// A job finished successfully: start the next one, or end the run.
+void ExportDialog::finishJobAndAdvance()
+{
+    const int nextIndex = exportQueueIndex + 1;
+    if (exportQueueIndex >= 0 && nextIndex < exportQueue.size() && !cancelRequested) {
+        appendLog(tr("Segment %1 of %2 complete.").arg(exportQueueIndex + 1).arg(exportQueue.size()));
+        resetPerJobState();
+        exportQueueIndex = nextIndex;
+        QString jobError;
+        if (startExportJob(exportQueue.at(nextIndex), &jobError)) {
+            return;
+        }
+        const QString errorToShow = jobError.isEmpty() ? tr("Could not start the next segment export.") : jobError;
+        appendStatus(errorToShow);
+        appendLog(errorToShow);
+        showExportFailureNotification(tr("Export failed"), errorToShow, QString(), errorToShow);
+        clearRunState();
+        setBusy(false);
+        return;
+    }
+    if (exportQueue.size() > 1) {
+        appendStatus(tr("All %1 segments exported.").arg(exportQueue.size()));
+        appendLog(tr("All %1 segments exported.").arg(exportQueue.size()));
+    }
+    clearRunState();
+}
+
+bool ExportDialog::segmentExportSelected() const
+{
+    return ui && ui->exportSegmentsCheckBox && ui->exportSegmentsCheckBox->isEnabled()
+           && ui->exportSegmentsCheckBox->isChecked();
+}
+
+// One job per selected segment, in field order, with the frames an export of
+// it covers under the library's mixed-frame rule. Output base
+// <base>_<NN>[_<title>]; a segment with no whole frame is skipped (noted).
+bool ExportDialog::buildSegmentExportJobs(const QString &outputBase, QVector<ExportJob> *jobs,
+                                          QStringList *notes, QString *errorMessage) const
+{
+    if (!jobs) {
+        return false;
+    }
+    jobs->clear();
+    if (!tbcSource || !tbcSource->getIsSourceLoaded()) {
+        if (errorMessage) *errorMessage = tr("No source loaded.");
+        return false;
+    }
+    QVector<TbcMetaData::Segment> segments = tbcSource->getSegments();
+    if (segments.isEmpty()) {
+        if (errorMessage) *errorMessage = tr("The metadata holds no recording segments.");
+        return false;
+    }
+    std::stable_sort(segments.begin(), segments.end(), [](const TbcMetaData::Segment &a, const TbcMetaData::Segment &b) {
+        return a.startField < b.startField;
+    });
+    const QString selection = ui && ui->segmentSelectionComboBox
+                                  ? ui->segmentSelectionComboBox->currentData().toString()
+                                  : QStringLiteral("enabled_clips");
+    const bool appendTitle = ui && ui->appendSegmentTitleCheckBox && ui->appendSegmentTitleCheckBox->isChecked();
+    qint32 maxId = 1;
+    for (const TbcMetaData::Segment &segment : segments) {
+        maxId = qMax(maxId, segment.id);
+    }
+    const int digits = qMax(2, QString::number(maxId).size());
+    for (const TbcMetaData::Segment &segment : segments) {
+        if (selection != QLatin1String("all") && !segment.enabled) {
+            continue;
+        }
+        if (selection == QLatin1String("enabled_clips") && segment.kind != QLatin1String("clip")) {
+            continue;
+        }
+        qint32 startFrame = 0;
+        qint32 lengthFrames = 0;
+        if (!tbcSource->segmentFrameRange(segment, &startFrame, &lengthFrames)) {
+            if (notes) {
+                notes->append(tr("Segment %1 holds no whole frame; skipped.").arg(segment.id));
+            }
+            continue;
+        }
+        QString base = outputBase + QStringLiteral("_") + QString::number(segment.id).rightJustified(digits, QLatin1Char('0'));
+        if (appendTitle && !segment.title.trimmed().isEmpty()) {
+            QString title = segment.title.trimmed();
+            title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("_"));
+            title = title.left(40);
+            title.remove(QRegularExpression(QStringLiteral("^_+|_+$")));
+            if (!title.isEmpty()) {
+                base += QStringLiteral("_") + title;
+            }
+        }
+        ExportJob job;
+        job.startFrameOneBased = startFrame;
+        job.lengthFrames = lengthFrames;
+        job.outputBase = base;
+        job.label = segment.title;
+        jobs->append(job);
+    }
+    if (jobs->isEmpty()) {
+        if (errorMessage) *errorMessage = tr("No recording segments match the selection.");
+        return false;
+    }
+    return true;
+}
+
+void ExportDialog::updateSegmentExportControls()
+{
+    if (!ui || !ui->exportSegmentsCheckBox) {
+        return;
+    }
+    const bool running = exportProcess && exportProcess->state() != QProcess::NotRunning;
+    const bool sourceOk = exportAvailable && tbcSource && tbcSource->getIsSourceLoaded() && !tbcSource->getIsMetadataOnly();
+    const bool haveSegments = sourceOk && !tbcSource->getSegments().isEmpty();
+    ui->exportSegmentsCheckBox->setEnabled(haveSegments && !running);
+    if (!haveSegments && ui->exportSegmentsCheckBox->isChecked()) {
+        const QSignalBlocker blocker(ui->exportSegmentsCheckBox);
+        ui->exportSegmentsCheckBox->setChecked(false);
+    }
+    const bool segmentsMode = haveSegments && ui->exportSegmentsCheckBox->isChecked();
+    const bool controlsEnabled = segmentsMode && !running;
+    if (ui->segmentSelectionLabel) ui->segmentSelectionLabel->setEnabled(controlsEnabled);
+    if (ui->segmentSelectionComboBox) ui->segmentSelectionComboBox->setEnabled(controlsEnabled);
+    if (ui->appendSegmentTitleCheckBox) ui->appendSegmentTitleCheckBox->setEnabled(controlsEnabled);
+    // The In/Out range is ignored while per-segment export is selected
+    if (segmentsMode) {
+        for (QWidget *widget : QVector<QWidget *>{ui->inPointSpinBox, ui->outPointSpinBox, ui->inPointTimecodeLineEdit,
+                                                   ui->outPointTimecodeLineEdit, ui->resetInOutButton}) {
+            if (widget) widget->setEnabled(false);
+        }
+    }
+    if (ui->segmentsSummaryLabel) {
+        if (running && exportQueue.size() > 1) {
+            // startExportJob writes the progress text
+        } else if (!haveSegments) {
+            ui->segmentsSummaryLabel->setText(sourceOk ? tr("No recording segments in the metadata.") : QString());
+        } else if (!segmentsMode) {
+            ui->segmentsSummaryLabel->setText(tr("%1 recording segment(s) in the metadata.").arg(tbcSource->getSegments().size()));
+        } else {
+            QVector<ExportJob> jobs;
+            QStringList notes;
+            QString error;
+            const QString base = sanitizeOutputBaseName(ui->outputLineEdit ? ui->outputLineEdit->text().trimmed() : QString());
+            if (buildSegmentExportJobs(base.isEmpty() ? QStringLiteral("out") : base, &jobs, &notes, &error)) {
+                qint64 totalFrames = 0;
+                for (const ExportJob &job : jobs) totalFrames += job.lengthFrames;
+                ui->segmentsSummaryLabel->setText(tr("%1 file(s), %2 frames in total%3")
+                                                      .arg(jobs.size())
+                                                      .arg(totalFrames)
+                                                      .arg(notes.isEmpty() ? QString() : tr(" (%1 skipped)").arg(notes.size())));
+            } else {
+                ui->segmentsSummaryLabel->setText(error);
+            }
+        }
+    }
+}
+
+void ExportDialog::refreshSegmentsFromSource()
+{
+    updateSegmentExportControls();
+}
+
+void ExportDialog::on_exportSegmentsCheckBox_toggled(bool checked)
+{
+    Q_UNUSED(checked);
+    // Re-enable the range controls when leaving segments mode
+    if (!segmentExportSelected()) {
+        setBusy(exportProcess && exportProcess->state() != QProcess::NotRunning);
+        return;
+    }
+    updateSegmentExportControls();
+}
+
 void ExportDialog::on_cancelButton_clicked()
 {
     const bool mainRunning = exportProcess && exportProcess->state() != QProcess::NotRunning;
@@ -3656,6 +3929,8 @@ void ExportDialog::handleProcessFinished(int exitCode, QProcess::ExitStatus exit
         if (success) {
             appendStatus(tr("Export complete."));
             appendLog(tr("Proxy generation complete."));
+            finishJobAndAdvance();
+            return;
         } else if (wasCancelRequested) {
             appendStatus(tr("Export cancelled."));
             appendLog(tr("Proxy generation cancelled."));
@@ -3723,7 +3998,7 @@ void ExportDialog::handleProcessFinished(int exitCode, QProcess::ExitStatus exit
         setBusy(false);
         appendStatus(tr("Export complete."));
         appendLog(tr("Export complete."));
-        clearRunState();
+        finishJobAndAdvance();
         return;
     }
 
@@ -3934,7 +4209,7 @@ void ExportDialog::handleParallelProxyProcessFinished(int exitCode, QProcess::Ex
         setBusy(false);
         appendStatus(tr("Export complete."));
         appendLog(tr("Export complete."));
-        clearRunState();
+        finishJobAndAdvance();
         return;
     }
 
@@ -4187,6 +4462,7 @@ void ExportDialog::setBusy(bool busy)
         ui->resetInOutButton->setEnabled(enabled);
     }
     updateProfileDependentControls();
+    updateSegmentExportControls();
 }
 
 QString ExportDialog::resolveVideoExportPath() const
@@ -4565,8 +4841,8 @@ bool ExportDialog::startProxyExport(QString *errorMessage, bool forceOverwrite)
                                                       overwriteProxyOutput,
                                                       temporaryExportConfigPath,
                                                       QStringList(),
-                                                      -1,
-                                                      -1,
+                                                      startFrameForCurrentRun,
+                                                      lengthForCurrentRun,
                                                       proxyProfile,
                                                       proxyOutputBase);
     if (proxyArguments.isEmpty()) {
@@ -4671,18 +4947,21 @@ void ExportDialog::prepareVideoExportLaunch(const QString &exportPath,
 #endif
 }
 
-void ExportDialog::clearRunState()
+// Per-job state: what one tbc-video-export run owned. The queue, the
+// snapshot and the config survive between jobs.
+void ExportDialog::resetPerJobState()
 {
     if (parallelProxyProcess && parallelProxyProcess->state() != QProcess::NotRunning) {
         parallelProxyProcess->kill();
     }
     activeRunStage = RunStage::Idle;
     generateProxyForCurrentRun = false;
-    audioConfiguredForCurrentRun = false;
     overwriteExistingForCurrentRun = false;
     outputBaseForCurrentRun.clear();
     proxyCodecForCurrentRun.clear();
     proxyOutputPathForCurrentRun.clear();
+    startFrameForCurrentRun = -1;
+    lengthForCurrentRun = -1;
     parallelProxyRunning = false;
     parallelProxyFinished = false;
     parallelProxySucceeded = false;
@@ -4693,11 +4972,27 @@ void ExportDialog::clearRunState()
     pendingParallelProxyStdoutBuffer.clear();
     pendingParallelProxyStderrBuffer.clear();
     clearFeedStatusLines();
+}
+
+void ExportDialog::clearRunState()
+{
+    resetPerJobState();
+    audioConfiguredForCurrentRun = false;
+    exportQueue.clear();
+    exportQueueIndex = -1;
+    queueSnapshotPath.clear();
+    queueConfigOverridePath.clear();
+    queueAudioTracks.clear();
+    queueExportPath.clear();
+    queueOverwriteExisting = false;
+    queueGenerateProxy = false;
+    queueProxyCodec.clear();
     clearFeedLogLines();
     splitStatsByFeed = shouldGenerateProxyForSelection();
     updateProcessStatsPaneMode();
     updateFeedLogPaneMode();
     cleanupTemporaryMetadataSnapshot();
+    updateSegmentExportControls();
 }
 bool ExportDialog::prepareTrimmedAudioTracks(int zeroBasedStartFrame,
                                              int rangeLengthFrames,

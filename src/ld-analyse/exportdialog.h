@@ -4,6 +4,8 @@
 #include <QWidget>
 #include <QProcess>
 #include <QHash>
+#include <QStringList>
+#include <QVector>
 
 class TbcSource;
 class QResizeEvent;
@@ -34,8 +36,19 @@ public:
         QString fps;
         QString feedTag;
     };
+    // One tbc-video-export run: a frame range and an output base. The
+    // single-range export is a one-job queue; per-segment export queues one
+    // job per selected recording segment.
+    struct ExportJob {
+        int startFrameOneBased = -1;
+        int lengthFrames = -1;
+        QString outputBase;
+        QString label;
+    };
     explicit ExportDialog(QWidget *parent = nullptr);
     ~ExportDialog();
+    // Re-read the recording segments from the source (after an edit in the main window)
+    void refreshSegmentsFromSource();
 
     void setSource(TbcSource *source);
     void setGenerateProxyEnabledPreference(bool enabled);
@@ -63,6 +76,7 @@ private slots:
     void on_exportProfileConfigLoadButton_clicked();
     void on_exportProfileConfigEjectButton_clicked();
     void on_resetInOutButton_clicked();
+    void on_exportSegmentsCheckBox_toggled(bool checked);
     void on_exportButton_clicked();
     void on_cancelButton_clicked();
 
@@ -119,6 +133,13 @@ private:
                                   QString *programOut,
                                   QStringList *argsOut);
     void clearRunState();
+    void resetPerJobState();
+    bool startExportJob(const ExportJob &job, QString *errorMessage);
+    void finishJobAndAdvance();
+    bool buildSegmentExportJobs(const QString &outputBase, QVector<ExportJob> *jobs,
+                                QStringList *notes, QString *errorMessage) const;
+    bool segmentExportSelected() const;
+    void updateSegmentExportControls();
     bool prepareTrimmedAudioTracks(int zeroBasedStartFrame, int rangeLengthFrames,
                                    QStringList *audioTracks, QString *errorMessage);
     QStringList buildArguments(QString *errorMessage, const QString &inputTbcJsonOverride = QString(),
@@ -185,6 +206,18 @@ private:
     QString outputBaseForCurrentRun;
     QString proxyCodecForCurrentRun;
     QString proxyOutputPathForCurrentRun;
+    int startFrameForCurrentRun = -1;
+    int lengthForCurrentRun = -1;
+    // The job queue and what every job shares (snapshot, config, audio, proxy choice)
+    QVector<ExportJob> exportQueue;
+    int exportQueueIndex = -1;
+    QString queueSnapshotPath;
+    QString queueConfigOverridePath;
+    QStringList queueAudioTracks;
+    QString queueExportPath;
+    bool queueOverwriteExisting = false;
+    bool queueGenerateProxy = false;
+    QString queueProxyCodec;
     bool outputAutoSet = true;
     bool exportAvailable = false;
     bool cancelRequested = false;
