@@ -63,11 +63,20 @@ public:
                            int &userEditInSelection, int &userEditOutSelection,
                            int &userMarkerSelection, QString &userMarkerComment,
                            QString &userMarkersJson,
-                           QString &captureNotes);
+                           QString &captureNotes,
+                           double &rfSourceSampleRateHz,
+                           QString &osInfo, QString &decoderVersion);
 
     // Read PCM audio parameters
     bool readPcmAudioParameters(int captureId, int &bits, bool &isSigned,
                               bool &isLittleEndian, double &sampleRate);
+
+    // Bulk reads of the segmentation tables (schema version 8). Each returns
+    // false when the table is absent (an older database), which callers treat
+    // as "no rows".
+    bool readAllFieldPictureMetrics(int captureId, QSqlQuery &metricsQuery);
+    bool readAllDecoderEvents(int captureId, QSqlQuery &eventsQuery);
+    bool readAllSegments(int captureId, QSqlQuery &segmentsQuery);
 
     // Read field metadata
     bool readFields(int captureId, QSqlQuery &fieldsQuery);
@@ -131,9 +140,11 @@ public:
                            int userEditInSelection, int userEditOutSelection,
                            int userMarkerSelection, const QString &userMarkerComment,
                            const QString &userMarkersJson,
-                           const QString &captureNotes);
+                           const QString &captureNotes,
+                           double rfSourceSampleRateHz,
+                           const QString &osInfo, const QString &decoderVersion);
 
-    // Update existing capture metadata  
+    // Update existing capture metadata
     bool updateCaptureMetadata(int captureId, const QString &system, const QString &decoder,
                              const QString &gitBranch, const QString &gitCommit,
                              double videoSampleRate, int activeVideoStart, int activeVideoEnd,
@@ -149,15 +160,18 @@ public:
                              int userEditInSelection, int userEditOutSelection,
                              int userMarkerSelection, const QString &userMarkerComment,
                              const QString &userMarkersJson,
-                             const QString &captureNotes);
+                             const QString &captureNotes,
+                             double rfSourceSampleRateHz,
+                             const QString &osInfo, const QString &decoderVersion);
 
     // Write PCM audio parameters
     bool writePcmAudioParameters(int captureId, int bits, bool isSigned,
                                bool isLittleEndian, double sampleRate);
 
-    // Write field metadata
+    // Write field metadata. fileLoc is an RF sample offset and exceeds 32 bits
+    // a few minutes into any capture, so it is 64-bit end to end.
     bool writeField(int captureId, int fieldId, int audioSamples, int decodeFaults,
-                   double diskLoc, int efmTValues, int fieldPhaseId, int fileLoc,
+                   double diskLoc, int efmTValues, int fieldPhaseId, qint64 fileLoc,
                    bool isFirstField, double medianBurstIre, bool pad, int syncConf,
                    bool ntscIsFmCodeDataValid, int ntscFmCodeData, bool ntscFieldFlag,
                    bool ntscIsVideoIdDataValid, int ntscVideoIdData, bool ntscWhiteFlag,
@@ -168,7 +182,22 @@ public:
     bool writeFieldVbi(int captureId, int fieldId, int vbi0, int vbi1, int vbi2);
     bool writeFieldVitc(int captureId, int fieldId, const int vitcData[8]);
     bool writeFieldClosedCaption(int captureId, int fieldId, int data0, int data1);
+    bool deleteFieldDropouts(int captureId, int fieldId);
     bool writeFieldDropouts(int captureId, int fieldId, int startx, int endx, int fieldLine);
+
+    // Segmentation tables (schema version 8). A NaN metric is stored as NULL.
+    bool writeFieldPictureMetrics(int captureId, int fieldId, double lumaMeanIre, double fieldDiffIre,
+                                  double blankingDevIre, double syncTipDevIre, double noiseIre,
+                                  double burstAmpIre);
+    bool deleteDecoderEvents(int captureId);
+    bool writeDecoderEvent(int captureId, int fieldId, const QString &kind, const QVariant &fileLoc,
+                           const QVariant &rfDeltaSamples, const QVariant &rfDeltaFields,
+                           const QString &source, const QString &detailJson);
+    bool deleteSegments(int captureId);
+    bool writeSegment(int captureId, int segmentId, int startField, int endFieldExclusive,
+                      const QString &kind, const QString &source, bool enabled,
+                      const QString &title, const QString &comment, const QString &createdBy,
+                      const QString &updatedAt, const QString &derivedFrom);
 
     // Transaction support
     bool beginTransaction();

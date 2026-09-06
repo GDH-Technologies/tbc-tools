@@ -18,7 +18,10 @@
 #include "jsonio.h"
 
 #include <cassert>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <QFile>
 #include <QFileInfo>
 #include <QSqlRecord>
 #include <fstream>
@@ -171,7 +174,7 @@ bool parseVideoSystemName(QString name, VideoSystem &system)
     return false;
 }
 
-static bool isJsonMetadataFilename(const QString &fileName)
+bool TbcMetaData::isJsonMetadataFilename(const QString &fileName)
 {
     const QStringList parts = QFileInfo(fileName)
                                   .fileName()
@@ -191,6 +194,32 @@ static bool isJsonMetadataFilename(const QString &fileName)
     }
 
     return false;
+}
+
+// The .tbc.db path that pairs with a .tbc.json path (any of the .json,
+// .json.tmp/.new/.bup/.bak spellings); a path that is not JSON is returned
+// unchanged.
+QString TbcMetaData::sqliteSiblingPath(const QString &fileName)
+{
+    if (!isJsonMetadataFilename(fileName)) return fileName;
+    const int jsonIndex = fileName.lastIndexOf(QLatin1String(".json"), -1, Qt::CaseInsensitive);
+    if (jsonIndex < 0) return fileName;
+    return fileName.left(jsonIndex) + QLatin1String(".db");
+}
+
+static QString jsonSiblingPath(const QString &sqlitePath)
+{
+    if (!sqlitePath.endsWith(QLatin1String(".db"), Qt::CaseInsensitive)) return QString();
+    return sqlitePath.left(sqlitePath.size() - 3) + QLatin1String(".json");
+}
+
+// SQLite first: a .tbc.json whose .tbc.db sibling exists opens the database
+QString TbcMetaData::resolveMetadataPath(const QString &fileName)
+{
+    if (!isJsonMetadataFilename(fileName)) return fileName;
+    const QString sibling = sqliteSiblingPath(fileName);
+    if (sibling != fileName && QFileInfo::exists(sibling)) return sibling;
+    return fileName;
 }
 
 // Read VBI from SQLite
@@ -347,6 +376,12 @@ void TbcMetaData::Field::write(SqliteWriter &writer, int captureId) const
     vitc.write(writer, captureId, fieldId);
     closedCaption.write(writer, captureId, fieldId);
     dropOuts.write(writer, captureId, fieldId);
+    if (pictureMetrics.anyFinite()) {
+        writer.writeFieldPictureMetrics(captureId, fieldId, pictureMetrics.lumaMeanIre,
+                                        pictureMetrics.fieldDiffIre, pictureMetrics.blankingDevIre,
+                                        pictureMetrics.syncTipDevIre, pictureMetrics.noiseIre,
+                                        pictureMetrics.burstAmpIre);
+    }
 }
 
 // Read Vbi from JSON
@@ -449,6 +484,9 @@ void TbcMetaData::VideoParameters::read(JsonReader &reader)
         }
         else if (member == "palTransformThreshold") reader.read(palTransformThreshold);
         else if (member == "tapeFormat") reader.read(tapeFormat);
+        else if (member == "rfSourceSampleRateHz") reader.read(rfSourceSampleRateHz);
+        else if (member == "osInfo") reader.read(osInfo);
+        else if (member == "version") reader.read(version);
         else if (member == "UserEditInSelection" || member == "userEditInSelection") reader.read(userEditInSelection);
         else if (member == "UserEditOutSelection" || member == "userEditOutSelection") reader.read(userEditOutSelection);
         else if (member == "UserMarkerComment" || member == "userMarkerComment") reader.read(userMarkerComment);
@@ -538,6 +576,12 @@ void TbcMetaData::VideoParameters::write(JsonWriter &writer) const
     writer.writeMember("lastActiveFieldLine", lastActiveFieldLine);
     writer.writeMember("lastActiveFrameLine", lastActiveFrameLine);
     writer.writeMember("numberOfSequentialFields", numberOfSequentialFields);
+    if (!osInfo.isEmpty()) {
+        writer.writeMember("osInfo", osInfo);
+    }
+    if (rfSourceSampleRateHz > 0.0) {
+        writer.writeMember("rfSourceSampleRateHz", rfSourceSampleRateHz);
+    }
     writer.writeMember("sampleRate", sampleRate);
     writer.writeMember("system", VIDEO_SYSTEM_DEFAULTS[system].name);
     writer.writeMember("white16bIre", white16bIre);
@@ -561,6 +605,9 @@ void TbcMetaData::VideoParameters::write(JsonWriter &writer) const
     }
     if (tapeFormat != "") {
         writer.writeMember("tapeFormat", tapeFormat);
+    }
+    if (!version.isEmpty()) {
+        writer.writeMember("version", version);
     }
 
     writer.endObject();
@@ -773,6 +820,10 @@ void TbcMetaData::Field::read(JsonReader &reader)
     std::string member;
     while (reader.readMember(member)) {
         if (member == "audioSamples") reader.read(audioSamples);
+        else if (member == "burstStartLine") reader.read(burstStartLine);
+        else if (member == "detectedFirstField") { reader.read(detectedFirstField); hasDetectedFirstField = true; }
+        else if (member == "isDuplicateField") { reader.read(isDuplicateField); hasIsDuplicateField = true; }
+        else if (member == "pictureMetrics") pictureMetrics.read(reader);
         else if (member == "cc") closedCaption.read(reader);
         else if (member == "decodeFaults") reader.read(decodeFaults);
         else if (member == "diskLoc") reader.read(diskLoc);
@@ -805,12 +856,18 @@ void TbcMetaData::Field::write(JsonWriter &writer) const
     if (audioSamples != -1) {
         writer.writeMember("audioSamples", audioSamples);
     }
+    if (burstStartLine != -1) {
+        writer.writeMember("burstStartLine", burstStartLine);
+    }
     if (closedCaption.inUse) {
         writer.writeMember("cc");
         closedCaption.write(writer);
     }
     if (decodeFaults != -1) {
         writer.writeMember("decodeFaults", decodeFaults);
+    }
+    if (hasDetectedFirstField) {
+        writer.writeMember("detectedFirstField", detectedFirstField);
     }
     if (diskLoc != -1) {
         writer.writeMember("diskLoc", diskLoc);
@@ -828,6 +885,9 @@ void TbcMetaData::Field::write(JsonWriter &writer) const
     if (fileLoc != -1) {
         writer.writeMember("fileLoc", fileLoc);
     }
+    if (hasIsDuplicateField) {
+        writer.writeMember("isDuplicateField", isDuplicateField);
+    }
     writer.writeMember("isFirstField", isFirstField);
     writer.writeMember("medianBurstIRE", medianBurstIRE);
     if (ntsc.inUse) {
@@ -835,6 +895,10 @@ void TbcMetaData::Field::write(JsonWriter &writer) const
         ntsc.write(writer);
     }
     writer.writeMember("pad", pad);
+    if (pictureMetrics.anyFinite()) {
+        writer.writeMember("pictureMetrics");
+        pictureMetrics.write(writer);
+    }
     writer.writeMember("secamFirstLineIsRed", secamFirstLineIsRed);
     writer.writeMember("seqNo", seqNo);
     writer.writeMember("syncConf", syncConf);
@@ -850,6 +914,144 @@ void TbcMetaData::Field::write(JsonWriter &writer) const
         writer.writeMember("vitsMetrics");
         vitsMetrics.write(writer);
     }
+
+    writer.endObject();
+}
+
+// -- PictureMetrics --
+
+bool TbcMetaData::PictureMetrics::anyFinite() const
+{
+    return std::isfinite(lumaMeanIre) || std::isfinite(fieldDiffIre) || std::isfinite(blankingDevIre)
+        || std::isfinite(syncTipDevIre) || std::isfinite(noiseIre) || std::isfinite(burstAmpIre);
+}
+
+// Read PictureMetrics from JSON. An absent member stays NaN.
+void TbcMetaData::PictureMetrics::read(JsonReader &reader)
+{
+    reader.beginObject();
+
+    std::string member;
+    while (reader.readMember(member)) {
+        if (member == "blankingDevIre") reader.read(blankingDevIre);
+        else if (member == "burstAmpIre") reader.read(burstAmpIre);
+        else if (member == "fieldDiffIre") reader.read(fieldDiffIre);
+        else if (member == "lumaMeanIre") reader.read(lumaMeanIre);
+        else if (member == "noiseIre") reader.read(noiseIre);
+        else if (member == "syncTipDevIre") reader.read(syncTipDevIre);
+        else reader.discard();
+    }
+
+    reader.endObject();
+
+    inUse = anyFinite();
+}
+
+// Write PictureMetrics to JSON: finite members only, never null
+void TbcMetaData::PictureMetrics::write(JsonWriter &writer) const
+{
+    writer.beginObject();
+
+    // Keep members in alphabetical order
+    if (std::isfinite(blankingDevIre)) writer.writeMember("blankingDevIre", blankingDevIre);
+    if (std::isfinite(burstAmpIre)) writer.writeMember("burstAmpIre", burstAmpIre);
+    if (std::isfinite(fieldDiffIre)) writer.writeMember("fieldDiffIre", fieldDiffIre);
+    if (std::isfinite(lumaMeanIre)) writer.writeMember("lumaMeanIre", lumaMeanIre);
+    if (std::isfinite(noiseIre)) writer.writeMember("noiseIre", noiseIre);
+    if (std::isfinite(syncTipDevIre)) writer.writeMember("syncTipDevIre", syncTipDevIre);
+
+    writer.endObject();
+}
+
+// -- DecoderEvent --
+
+bool TbcMetaData::DecoderEvent::isSeam() const
+{
+    return kind == QLatin1String("no_sync_pulses") || kind == QLatin1String("no_field_start")
+        || kind == QLatin1String("dropped_field") || kind == QLatin1String("resume_seam")
+        || kind == QLatin1String("gap");
+}
+
+// Read DecoderEvent from JSON
+void TbcMetaData::DecoderEvent::read(JsonReader &reader)
+{
+    reader.beginObject();
+
+    std::string member;
+    while (reader.readMember(member)) {
+        if (member == "detailJson") reader.read(detailJson);
+        else if (member == "field") reader.read(field);
+        else if (member == "fileLoc") reader.read(fileLoc);
+        else if (member == "kind") reader.read(kind);
+        else if (member == "rfDeltaFields") reader.read(rfDeltaFields);
+        else if (member == "rfDeltaSamples") { reader.read(rfDeltaSamples); hasRfDeltaSamples = true; }
+        else if (member == "source") reader.read(source);
+        else reader.discard();
+    }
+
+    reader.endObject();
+}
+
+// Write DecoderEvent to JSON
+void TbcMetaData::DecoderEvent::write(JsonWriter &writer) const
+{
+    writer.beginObject();
+
+    // Keep members in alphabetical order
+    if (!detailJson.isEmpty()) writer.writeMember("detailJson", detailJson);
+    writer.writeMember("field", field);
+    if (fileLoc != -1) writer.writeMember("fileLoc", fileLoc);
+    writer.writeMember("kind", kind);
+    if (std::isfinite(rfDeltaFields)) writer.writeMember("rfDeltaFields", rfDeltaFields);
+    if (hasRfDeltaSamples) writer.writeMember("rfDeltaSamples", rfDeltaSamples);
+    writer.writeMember("source", source);
+
+    writer.endObject();
+}
+
+// -- Segment --
+
+// Read Segment from JSON
+void TbcMetaData::Segment::read(JsonReader &reader)
+{
+    reader.beginObject();
+
+    std::string member;
+    while (reader.readMember(member)) {
+        if (member == "comment") reader.read(comment);
+        else if (member == "createdBy") reader.read(createdBy);
+        else if (member == "derivedFrom") reader.read(derivedFrom);
+        else if (member == "enabled") reader.read(enabled);
+        else if (member == "endFieldExclusive") reader.read(endFieldExclusive);
+        else if (member == "id") reader.read(id);
+        else if (member == "kind") reader.read(kind);
+        else if (member == "source") reader.read(source);
+        else if (member == "startField") reader.read(startField);
+        else if (member == "title") reader.read(title);
+        else if (member == "updatedAt") reader.read(updatedAt);
+        else reader.discard();
+    }
+
+    reader.endObject();
+}
+
+// Write Segment to JSON
+void TbcMetaData::Segment::write(JsonWriter &writer) const
+{
+    writer.beginObject();
+
+    // Keep members in alphabetical order
+    if (!comment.isEmpty()) writer.writeMember("comment", comment);
+    if (!createdBy.isEmpty()) writer.writeMember("createdBy", createdBy);
+    if (!derivedFrom.isEmpty()) writer.writeMember("derivedFrom", derivedFrom);
+    writer.writeMember("enabled", enabled);
+    writer.writeMember("endFieldExclusive", endFieldExclusive);
+    writer.writeMember("id", id);
+    writer.writeMember("kind", kind);
+    writer.writeMember("source", source);
+    writer.writeMember("startField", startField);
+    if (!title.isEmpty()) writer.writeMember("title", title);
+    if (!updatedAt.isEmpty()) writer.writeMember("updatedAt", updatedAt);
 
     writer.endObject();
 }
@@ -870,6 +1072,8 @@ void TbcMetaData::clear()
     pcmAudioParameters = PcmAudioParameters();
 
     fields.clear();
+    decoderEvents.clear();
+    segments.clear();
 }
 
 // Read all metadata from SQLite file
@@ -892,7 +1096,9 @@ bool TbcMetaData::read(QString fileName)
             std::string member;
             while (reader.readMember(member)) {
                 if (member == "fields") readFields(reader);
+                else if (member == "decoderEvents") readDecoderEvents(reader);
                 else if (member == "pcmAudioParameters") pcmAudioParameters.read(reader);
+                else if (member == "segments") readSegments(reader);
                 else if (member == "videoParameters") videoParameters.read(reader);
                 else reader.discard();
             }
@@ -956,6 +1162,8 @@ bool TbcMetaData::read(QString fileName)
         QString userMarkerComment;
         QString userMarkersJson;
         bool isMapped, isSubcarrierLocked, isWidescreen;
+        double rfSourceSampleRateHz = -1.0;
+        QString osInfo, decoderVersion;
 
         // Read capture metadata
         if (!reader.readCaptureMetadata(captureId, system, decoder, gitBranch, gitCommit,
@@ -971,7 +1179,7 @@ bool TbcMetaData::read(QString fileName)
                                        userEditInSelection, userEditOutSelection,
                                        userMarkerSelection, userMarkerComment,
                                        userMarkersJson,
-                                       captureNotes)) {
+                                       captureNotes, rfSourceSampleRateHz, osInfo, decoderVersion)) {
             qCritical() << "Failed to read capture metadata from SQLite file";
             return false;
         }
@@ -1020,6 +1228,10 @@ bool TbcMetaData::read(QString fileName)
         videoParameters.userMarkersJson = userMarkersJson;
         videoParameters.gitBranch = gitBranch;
         videoParameters.gitCommit = gitCommit;
+        videoParameters.rfSourceSampleRateHz = rfSourceSampleRateHz;
+        videoParameters.decoder = decoder;
+        videoParameters.osInfo = osInfo;
+        videoParameters.version = decoderVersion;
         videoParameters.isValid = true;
 
         // Read PCM audio parameters if they exist
@@ -1037,6 +1249,10 @@ bool TbcMetaData::read(QString fileName)
         // Read all fields
         readFields(reader, captureId);
 
+        // Schema version 8 tables (absent on older files: empty lists)
+        readDecoderEvents(reader, captureId);
+        readSegments(reader, captureId);
+
     } catch (SqliteReader::Error &error) {
         qCritical() << "Reading SQLite file failed:" << error.what();
         return false;
@@ -1051,39 +1267,66 @@ bool TbcMetaData::read(QString fileName)
     return true;
 }
 
-// Write all metadata out to an SQLite file
+// Write all metadata out to a JSON or SQLite file (by extension)
 bool TbcMetaData::write(QString fileName) const
 {
-    if (isJsonMetadataFilename(fileName)) {
-        std::ofstream jsonFile(fileName.toStdString());
-        if (jsonFile.fail()) {
-            qCritical("Opening JSON output file failed");
-            return false;
-        }
+    if (isJsonMetadataFilename(fileName)) return writeJson(fileName);
+    return writeSqlite(fileName);
+}
 
-        JsonWriter writer(jsonFile);
-
-        writer.beginObject();
-
-        // Keep members in alphabetical order
-        writer.writeMember("fields");
-        writeFields(writer);
-        if (pcmAudioParameters.isValid) {
-            writer.writeMember("pcmAudioParameters");
-            pcmAudioParameters.write(writer);
-        }
-        writer.writeMember("videoParameters");
-        videoParameters.write(writer);
-
-        writer.endObject();
-
-        jsonFile.close();
-
-        return true;
+// Write the JSON projection
+bool TbcMetaData::writeJson(const QString &fileName) const
+{
+    std::ofstream jsonFile(fileName.toStdString());
+    if (jsonFile.fail()) {
+        qCritical("Opening JSON output file failed");
+        return false;
     }
+
+    JsonWriter writer(jsonFile);
+
+    writer.beginObject();
+
+    // Keep members in alphabetical order. decoderEvents is always written
+    // (an empty array says "this writer knows the record"); segments only
+    // when there are any.
+    writer.writeMember("decoderEvents");
+    writeDecoderEvents(writer);
+    writer.writeMember("fields");
+    writeFields(writer);
+    if (pcmAudioParameters.isValid) {
+        writer.writeMember("pcmAudioParameters");
+        pcmAudioParameters.write(writer);
+    }
+    if (!segments.isEmpty()) {
+        writer.writeMember("segments");
+        writeSegments(writer);
+    }
+    writer.writeMember("videoParameters");
+    videoParameters.write(writer);
+
+    writer.endObject();
+
+    jsonFile.close();
+
+    return !jsonFile.fail();
+}
+
+// The capture.decoder value to store: what the file already says, else what
+// the object says, else inferred (vhs-decode is the only writer of tapeFormat)
+QString TbcMetaData::effectiveDecoderName() const
+{
+    if (!videoParameters.decoder.isEmpty()) return videoParameters.decoder;
+    return videoParameters.tapeFormat.isEmpty() ? QStringLiteral("ld-decode") : QStringLiteral("vhs-decode");
+}
+
+// Write (create or update) the canonical SQLite file
+bool TbcMetaData::writeSqlite(const QString &fileName) const
+{
     // Check if we're updating an existing file or creating a new one
     bool isUpdate = QFileInfo::exists(fileName);
     int captureId = 1; // Default for new files
+    QString decoderName = effectiveDecoderName();
     
     if (isUpdate) {
         // Try to read the existing capture_id from the file
@@ -1110,10 +1353,12 @@ bool TbcMetaData::write(QString fileName) const
             QString existingUserMarkerComment;
             QString existingUserMarkersJson;
             bool existingIsMapped, existingIsSubcarrierLocked, existingIsWidescreen;
-            
-            if (reader.readCaptureMetadata(captureId, existingSystem, existingDecoder, 
+            double existingRfSourceSampleRateHz = -1.0;
+            QString existingOsInfo, existingDecoderVersion;
+
+            if (reader.readCaptureMetadata(captureId, existingSystem, existingDecoder,
                                          existingGitBranch, existingGitCommit, existingVideoSampleRate,
-                                         existingActiveVideoStart, existingActiveVideoEnd, 
+                                         existingActiveVideoStart, existingActiveVideoEnd,
                                          existingFirstActiveFieldLine, existingLastActiveFieldLine,
                                          existingFirstActiveFrameLine, existingLastActiveFrameLine,
                                          existingFieldWidth, existingFieldHeight, existingNumberOfSequentialFields,
@@ -1127,8 +1372,12 @@ bool TbcMetaData::write(QString fileName) const
                                          existingUserEditInSelection, existingUserEditOutSelection,
                                          existingUserMarkerSelection, existingUserMarkerComment,
                                          existingUserMarkersJson,
-                                         existingCaptureNotes)) {
+                                         existingCaptureNotes, existingRfSourceSampleRateHz,
+                                         existingOsInfo, existingDecoderVersion)) {
                 tbcDebugStream() << "Updating existing SQLite file with capture_id:" << captureId;
+                // The file's own decoder name wins: a rewrite must never
+                // relabel a vhs-decode capture as ld-decode
+                if (!existingDecoder.isEmpty()) decoderName = existingDecoder;
             } else {
                 qWarning() << "Could not read existing capture metadata, treating as new file";
                 isUpdate = false;
@@ -1161,7 +1410,7 @@ bool TbcMetaData::write(QString fileName) const
         QString systemName = getVideoSystemDescription();
         if (isUpdate) {
             // Update existing capture metadata
-            if (!writer.updateCaptureMetadata(captureId, systemName, "ld-decode", // TODO: make decoder configurable
+            if (!writer.updateCaptureMetadata(captureId, systemName, decoderName,
                                             videoParameters.gitBranch, videoParameters.gitCommit,
                                             videoParameters.sampleRate, videoParameters.activeVideoStart, 
                                             videoParameters.activeVideoEnd,
@@ -1183,14 +1432,16 @@ bool TbcMetaData::write(QString fileName) const
                                             videoParameters.userMarkerSelection,
                                             videoParameters.userMarkerComment,
                                             videoParameters.userMarkersJson,
-                                            videoParameters.tapeFormat)) {
+                                            videoParameters.tapeFormat,
+                                            videoParameters.rfSourceSampleRateHz,
+                                            videoParameters.osInfo, videoParameters.version)) {
                 writer.rollbackTransaction();
                 return false;
             }
         } else {
             // Create new capture metadata
             captureId = writer.writeCaptureMetadata(
-                systemName, "ld-decode", // TODO: make decoder configurable
+                systemName, decoderName,
                 videoParameters.gitBranch, videoParameters.gitCommit,
                 videoParameters.sampleRate, videoParameters.activeVideoStart, 
                 videoParameters.activeVideoEnd, videoParameters.firstActiveFieldLine,
@@ -1211,7 +1462,9 @@ bool TbcMetaData::write(QString fileName) const
                 videoParameters.userMarkerSelection,
                 videoParameters.userMarkerComment,
                 videoParameters.userMarkersJson,
-                videoParameters.tapeFormat);
+                videoParameters.tapeFormat,
+                videoParameters.rfSourceSampleRateHz,
+                videoParameters.osInfo, videoParameters.version);
 
             if (captureId == -1) {
                 writer.rollbackTransaction();
@@ -1232,6 +1485,11 @@ bool TbcMetaData::write(QString fileName) const
 
         // Write all fields
         writeFields(writer, captureId);
+
+        // Decoder events and segments: replaced wholesale inside the same
+        // transaction, so a rewrite of the same metadata is idempotent
+        writeDecoderEvents(writer, captureId);
+        writeSegments(writer, captureId);
 
         if (!writer.commitTransaction()) {
             qCritical() << "Failed to commit transaction";
@@ -1255,18 +1513,27 @@ void TbcMetaData::readFields(SqliteReader &reader, int captureId)
     }
 
     // Pre-read all optional field data in bulk for performance
-    QSqlQuery vitsQuery, vbiQuery, vitcQuery, ccQuery, dropoutsQuery;
+    QSqlQuery vitsQuery, vbiQuery, vitcQuery, ccQuery, dropoutsQuery, metricsQuery;
     const bool hasVitsTable = reader.readAllFieldVitsMetrics(captureId, vitsQuery);
     const bool hasVbiTable = reader.readAllFieldVbi(captureId, vbiQuery);
     const bool hasVitcTable = reader.readAllFieldVitc(captureId, vitcQuery);
     const bool hasCcTable = reader.readAllFieldClosedCaptions(captureId, ccQuery);
     const bool hasDropoutsTable = reader.readAllFieldDropouts(captureId, dropoutsQuery);
+    // picture_metrics arrived in schema version 8; a failed exec means the
+    // table is absent and every field simply has no metrics
+    const bool hasMetricsTable = reader.readAllFieldPictureMetrics(captureId, metricsQuery);
 
     bool hasVitsRow = hasVitsTable && vitsQuery.next();
     bool hasVbiRow = hasVbiTable && vbiQuery.next();
     bool hasVitcRow = hasVitcTable && vitcQuery.next();
     bool hasCcRow = hasCcTable && ccQuery.next();
     bool hasDropoutRow = hasDropoutsTable && dropoutsQuery.next();
+    bool hasMetricsRow = hasMetricsTable && metricsQuery.next();
+
+    const auto metricOrNan = [](const QSqlQuery &query, int column) {
+        const QVariant value = query.value(column);
+        return value.isNull() ? std::numeric_limits<double>::quiet_NaN() : value.toDouble();
+    };
 
     fields.clear();
     if (videoParameters.numberOfSequentialFields > 0) {
@@ -1371,6 +1638,21 @@ void TbcMetaData::readFields(SqliteReader &reader, int captureId)
                                       dropoutsQuery.value(3).toInt());
                 hasDropoutRow = dropoutsQuery.next();
             } while (hasDropoutRow && dropoutsQuery.value(0).toInt() == fieldId);
+        }
+
+        // Apply optional picture-metrics row
+        advanceToField(metricsQuery, &hasMetricsRow, fieldId);
+        if (hasMetricsRow && metricsQuery.value(0).toInt() == fieldId) {
+            field.pictureMetrics.lumaMeanIre = metricOrNan(metricsQuery, 1);
+            field.pictureMetrics.fieldDiffIre = metricOrNan(metricsQuery, 2);
+            field.pictureMetrics.blankingDevIre = metricOrNan(metricsQuery, 3);
+            field.pictureMetrics.syncTipDevIre = metricOrNan(metricsQuery, 4);
+            field.pictureMetrics.noiseIre = metricOrNan(metricsQuery, 5);
+            field.pictureMetrics.burstAmpIre = metricOrNan(metricsQuery, 6);
+            field.pictureMetrics.inUse = field.pictureMetrics.anyFinite();
+            do {
+                hasMetricsRow = metricsQuery.next();
+            } while (hasMetricsRow && metricsQuery.value(0).toInt() == fieldId);
         }
 
         fields.push_back(field);
@@ -1715,6 +1997,252 @@ void TbcMetaData::appendField(const TbcMetaData::Field &field)
     fields.append(fieldCopy);
 
     videoParameters.numberOfSequentialFields = fields.size();
+}
+
+// -- Decoder events, segments and picture metrics --
+
+const QVector<TbcMetaData::DecoderEvent> &TbcMetaData::getDecoderEvents() const
+{
+    return decoderEvents;
+}
+
+void TbcMetaData::setDecoderEvents(const QVector<TbcMetaData::DecoderEvent> &events)
+{
+    decoderEvents = events;
+}
+
+void TbcMetaData::appendDecoderEvent(const TbcMetaData::DecoderEvent &event)
+{
+    decoderEvents.append(event);
+}
+
+const QVector<TbcMetaData::Segment> &TbcMetaData::getSegments() const
+{
+    return segments;
+}
+
+// Replace the segment list. A segment without an id (< 1) is given the next
+// free one, so callers can build segments without tracking ids themselves;
+// ids that are set are kept as they are.
+void TbcMetaData::setSegments(const QVector<TbcMetaData::Segment> &newSegments)
+{
+    segments = newSegments;
+    qint32 maxId = 0;
+    for (const Segment &segment : segments) {
+        if (segment.id > maxId) maxId = segment.id;
+    }
+    for (Segment &segment : segments) {
+        if (segment.id < 1) segment.id = ++maxId;
+    }
+}
+
+qint32 TbcMetaData::appendSegment(const TbcMetaData::Segment &segment)
+{
+    qint32 maxId = 0;
+    for (const Segment &existing : segments) {
+        if (existing.id > maxId) maxId = existing.id;
+    }
+    Segment copy = segment;
+    copy.id = maxId + 1;
+    segments.append(copy);
+    return copy.id;
+}
+
+const TbcMetaData::PictureMetrics &TbcMetaData::getFieldPictureMetrics(qint32 sequentialFieldNumber) const
+{
+    qint32 fieldNumber = sequentialFieldNumber - 1;
+    if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
+        qCritical() << "TbcMetaData::getFieldPictureMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+    }
+
+    return fields[fieldNumber].pictureMetrics;
+}
+
+void TbcMetaData::updateFieldPictureMetrics(const TbcMetaData::PictureMetrics &pictureMetrics, qint32 sequentialFieldNumber)
+{
+    qint32 fieldNumber = sequentialFieldNumber - 1;
+    if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
+        qCritical() << "TbcMetaData::updateFieldPictureMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+    }
+
+    fields[fieldNumber].pictureMetrics = pictureMetrics;
+    fields[fieldNumber].pictureMetrics.inUse = pictureMetrics.anyFinite();
+}
+
+bool TbcMetaData::hasPictureMetrics() const
+{
+    for (const Field &field : fields) {
+        if (field.pictureMetrics.anyFinite()) return true;
+    }
+    return false;
+}
+
+// Read the decoderEvents array from JSON
+void TbcMetaData::readDecoderEvents(JsonReader &reader)
+{
+    decoderEvents.clear();
+    reader.beginArray();
+    while (reader.readElement()) {
+        DecoderEvent event;
+        event.read(reader);
+        decoderEvents.append(event);
+    }
+    reader.endArray();
+}
+
+// Write the decoderEvents array to JSON
+void TbcMetaData::writeDecoderEvents(JsonWriter &writer) const
+{
+    writer.beginArray();
+    for (const DecoderEvent &event : decoderEvents) {
+        writer.writeElement();
+        event.write(writer);
+    }
+    writer.endArray();
+}
+
+// Read the segments array from JSON
+void TbcMetaData::readSegments(JsonReader &reader)
+{
+    segments.clear();
+    reader.beginArray();
+    while (reader.readElement()) {
+        Segment segment;
+        segment.read(reader);
+        segments.append(segment);
+    }
+    reader.endArray();
+}
+
+// Write the segments array to JSON
+void TbcMetaData::writeSegments(JsonWriter &writer) const
+{
+    writer.beginArray();
+    for (const Segment &segment : segments) {
+        writer.writeElement();
+        segment.write(writer);
+    }
+    writer.endArray();
+}
+
+// Read decoder events from SQLite (none on a pre-version-8 file)
+void TbcMetaData::readDecoderEvents(SqliteReader &reader, int captureId)
+{
+    decoderEvents.clear();
+    QSqlQuery query;
+    if (!reader.readAllDecoderEvents(captureId, query)) return;
+    while (query.next()) {
+        DecoderEvent event;
+        event.field = query.value(1).toInt();
+        event.kind = query.value(2).toString();
+        event.fileLoc = query.value(3).isNull() ? -1 : query.value(3).toLongLong();
+        if (!query.value(4).isNull()) {
+            event.hasRfDeltaSamples = true;
+            event.rfDeltaSamples = query.value(4).toLongLong();
+        }
+        event.rfDeltaFields = query.value(5).isNull() ? std::numeric_limits<double>::quiet_NaN()
+                                                      : query.value(5).toDouble();
+        event.source = query.value(6).toString();
+        event.detailJson = query.value(7).toString();
+        decoderEvents.append(event);
+    }
+}
+
+// Replace the capture's decoder events in SQLite
+void TbcMetaData::writeDecoderEvents(SqliteWriter &writer, int captureId) const
+{
+    writer.deleteDecoderEvents(captureId);
+    for (const DecoderEvent &event : decoderEvents) {
+        writer.writeDecoderEvent(captureId, event.field, event.kind,
+                                 event.fileLoc != -1 ? QVariant(event.fileLoc) : QVariant(),
+                                 event.hasRfDeltaSamples ? QVariant(event.rfDeltaSamples) : QVariant(),
+                                 std::isfinite(event.rfDeltaFields) ? QVariant(event.rfDeltaFields) : QVariant(),
+                                 event.source, event.detailJson);
+    }
+}
+
+// Read segments from SQLite (none on a pre-version-8 file)
+void TbcMetaData::readSegments(SqliteReader &reader, int captureId)
+{
+    segments.clear();
+    QSqlQuery query;
+    if (!reader.readAllSegments(captureId, query)) return;
+    while (query.next()) {
+        Segment segment;
+        segment.id = query.value(0).toInt();
+        segment.startField = query.value(1).toInt();
+        segment.endFieldExclusive = query.value(2).toInt();
+        segment.kind = query.value(3).toString();
+        segment.source = query.value(4).toString();
+        segment.enabled = query.value(5).toInt() != 0;
+        segment.title = query.value(6).toString();
+        segment.comment = query.value(7).toString();
+        segment.createdBy = query.value(8).toString();
+        segment.updatedAt = query.value(9).toString();
+        segment.derivedFrom = query.value(10).toString();
+        segments.append(segment);
+    }
+}
+
+// Replace the capture's segments in SQLite
+void TbcMetaData::writeSegments(SqliteWriter &writer, int captureId) const
+{
+    writer.deleteSegments(captureId);
+    for (const Segment &segment : segments) {
+        writer.writeSegment(captureId, segment.id, segment.startField, segment.endFieldExclusive,
+                            segment.kind, segment.source, segment.enabled, segment.title,
+                            segment.comment, segment.createdBy, segment.updatedAt, segment.derivedFrom);
+    }
+}
+
+// Write SQLite-first: the canonical .tbc.db, then the JSON projection
+bool TbcMetaData::writeWithProjection(const QString &fileName, QString *canonicalPath) const
+{
+    const bool namedJson = isJsonMetadataFilename(fileName);
+    const QString dbPath = namedJson ? sqliteSiblingPath(fileName) : fileName;
+    if (namedJson && dbPath == fileName) {
+        qCritical() << "Cannot derive a .tbc.db path from" << fileName;
+        return false;
+    }
+
+    if (!writeSqlite(dbPath)) return false;
+
+    // The JSON projection: the named file when it was JSON, otherwise the
+    // sibling only if one already exists (nothing conjures a JSON up)
+    QString jsonPath;
+    if (namedJson) {
+        jsonPath = fileName;
+    } else {
+        const QString candidate = jsonSiblingPath(dbPath);
+        if (!candidate.isEmpty() && QFileInfo::exists(candidate)) jsonPath = candidate;
+    }
+
+    if (!jsonPath.isEmpty()) {
+        // Write beside the target, then swap: the previous JSON survives as
+        // .bup until the new one is in place, so a failed write never leaves
+        // a truncated projection behind
+        const QString tmpPath = jsonPath + QStringLiteral(".tmp");
+        const QString bupPath = jsonPath + QStringLiteral(".bup");
+        if (!writeJson(tmpPath)) {
+            QFile::remove(tmpPath);
+            return false;
+        }
+        QFile::remove(bupPath);
+        if (QFileInfo::exists(jsonPath) && !QFile::rename(jsonPath, bupPath)) {
+            qCritical() << "Cannot move the previous JSON aside:" << jsonPath;
+            QFile::remove(tmpPath);
+            return false;
+        }
+        if (!QFile::rename(tmpPath, jsonPath)) {
+            qCritical() << "Cannot rename" << tmpPath << "to" << jsonPath;
+            if (QFileInfo::exists(bupPath)) QFile::rename(bupPath, jsonPath);
+            return false;
+        }
+        QFile::remove(bupPath);
+    }
+
+    if (canonicalPath) *canonicalPath = dbPath;
+    return true;
 }
 
 // Method to get the available number of fields (according to the metadata)

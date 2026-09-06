@@ -20,6 +20,8 @@
 #include <QTemporaryFile>
 #include <QDebug>
 #include <array>
+#include <cmath>
+#include <limits>
 
 #include "dropouts.h"
 
@@ -97,6 +99,23 @@ public:
         qint32 userMarkerSelection = -1;
         QString userMarkerComment;
         QString userMarkersJson;
+
+        // The sample rate, in Hz, that the per-field fileLoc/diskLoc values are
+        // expressed in: the decoder's RF working rate (vhs-decode resamples its
+        // input to 40 MHz unless told not to). This is NOT sampleRate, which is
+        // the TBC output rate. -1 when the decoder did not record it; consumers
+        // then have to be told the rate or estimate it from the fileLoc deltas.
+        double rfSourceSampleRateHz = -1.0;
+
+        // Which decoder produced the metadata ("ld-decode" or "vhs-decode"), as
+        // stored in the SQLite capture row. Empty when unknown (a JSON source);
+        // the SQLite writer then infers it from tapeFormat.
+        QString decoder;
+
+        // Informational keys the decoders write into the JSON (never stored in
+        // SQLite): kept so a JSON round trip does not drop them.
+        QString osInfo;
+        QString version;
 
         // -- Members set by the library --
 
@@ -206,6 +225,25 @@ public:
         void write(JsonWriter &writer) const;
     };
 
+    // Per-field picture metrics, measured by the decoder from the TBC field it
+    // wrote (or backfilled by tbc-segments --write from a field walk). All in
+    // IRE, 2 dp. A member that could not be measured is NaN: it is omitted
+    // from JSON (the JSON reader cannot parse null) and NULL in SQLite.
+    // Definitions are shared with tbc-segments' fieldmetrics.cpp.
+    struct PictureMetrics {
+        bool inUse = false;
+        double lumaMeanIre = std::numeric_limits<double>::quiet_NaN();     // mean of the active area
+        double fieldDiffIre = std::numeric_limits<double>::quiet_NaN();    // mean |field - field n-2| (same parity by output index)
+        double blankingDevIre = std::numeric_limits<double>::quiet_NaN();  // back porch mean - blanking level
+        double syncTipDevIre = std::numeric_limits<double>::quiet_NaN();   // sync tip mean - nominal sync tip
+        double noiseIre = std::numeric_limits<double>::quiet_NaN();        // back porch standard deviation
+        double burstAmpIre = std::numeric_limits<double>::quiet_NaN();     // colour burst peak-to-peak
+
+        bool anyFinite() const;
+        void read(JsonReader &reader);
+        void write(JsonWriter &writer) const;
+    };
+
     // Field metadata definition
     struct Field {
         qint32 seqNo = 0;   // Note: This is the unique primary-key
@@ -221,6 +259,7 @@ public:
         Vitc vitc;
         ClosedCaption closedCaption;
         DropOuts dropOuts;
+        PictureMetrics pictureMetrics;
         bool pad = false;
         // SECAM: true when this field's first active line carries D'R (the R-Y
         // line). Used by the pre-demodulated Dr/Db SECAM decoder (see
@@ -234,8 +273,61 @@ public:
         qint32 decodeFaults = -1;
         qint32 efmTValues = -1;
 
+        // vhs-decode's field-order bookkeeping. JSON only (vhs-decode's own
+        // SQLite writer has no columns for them); kept so a JSON round trip
+        // through this library does not drop them. -1 / hasX == false = absent.
+        qint32 burstStartLine = -1;
+        bool detectedFirstField = false;
+        bool hasDetectedFirstField = false;
+        bool isDuplicateField = false;
+        bool hasIsDuplicateField = false;
+
         void read(SqliteReader &reader, int captureId);
         void write(SqliteWriter &writer, int captureId) const;
+        void read(JsonReader &reader);
+        void write(JsonWriter &writer) const;
+    };
+
+    // A fact the decoder knew while decoding that cannot be re-derived from the
+    // per-field records: a sync-loss jump, a skipped/duplicated/dropped field at
+    // a seam, a --resume seam, an LD redo. Append-only; never edited by tools.
+    // Field references are 0-based (the SQLite field_id), half-open where a
+    // range applies. `source` is "decoder" for rows the decoder wrote and
+    // "tbc-segments" for rows reconstructed from the field records by a
+    // backfill.
+    struct DecoderEvent {
+        QString kind;
+        qint32 field = -1;                 // first written field at/after the event, 0-based
+        qint64 fileLoc = -1;               // RF sample offset the event happened at (-1 unknown)
+        bool hasRfDeltaSamples = false;
+        qint64 rfDeltaSamples = 0;         // RF advance across the event (may be negative)
+        double rfDeltaFields = std::numeric_limits<double>::quiet_NaN(); // rfDeltaSamples / nominal samples per field
+        QString source = QStringLiteral("decoder");
+        QString detailJson;                // kind-specific extras, opaque JSON text
+
+        // A kind that marks a discontinuity in the recording.
+        bool isSeam() const;
+
+        void read(JsonReader &reader);
+        void write(JsonWriter &writer) const;
+    };
+
+    // A recording segment: the editable layer over the decoder's records.
+    // Derived by the tbc-tools segments library (source "derived") or edited by
+    // an operator (source "user"). Field numbers are 0-based, half-open.
+    struct Segment {
+        qint32 id = -1;                    // stable; never renumbered; new = max + 1
+        qint32 startField = 0;
+        qint32 endFieldExclusive = 0;
+        QString kind = QStringLiteral("unknown");   // clip | blank | noise | unknown
+        QString source = QStringLiteral("derived"); // derived | user
+        bool enabled = true;
+        QString title;
+        QString comment;
+        QString createdBy;
+        QString updatedAt;                 // ISO-8601 UTC
+        QString derivedFrom;               // JSON text: tool, commit, thresholds
+
         void read(JsonReader &reader);
         void write(JsonWriter &writer) const;
     };
@@ -261,6 +353,39 @@ public:
     void writeFields(JsonWriter &writer) const;
     void readFields(SqliteReader &reader, int captureId);
     void writeFields(SqliteWriter &writer, int captureId) const;
+
+    // The SQLite file is the canonical store and the JSON a projection of it.
+    // Given a .tbc.json path whose .tbc.db sibling exists, returns the .db
+    // path; otherwise returns fileName unchanged. Tools open whatever this
+    // returns.
+    static QString resolveMetadataPath(const QString &fileName);
+    // The .tbc.db sibling path of a .tbc.json path (or fileName itself when it
+    // is already SQLite).
+    static QString sqliteSiblingPath(const QString &fileName);
+    static bool isJsonMetadataFilename(const QString &fileName);
+
+    // Write SQLite-first: the .tbc.db (created from this object when only a
+    // .tbc.json exists, updated in place otherwise) and then, when a .tbc.json
+    // sibling exists or fileName named one, that JSON rewritten atomically as
+    // a projection (<json>.tmp then rename). Returns the canonical (.db) path
+    // written through *canonicalPath when given.
+    bool writeWithProjection(const QString &fileName, QString *canonicalPath = nullptr) const;
+
+    // Decoder events and segments (see the struct comments)
+    const QVector<DecoderEvent> &getDecoderEvents() const;
+    void setDecoderEvents(const QVector<DecoderEvent> &events);
+    void appendDecoderEvent(const DecoderEvent &event);
+
+    const QVector<Segment> &getSegments() const;
+    void setSegments(const QVector<Segment> &newSegments);
+    // Appends with id = max existing id + 1 (or 1) and returns that id
+    qint32 appendSegment(const Segment &segment);
+
+    // Picture metrics of a field (1-based sequential field number)
+    const PictureMetrics &getFieldPictureMetrics(qint32 sequentialFieldNumber) const;
+    void updateFieldPictureMetrics(const PictureMetrics &pictureMetrics, qint32 sequentialFieldNumber);
+    // True when at least one field carries a finite picture metric
+    bool hasPictureMetrics() const;
 
     const VideoParameters &getVideoParameters() const;
     void setVideoParameters(const VideoParameters &videoParameters);
@@ -316,12 +441,26 @@ private:
     VideoParameters videoParameters;
     PcmAudioParameters pcmAudioParameters;
     QVector<Field> fields;
+    QVector<DecoderEvent> decoderEvents;
+    QVector<Segment> segments;
     QVector<qint32> pcmAudioFieldStartSampleMap;
     QVector<qint32> pcmAudioFieldLengthMap;
 
     void initialiseVideoSystemParameters();
     qint32 getFieldNumber(qint32 frameNumber, qint32 field) const;
     void generatePcmAudioMap();
+
+    void readDecoderEvents(JsonReader &reader);
+    void writeDecoderEvents(JsonWriter &writer) const;
+    void readSegments(JsonReader &reader);
+    void writeSegments(JsonWriter &writer) const;
+    void readDecoderEvents(SqliteReader &reader, int captureId);
+    void writeDecoderEvents(SqliteWriter &writer, int captureId) const;
+    void readSegments(SqliteReader &reader, int captureId);
+    void writeSegments(SqliteWriter &writer, int captureId) const;
+    bool writeJson(const QString &fileName) const;
+    bool writeSqlite(const QString &fileName) const;
+    QString effectiveDecoderName() const;
 };
 
 #endif // TBCMETADATA_H

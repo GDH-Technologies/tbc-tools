@@ -144,6 +144,9 @@ void DropOuts::read(SqliteReader &reader, int captureId, int fieldId)
 // Write DropOuts to SQLite
 void DropOuts::write(SqliteWriter &writer, int captureId, int fieldId) const
 {
+    // drop_outs has no primary key, so INSERT OR REPLACE appends; replace the
+    // field's rows wholesale so a rewrite of the same metadata is idempotent
+    writer.deleteFieldDropouts(captureId, fieldId);
     for (int i = 0; i < size(); i++) {
         writer.writeFieldDropouts(captureId, fieldId, startx(i), endx(i), fieldLine(i));
     }
