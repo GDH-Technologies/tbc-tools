@@ -8,6 +8,7 @@ nav:
   - ld-discmap.md
   - ld-dropout-correct.md
   - tbc-export-metadata.md
+  - tbc-segments.md
   - ld-lds-converter.md
   - ld-process-efm.md
   - ld-process-vbi.md

@@ -53,6 +53,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ### Export and Conversion Tools
 
 - **tbc-export-metadata**     - Export TBC metadata to external formats
+- **tbc-segments**            - Find recording boundaries (tape gaps, sync loss, scene changes) in TBC metadata and fields
 - **ld-lds-converter**        - Convert between 10-bit packed and 16-bit data formats for DomesDay Duplicator captures.
 - **tbc-metadata-converter**  - Convert between  JSON & SQLite metadata formats
 - **tbc-video-export**        - Direct to video export task handler for .tbc files. 
