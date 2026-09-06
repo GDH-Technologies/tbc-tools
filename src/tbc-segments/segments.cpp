@@ -318,13 +318,24 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
     }
 
     {
+        // The option is a percentage of the file's own median syncConf: vhs-decode
+        // writes 45 for a healthy VHS field where ld-decode writes 100, and its
+        // forced values on faults (10, 0) sit well below either. A fixed 50 would
+        // flag an entire healthy VHS tape as one sync loss.
+        QVector<double> confs;
+        confs.reserve(n);
+        for (qint32 i = 0; i < n; i++) confs.append(a.syncConf[i]);
+        a.medianSyncConf = medianOf(confs);
+        a.effectiveSyncConfThreshold = (std::isfinite(a.medianSyncConf) && a.medianSyncConf > 0)
+                                           ? t.syncConfThreshold * a.medianSyncConf / 100.0
+                                           : static_cast<double>(t.syncConfThreshold);
         QVector<bool> low(n, false);
-        for (qint32 i = 0; i < n; i++) low[i] = a.syncConf[i] < t.syncConfThreshold;
+        for (qint32 i = 0; i < n; i++) low[i] = a.syncConf[i] < a.effectiveSyncConfThreshold;
         appendRunEvents(events, low, std::max(1, t.minRunFields), QStringLiteral("sync_loss"),
                         [&](qint32 s, qint32 e) {
                             double sum = 0; for (qint32 i = s; i < e; i++) sum += a.syncConf[i];
                             const double mean = sum / (e - s);
-                            const double depth = t.syncConfThreshold > 0 ? clamp01(1.0 - mean / t.syncConfThreshold) : 1.0;
+                            const double depth = a.effectiveSyncConfThreshold > 0 ? clamp01(1.0 - mean / a.effectiveSyncConfThreshold) : 1.0;
                             return depth * std::min(1.0, (e - s) / 10.0);
                         },
                         [&](qint32 s, qint32 e) {
@@ -536,6 +547,8 @@ QJsonObject buildReport(const TbcMetaData &metaData,
     QJsonObject thresholds;
     thresholds.insert("gapTolerance", t.gapTolerance);
     thresholds.insert("syncConfThreshold", t.syncConfThreshold);
+    thresholds.insert("syncConfThresholdEffective", a.effectiveSyncConfThreshold);
+    thresholds.insert("medianSyncConf", std::isfinite(a.medianSyncConf) ? QJsonValue(a.medianSyncConf) : QJsonValue(QJsonValue::Null));
     thresholds.insert("minRunFields", t.minRunFields);
     thresholds.insert("dropoutStormThreshold", t.dropoutStormThreshold);
     thresholds.insert("activeWidth", a.activeWidth);
@@ -619,6 +632,8 @@ QString summariseAnalysis(const SegmentsAnalysis &a, const FieldRange &range)
     out += QStringLiteral("Gap detection: %1 (nominal %2 samples/field from %3, implied RF %4 Hz, rollover fixups %5)\n")
                .arg(a.gapDetection).arg(a.nominalSamplesPerField, 0, 'f', 1).arg(a.nominalSource)
                .arg(a.impliedRfSampleRateHz, 0, 'f', 0).arg(a.fileLocRolloverFixups);
+    out += QStringLiteral("Sync loss below syncConf %1 (median %2)\n")
+               .arg(a.effectiveSyncConfThreshold, 0, 'f', 1).arg(a.medianSyncConf, 0, 'f', 1);
     out += QStringLiteral("Sections: %1\n").arg(a.sections.size());
     for (auto it = a.counts.constBegin(); it != a.counts.constEnd(); ++it) {
         out += QStringLiteral("  %1: %2\n").arg(it.key()).arg(it.value());

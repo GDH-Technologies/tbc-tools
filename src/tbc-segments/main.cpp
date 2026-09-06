@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
     QCommandLineOption lengthOption("length", QCoreApplication::translate("main", "Number of frames to analyse"), "frames");
     QCommandLineOption rfRateOption("rf-sample-rate-hz", QCoreApplication::translate("main", "RF capture sample rate; unset = self-calibrate from the median field delta"), "Hz");
     QCommandLineOption gapToleranceOption("gap-tolerance", QCoreApplication::translate("main", "Field-length deviation (fraction of nominal) that starts a new section (default 0.333)"), "fraction");
-    QCommandLineOption syncConfOption("sync-conf-threshold", QCoreApplication::translate("main", "syncConf below this counts as sync loss (default 50)"), "0-100");
+    QCommandLineOption syncConfOption("sync-conf-threshold", QCoreApplication::translate("main", "sync loss below this percentage of the file's median syncConf (default 50)"), "0-100");
     QCommandLineOption minRunOption("min-run-fields", QCoreApplication::translate("main", "Minimum run length for sync_loss / dropout_storm / field-data runs (default 2)"), "n");
     QCommandLineOption dropoutStormOption("dropout-storm-threshold", QCoreApplication::translate("main", "Active-area dropout coverage that counts as a storm (default 0.25)"), "fraction");
     QCommandLineOption tbcOption("tbc", QCoreApplication::translate("main", "Also walk the raw fields of this luma TBC"), "file");

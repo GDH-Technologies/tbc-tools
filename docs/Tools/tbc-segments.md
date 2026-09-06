@@ -13,7 +13,7 @@ From the metadata alone:
 | Event | Source |
 | --- | --- |
 | `gap` | The RF file offset between two fields deviates from the nominal field length (tbc-audio-align's gapless-section rule). |
-| `sync_loss` | A run of fields whose `syncConf` is below the threshold. |
+| `sync_loss` | A run of fields whose `syncConf` is below `--sync-conf-threshold`, a percentage of the file's median `syncConf` (vhs-decode writes 45 for every healthy field, ld-decode 100). |
 | `parity_break` | `decodeFaults` bit 1, or two consecutive fields of the same parity. |
 | `skipped_field` | `decodeFaults` bit 4 (the decoder duplicated or dropped a field to keep cadence). |
 | `dropout_storm` | A run of fields whose active area is mostly dropouts. |

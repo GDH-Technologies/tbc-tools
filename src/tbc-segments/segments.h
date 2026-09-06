@@ -92,8 +92,12 @@ struct SegmentsAnalysis {
     qint32 activeWidth = 0;
     qint32 activeLines = 0;
 
-    // Field-data thresholds actually applied: the configured value or a floor
-    // relative to the file's own median (real tape noise raises both baselines).
+    // Thresholds actually applied. syncConf is scaled by the file's own median
+    // (vhs-decode writes 45 for a healthy VHS field, ld-decode 100); the
+    // field-data thresholds are floors under a multiple of the file median
+    // (real tape noise raises both baselines).
+    double effectiveSyncConfThreshold = 0.0;
+    double medianSyncConf = 0.0;
     double effectiveSceneThresholdIre = 0.0;
     double effectiveNoiseThresholdIre = 0.0;
     double medianFieldDiffIre = 0.0;

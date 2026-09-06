@@ -38,7 +38,9 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
   --rf-sample-rate-hz <Hz>    RF capture rate for the nominal field length;
                               unset: self-calibrated from the median field delta
   --gap-tolerance <f>         deviation from nominal that starts a section (0.333)
-  --sync-conf-threshold <n>   syncConf below this is sync loss (50)
+  --sync-conf-threshold <n>   sync loss below this percentage of the file's
+                              median syncConf (50): vhs-decode writes 45 for a
+                              healthy VHS field, ld-decode 100
   --min-run-fields <n>        minimum run for sync_loss / dropout_storm /
                               field-data runs (2)
   --dropout-storm-threshold <f>  active-area dropout coverage (0.25)
@@ -91,6 +93,11 @@ captures; the tool undoes that (`timing.fileLocRolloverFixups`).
  "perField": {...},        // with --per-field
  "fieldMetrics": {...}}    // with --per-field --tbc
 ```
+
+`--sync-conf-threshold` is a percentage of the file's median `syncConf`, because the
+decoders disagree on what a healthy field scores (vhs-decode 45, ld-decode 100)
+while both force 10 or 0 on a fault; the applied value is reported as
+`thresholds.syncConfThresholdEffective`.
 
 `--scene-threshold-ire` and `--noise-threshold-ire` are floors: the value applied
 is the larger of the option and 2.5× the file's own median field difference /
