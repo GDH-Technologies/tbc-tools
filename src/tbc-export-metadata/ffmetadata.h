@@ -31,7 +31,25 @@
 #include "tbcmetadata.h"
 
 /*!
+    Which stored recording segments become chapters.
+*/
+enum class FfmetadataSegmentMode {
+    EnabledSegments,   // one chapter per enabled stored segment (the default)
+    AllSegments,       // every stored segment, disabled ones included
+    NoSegments         // ignore stored segments: LaserDisc navigation chapters only
+};
+
+/*!
     Write an FFMETADATA1 file containing navigation information.
+
+    When the metadata holds recording segments (written by vhs-decode's
+    consumers: tbc-segments --write-segments, ld-analyse's Segments viewer)
+    each selected segment becomes one [CHAPTER] and the LaserDisc navigation
+    chapters are not written; START/END are the segment's 0-based fields
+    rebased to the export start field, so a per-segment export carries
+    correctly placed chapters. The legacy single user marker is still
+    spliced in. Without stored segments (or with NoSegments) the output is
+    unchanged: LaserDisc navigation chapters plus the user marker.
 
     This is FFmpeg's generic metadata format, and can be used to provide
     metadata for chapter-supporting formats like Matroska.
@@ -43,6 +61,7 @@
            Pass a value < 1 to export to the end of the input.
     @param includeVitcTimecode When true, include FFmpeg-style VITC timecode
            in the output header when available.
+    @param segmentMode Which stored segments become chapters.
 
     Returns true on success, false on failure.
 */
@@ -50,6 +69,7 @@ bool writeFfmetadata(TbcMetaData &metaData,
                      const QString &fileName,
                      qint32 startFrameOneBased = -1,
                      qint32 lengthFrames = -1,
-                     bool includeVitcTimecode = true);
+                     bool includeVitcTimecode = true,
+                     FfmetadataSegmentMode segmentMode = FfmetadataSegmentMode::EnabledSegments);
 
 #endif

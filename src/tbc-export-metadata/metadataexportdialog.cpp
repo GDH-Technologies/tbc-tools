@@ -215,6 +215,12 @@ void MetadataExportDialog::setInitialOptions(const InitialOptions &options)
     ui->ffmetadataCheckBox->setChecked(options.exportFfmetadata);
     ui->ffmpegVitcCheckBox->setChecked(options.exportFfmpegVitc);
     ui->ffmetadataVitcTimecodeCheckBox->setChecked(options.exportFfmetadataVitcTimecode);
+    if (ui->ffmetadataSegmentsComboBox) {
+        ui->ffmetadataSegmentsComboBox->setCurrentIndex(qBound(0, options.ffmetadataSegmentMode, 2));
+    }
+    if (ui->segmentsJsonCheckBox) {
+        ui->segmentsJsonCheckBox->setChecked(options.exportSegmentsJson);
+    }
     ui->closedCaptionsCheckBox->setChecked(options.exportClosedCaptions);
     ui->ffmetadataStartLineEdit->setText(options.ffmetadataStart > 0 ? QString::number(options.ffmetadataStart) : QString());
     ui->ffmetadataLengthLineEdit->setText(options.ffmetadataLength > 0 ? QString::number(options.ffmetadataLength) : QString());
@@ -389,6 +395,7 @@ void MetadataExportDialog::on_exportButton_clicked()
         || !addOutput(ui->audacityLabelsCheckBox, QStringLiteral("--audacity-labels"), QStringLiteral("_audacity-labels.txt"))
         || !addOutput(ui->ffmetadataCheckBox, QStringLiteral("--ffmetadata"), QStringLiteral("_ffmetadata.txt"))
         || !addOutput(ui->ffmpegVitcCheckBox, QStringLiteral("--ffmpeg-vitc"), QStringLiteral("_FFmpeg_VITC.txt"))
+        || !addOutput(ui->segmentsJsonCheckBox, QStringLiteral("--segments-json"), QStringLiteral("_segments.json"))
         || !addOutput(ui->closedCaptionsCheckBox, QStringLiteral("--closed-captions"), QStringLiteral("_closed-captions.scc"))) {
         return;
     }
@@ -399,10 +406,20 @@ void MetadataExportDialog::on_exportButton_clicked()
     }
 
     const bool ffmetadataSelected = ui->ffmetadataCheckBox && ui->ffmetadataCheckBox->isChecked();
+    const bool segmentsJsonSelected = ui->segmentsJsonCheckBox && ui->segmentsJsonCheckBox->isChecked();
     if (ffmetadataSelected) {
         if (ui->ffmetadataVitcTimecodeCheckBox && !ui->ffmetadataVitcTimecodeCheckBox->isChecked()) {
             arguments << QStringLiteral("--ffmetadata-no-vitc-timecode");
         }
+        if (ui->ffmetadataSegmentsComboBox && ui->ffmetadataSegmentsComboBox->isEnabled()) {
+            if (ui->ffmetadataSegmentsComboBox->currentIndex() == 1) {
+                arguments << QStringLiteral("--ffmetadata-all-segments");
+            } else if (ui->ffmetadataSegmentsComboBox->currentIndex() == 2) {
+                arguments << QStringLiteral("--ffmetadata-no-segments");
+            }
+        }
+    }
+    if (ffmetadataSelected || segmentsJsonSelected) {
         if (!startText.isEmpty()) {
             qint32 startValue = -1;
             if (!parsePositiveInteger(startText, &startValue)) {
@@ -616,6 +633,14 @@ void MetadataExportDialog::updateOptionCompatibilityState()
 {
     const bool supportsUserMarkersTxt = exportToolSupportsOption(QStringLiteral("--user-markers-txt"));
     const bool supportsUserMarkersCsv = exportToolSupportsOption(QStringLiteral("--user-markers-csv"));
+    ffmetadataSegmentsSupported = exportToolSupportsOption(QStringLiteral("--ffmetadata-no-segments"));
+    if (ui->ffmetadataSegmentsComboBox) {
+        ui->ffmetadataSegmentsComboBox->setToolTip(
+            ffmetadataSegmentsSupported
+                ? tr("Recording segments stored in the metadata become chapters in place of LaserDisc navigation chapters.")
+                : tr("Unavailable: selected export tool does not support --ffmetadata-no-segments."));
+    }
+    updateFfmetadataControlsEnabled();
 
     const auto applyCompatibility = [this](QCheckBox *checkBox,
                                            QLabel *label,
@@ -669,5 +694,11 @@ void MetadataExportDialog::updateFfmetadataControlsEnabled()
     }
     if (ui->ffmetadataLengthLineEdit) {
         ui->ffmetadataLengthLineEdit->setEnabled(enabled);
+    }
+    if (ui->ffmetadataSegmentsLabel) {
+        ui->ffmetadataSegmentsLabel->setEnabled(enabled && ffmetadataSegmentsSupported);
+    }
+    if (ui->ffmetadataSegmentsComboBox) {
+        ui->ffmetadataSegmentsComboBox->setEnabled(enabled && ffmetadataSegmentsSupported);
     }
 }
