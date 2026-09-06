@@ -286,13 +286,24 @@ Binary file containing sequential field data:
 
 ### SQLite Metadata
 > [!WARNING]  
-> The SQLite metadata format is **internal to ld-decode tools only** and subject to change without notice. External tools and scripts should **not** access this database directly. Instead, use `tbc-export-metadata` or similar tools to export metadata in stable, documented formats.
+> The SQLite metadata format is **internal to ld-decode tools only** and subject to change without notice. External tools and scripts should **not** write to this database directly. Use `tbc-export-metadata` or similar tools to export metadata in stable, documented formats. Read-only access to the versioned tables below (`PRAGMA user_version`) is tolerated; a reader must cope with a table or column being absent on an older file.
 
-Efficient binary format with tables:
-- `video_parameters`: Video system settings  
-- `fields`: Per-field metadata
-- `dropouts`: Dropout locations
-- Indexed for fast field lookup
+The `.tbc.db` is the canonical store and the `.tbc.json` a projection of it,
+written by the same `TbcMetaData` writer. When both exist beside a TBC,
+`TbcMetaData::resolveMetadataPath()` returns the database and tools open
+that; `TbcMetaData::writeWithProjection()` writes the database (creating it
+from a JSON-only decode first) and then rewrites the JSON atomically.
+
+Schema version 8 (`src/library/tbc/sqliteio.cpp`, `SCHEMA_SQL`; the same DDL
+vhs-decode writes as its schema version 2). Tables: `capture`,
+`pcm_audio_parameters`, `field_record`, `vits_metrics`, `vbi`, `drop_outs`,
+`vitc`, `closed_caption`, plus the segmentation tables `picture_metrics`
+(per-field picture measurements in IRE), `decoder_event` (what the decoder
+knew at a seam: sync-loss jumps, skipped/duplicated/dropped fields, resume
+seams) and `segment` (the editable recording-segment layer). `capture` also
+carries `rf_source_sample_rate_hz`, the rate `file_loc` is expressed in. Older
+files migrate in place on the first write. The tables are described in
+`src/tbc-metadata-converter/README.md`.
 
 ## Troubleshooting
 
