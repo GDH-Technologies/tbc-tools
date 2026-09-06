@@ -392,6 +392,7 @@ private:
     QAction *saveAllModesPngAction = nullptr;
     QAction *copyCurrentDisplayAction = nullptr;
     QAction *notesViewerAction = nullptr;
+    QAction *skipBySegmentsAction = nullptr;
     QPushButton *vectorscopeSelectionPushButton = nullptr;
     TimelineMarkerSlider *timelineMarkerSlider = nullptr;
     UiStateSnapshot pendingUiStateSnapshot;
@@ -404,6 +405,16 @@ private:
     void setOutPointAtCurrentFrame();
     qint32 sliderPositionForFrame(qint32 frameNumber) const;
     qint32 frameForSliderPosition(qint32 sliderPosition) const;
+    // Recording segments
+    qint32 sliderPositionForField(qint32 field) const;
+    qint32 currentFirstFieldZeroBased() const;
+    qint32 segmentIndexContainingField(qint32 field) const;
+    qint32 segmentStartFrame(const TbcMetaData::Segment &segment) const;
+    bool skipBySegmentsEnabled() const;
+    void applySegmentEdit(const QVector<TbcMetaData::Segment> &segments, const QString &statusText);
+    void setInOutFromSegment(qint32 segmentIndex, bool setIn, bool setOut);
+    bool splitSegmentAtField(qint32 field, QString *statusText);
+    QString segmentSummaryText(const TbcMetaData::Segment &segment) const;
     QFutureWatcher<QImage> asyncFrameRenderWatcher;
     bool asyncFrameRenderInProgress = false;
     bool asyncFrameRenderQueued = false;

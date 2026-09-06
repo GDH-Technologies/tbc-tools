@@ -23,6 +23,7 @@
 // TBC library includes
 #include "sourcevideo.h"
 #include "tbcmetadata.h"
+#include "segments.h"
 #include "linenumber.h"
 #include "vbidecoder.h"
 #include "videoiddecoder.h"
@@ -189,6 +190,24 @@ public:
     qint32 startOfNextChapter(qint32 currentFrameNumber);
     qint32 startOfChapter(qint32 currentFrameNumber);
 
+    // Recording segments: the editable layer of the metadata, and the
+    // decoder's evidence behind them. Segments derived at load (from stored
+    // decoder events / picture metrics when none were stored) are marked so
+    // the GUI can say so; they persist only when the user saves.
+    const QVector<TbcMetaData::Segment> &getSegments() const;
+    void setSegments(const QVector<TbcMetaData::Segment> &segments);
+    const QVector<TbcMetaData::DecoderEvent> &getDecoderEvents() const;
+    bool hasPictureMetrics() const;
+    bool hasSegmentEvidence() const;
+    bool getSegmentsDerivedAtLoad() const;
+    QVector<TbcMetaData::Segment> deriveSegments(const SegmentsThresholds &thresholds) const;
+    // Library rules, single-sourced: the frames an export of a segment covers
+    // (mixed-frame rule), the frame holding a 0-based field, the 0-based
+    // first field of a 1-based frame.
+    bool segmentFrameRange(const TbcMetaData::Segment &segment, qint32 *startFrameOneBased, qint32 *lengthFrames) const;
+    qint32 frameContainingField(qint32 field) const;
+    qint32 firstFieldOfFrame(qint32 frameNumber) const;
+
 signals:
     void busy(QString information);
     void finishedLoading(bool success);
@@ -197,6 +216,10 @@ signals:
 private slots:
     void finishBackgroundLoad();
     void finishBackgroundSave();
+
+private:
+    bool writeMetadataWithBackup(const QString &metadataFilename);
+    void deriveSegmentsAtLoad();
 
 private:
     bool sourceReady;
@@ -223,6 +246,7 @@ private:
     QString currentMetadataFilename;
     QString requestedMetadataFilename;
     QString lastIOError;
+    bool segmentsDerivedAtLoad = false;
 
     // Chroma decoder objects
     PalColour palColour;

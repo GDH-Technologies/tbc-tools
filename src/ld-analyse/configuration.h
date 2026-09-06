@@ -66,6 +66,8 @@ public:
     // Get and set methods - view options
     void setToggleChromaDuringSeek(bool toggleChromaDuringSeek);
     bool getToggleChromaDuringSeek(void);
+    void setSkipBySegments(bool skipBySegments);
+    bool getSkipBySegments(void);
     void setGenerateProxyEnabled(bool generateProxyEnabled);
     bool getGenerateProxyEnabled(void);
     void setExportProfileConfigEnabled(bool exportProfileConfigEnabled);
@@ -134,6 +136,7 @@ private:
     // View options
     struct ViewOptions {
         bool toggleChromaDuringSeek;
+        bool skipBySegments;
         bool generateProxyEnabled;
         bool exportProfileConfigEnabled;
         QString exportProfileConfigPath;

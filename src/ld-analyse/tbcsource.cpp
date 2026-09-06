@@ -14,6 +14,7 @@
 #include <limits>
 #include <QDir>
 #include <QDateTime>
+#include <QFile>
 #include <QFileInfo>
 #include <QStringList>
 
@@ -1790,6 +1791,90 @@ qint32 TbcSource::startOfChapter(qint32 currentFrameNumber)
     return 1;
 }
 
+// Recording segments --------------------------------------------------------------------------------------------------
+
+const QVector<TbcMetaData::Segment> &TbcSource::getSegments() const
+{
+    return metaData.getSegments();
+}
+
+void TbcSource::setSegments(const QVector<TbcMetaData::Segment> &segments)
+{
+    metaData.setSegments(segments);
+    segmentsDerivedAtLoad = false;
+}
+
+const QVector<TbcMetaData::DecoderEvent> &TbcSource::getDecoderEvents() const
+{
+    return metaData.getDecoderEvents();
+}
+
+bool TbcSource::hasPictureMetrics() const
+{
+    return metaData.hasPictureMetrics();
+}
+
+bool TbcSource::hasSegmentEvidence() const
+{
+    return !metaData.getDecoderEvents().isEmpty() || metaData.hasPictureMetrics();
+}
+
+bool TbcSource::getSegmentsDerivedAtLoad() const
+{
+    return segmentsDerivedAtLoad;
+}
+
+QVector<TbcMetaData::Segment> TbcSource::deriveSegments(const SegmentsThresholds &thresholds) const
+{
+    FieldRange range;
+    range.startField = 0;
+    range.endFieldExclusive = metaData.getNumberOfFields();
+    if (range.endFieldExclusive <= 0) {
+        return QVector<TbcMetaData::Segment>();
+    }
+    const FieldMetrics metrics = FieldMetrics::fromMetadata(metaData);
+    const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0,
+                                                      metrics.enabled ? &metrics : nullptr);
+    return ::deriveSegments(metaData, analysis, thresholds, QStringLiteral("ld-analyse"));
+}
+
+// Derive segments when none are stored but the decoder left evidence (events
+// or picture metrics). Derived-at-load segments do not mark the metadata
+// dirty; they persist when the user saves for any reason.
+void TbcSource::deriveSegmentsAtLoad()
+{
+    segmentsDerivedAtLoad = false;
+    if (!metaData.getSegments().isEmpty() || !hasSegmentEvidence()) {
+        return;
+    }
+    const QVector<TbcMetaData::Segment> derived = deriveSegments(SegmentsThresholds());
+    if (derived.isEmpty()) {
+        return;
+    }
+    metaData.setSegments(derived);
+    segmentsDerivedAtLoad = true;
+    tbcDebugStream() << "TbcSource::deriveSegmentsAtLoad(): derived" << derived.size() << "segments";
+}
+
+bool TbcSource::segmentFrameRange(const TbcMetaData::Segment &segment, qint32 *startFrameOneBased, qint32 *lengthFrames) const
+{
+    return ::segmentFrameRange(metaData, segment, startFrameOneBased, lengthFrames);
+}
+
+qint32 TbcSource::frameContainingField(qint32 field) const
+{
+    return ::frameContainingField(metaData, field);
+}
+
+qint32 TbcSource::firstFieldOfFrame(qint32 frameNumber) const
+{
+    if (frameNumber < 1 || frameNumber > metaData.getNumberOfFrames()) {
+        return -1;
+    }
+    const qint32 seqNo = metaData.getFirstFieldNumber(frameNumber);
+    return seqNo >= 1 ? seqNo - 1 : -1;
+}
+
 
 // Private methods ----------------------------------------------------------------------------------------------------
 
@@ -2573,11 +2658,13 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
         if (!QFileInfo::exists(candidate)) {
             continue;
         }
-        if (metaData.read(candidate)) {
-            metadataFileName = candidate;
+        // A .tbc.json beside a .tbc.db opens the database: the JSON is its projection
+        const QString resolvedCandidate = TbcMetaData::resolveMetadataPath(candidate);
+        if (metaData.read(resolvedCandidate)) {
+            metadataFileName = resolvedCandidate;
             break;
         }
-        failedMetadataCandidates << candidate;
+        failedMetadataCandidates << resolvedCandidate;
     }
 
     if (metadataFileName.isEmpty()) {
@@ -2655,6 +2742,7 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
     // Analyse the metadata
     emit busy("Generating graph data and chapter map...");
     generateData();
+    deriveSegmentsAtLoad();
 
     return true;
 }
@@ -2666,6 +2754,8 @@ bool TbcSource::startBackgroundLoadMetadata(QString metadataFilename, QString di
     tbcDebugStream() << "TbcSource::startBackgroundLoadMetadata(): Processing metadata...";
     emit busy("Processing metadata...");
 
+    // A .tbc.json beside a .tbc.db opens the database: the JSON is its projection
+    metadataFilename = TbcMetaData::resolveMetadataPath(metadataFilename);
     if (!metaData.read(metadataFilename)) {
         qWarning() << "Open metadata failed for filename" << metadataFilename;
         currentSourceFilename.clear();
@@ -2688,6 +2778,7 @@ bool TbcSource::startBackgroundLoadMetadata(QString metadataFilename, QString di
     // Analyse the metadata
     emit busy("Generating graph data and chapter map...");
     generateData();
+    deriveSegmentsAtLoad();
 
     return true;
 }
@@ -2703,12 +2794,44 @@ bool TbcSource::startBackgroundSave(QString metadataFilename)
     tbcDebugStream() << "TbcSource::startBackgroundSave(): Saving to" << metadataFilename;
     emit busy("Saving metadata...");
 
+    // SQLite first: the .tbc.db is the canonical store and the .tbc.json its
+    // projection. A source that only has a JSON gets its database here (the
+    // same conversion tbc-metadata-converter performs), then the JSON is
+    // rewritten from the same records; a database source refreshes a JSON
+    // sibling when one exists. Each file goes through the .new/.bup swap.
+    const bool sourceIsJson = TbcMetaData::isJsonMetadataFilename(metadataFilename);
+    const QString dbFilename = sourceIsJson ? TbcMetaData::sqliteSiblingPath(metadataFilename) : metadataFilename;
+    QString jsonFilename;
+    if (sourceIsJson) {
+        jsonFilename = metadataFilename;
+    } else if (dbFilename.endsWith(QStringLiteral(".db"), Qt::CaseInsensitive)) {
+        const QString candidate = dbFilename.left(dbFilename.size() - 3) + QStringLiteral(".json");
+        if (QFile::exists(candidate)) {
+            jsonFilename = candidate;
+        }
+    }
+
+    if (!writeMetadataWithBackup(dbFilename)) {
+        return false;
+    }
+    if (!jsonFilename.isEmpty() && !writeMetadataWithBackup(jsonFilename)) {
+        return false;
+    }
+
+    // The reload after a save opens the database
+    currentMetadataFilename = dbFilename;
+    tbcDebugStream() << "TbcSource::startBackgroundSave(): Save complete";
+    return true;
+}
+
+bool TbcSource::writeMetadataWithBackup(const QString &metadataFilename)
+{
     // The general idea here is that decoding takes a long time -- so we want
     // to be careful not to destroy the user's only copy of their metadata file if
     // something goes wrong!
 
     // Write the metadata out to a new temporary file.
-    QString newMetadataFilename = metadataFilename + ".new";
+    const QString newMetadataFilename = metadataFilename + ".new";
     if (!metaData.write(newMetadataFilename)) {
         // Writing failed
         lastIOError = "Could not write to new metadata file";
@@ -2733,8 +2856,6 @@ bool TbcSource::startBackgroundSave(QString metadataFilename)
         lastIOError = "Could not rename new metadata file to target name";
         return false;
     }
-
-    tbcDebugStream() << "TbcSource::startBackgroundSave(): Save complete";
     return true;
 }
 
