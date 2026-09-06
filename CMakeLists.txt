@@ -395,6 +395,7 @@ if(BUILD_TESTING)
     add_subdirectory(src/ld-analyse/testexportarguments)
     add_subdirectory(src/ld-process-vbi/testclosedcaption)
     add_subdirectory(src/tbc-export-metadata/testffmetadata)
+    add_subdirectory(src/tbc-export-metadata/testclosedcaptions)
 
     # Tests for the ld-decode tools.
     # Most of the tests expect that you have cloned (or symlinked) the
