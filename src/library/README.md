@@ -305,6 +305,14 @@ carries `rf_source_sample_rate_hz`, the rate `file_loc` is expressed in. Older
 files migrate in place on the first write. The tables are described in
 `src/tbc-metadata-converter/README.md`.
 
+The rules that turn those records into recording segments live in
+`tbc/segments.h` (`analyseSegments`, `deriveSegments`, `segmentFrameRange`,
+`resolveFieldRange`) and nowhere else: tbc-segments, tbc-export-metadata and
+ld-analyse all call them, so a segment boundary and its exported frame range
+are the same in every tool. The gapless-section rule (a fileLoc step outside a
+third of the nominal field length starts a section) is tbc-audio-align's, and
+`src/library/tbc/testsegments` asserts the two agree.
+
 ## Troubleshooting
 
 ### Build Issues
