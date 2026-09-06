@@ -6,6 +6,7 @@ add_library(tbc-library STATIC
     tbc/tbcmetadata.cpp
     tbc/logging.cpp
     tbc/navigation.cpp
+    tbc/segments.cpp
     tbc/sourceaudio.cpp
     tbc/sourcevideo.cpp
     tbc/vbidecoder.cpp

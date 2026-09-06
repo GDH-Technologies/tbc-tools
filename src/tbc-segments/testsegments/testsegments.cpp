@@ -1,6 +1,6 @@
 /************************************************************************
 
-    testsegments.cpp
+    testsegments.cpp (field-walk tests; the metadata-tier tests live in src/library/tbc/testsegments)
 
     Unit tests for tbc-segments (metadata tier and field-data tier)
     Copyright (C) 2026 GDH-Technologies LLC
@@ -113,166 +113,6 @@ FieldRange fullRange(const TbcMetaData &m)
     FieldRange r;
     CHECK(resolveFieldRange(m, 0, 0, &r));
     return r;
-}
-
-// --- metadata tier ---------------------------------------------------------------
-
-void testCleanCapture()
-{
-    TbcMetaData m;
-    buildMetadata(m, 400);
-    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), SegmentsThresholds(), 0.0, nullptr);
-    CHECK(a.numberOfFields == 400 && a.numberOfFrames == 200 && a.frameOffset == 0);
-    CHECK(a.gapDetection == QLatin1String("fileLoc"));
-    CHECK(a.nominalSource == QLatin1String("median-delta"));
-    CHECK(std::abs(a.nominalSamplesPerField - kNominal) < 1.0);
-    CHECK(std::abs(a.impliedRfSampleRateHz - 40e6) < 1000.0);
-    CHECK(a.sections.size() == 1 && a.events.isEmpty());
-    CHECK(std::abs(a.secondsPerField - 1001.0 / 60000.0) < 1e-12);
-
-    const SegmentsAnalysis withRate = analyseSegments(m, fullRange(m), SegmentsThresholds(), 40e6, nullptr);
-    CHECK(withRate.nominalSource == QLatin1String("rf-sample-rate-hz"));
-    CHECK(withRate.events.isEmpty());
-}
-
-void testGapSplitsSections()
-{
-    TbcMetaData m;
-    buildMetadata(m, 400);
-    for (qint32 i = 100; i < 400; i++) {
-        TbcMetaData::Field f = m.getField(i + 1);
-        f.fileLoc += 5 * kNominal;   // five fields of tape went by unseen
-        m.updateField(f, i + 1);
-    }
-    SegmentsThresholds t;
-    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 0.0, nullptr);
-    CHECK(countKind(a, "gap") == 1);
-    const SegmentEvent *gap = firstOfKind(a, "gap");
-    CHECK(gap && gap->startField == 100 && gap->endFieldExclusive == 101);
-    CHECK(gap->detail.value("missingFields").toInt() == 5);
-    CHECK(gap->detail.value("seamAfterField").toInt() == 99);
-    CHECK(a.sections.size() == 2 && a.sections[0].endFieldExclusive == 100 && a.sections[1].startField == 100);
-
-    t.gapTolerance = 0.9;   // still outside: the delta is 6× nominal
-    CHECK(countKind(analyseSegments(m, fullRange(m), t, 0.0, nullptr), "gap") == 1);
-}
-
-void testFaultsAndSyncLoss()
-{
-    TbcMetaData m;
-    buildMetadata(m, 400);
-    {
-        TbcMetaData::Field f = m.getField(201); f.decodeFaults = 1; m.updateField(f, 201);
-        f = m.getField(211); f.decodeFaults = 4; m.updateField(f, 211);
-        for (qint32 i = 250; i < 260; i++) { f = m.getField(i + 1); f.syncConf = 10; m.updateField(f, i + 1); }
-        f = m.getField(301); f.syncConf = 10; m.updateField(f, 301);   // a lone dip
-        f = m.getField(351); f.decodeFaults = -1; m.updateField(f, 351);  // "absent" in JSON = 0
-    }
-    SegmentsThresholds t;
-    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, nullptr);
-    CHECK(countKind(a, "parity_break") == 1 && firstOfKind(a, "parity_break")->startField == 200);
-    CHECK(countKind(a, "skipped_field") == 1 && firstOfKind(a, "skipped_field")->startField == 210);
-    CHECK(countKind(a, "sync_loss") == 1);
-    const SegmentEvent *sync = firstOfKind(a, "sync_loss");
-    CHECK(sync->startField == 250 && sync->endFieldExclusive == 260);
-    CHECK(sync->detail.value("minSyncConf").toInt() == 10);
-    t.minRunFields = 1;
-    CHECK(countKind(analyseSegments(m, fullRange(m), t, 40e6, nullptr), "sync_loss") == 2);
-}
-
-void testSameParityRepeatIsAParityBreak()
-{
-    TbcMetaData m;
-    buildMetadata(m, 100);
-    TbcMetaData::Field f = m.getField(51);
-    f.isFirstField = m.getField(50).isFirstField;
-    m.updateField(f, 51);
-    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), SegmentsThresholds(), 40e6, nullptr);
-    CHECK(countKind(a, "parity_break") >= 1);
-    CHECK(firstOfKind(a, "parity_break")->detail.value("reason").toString() == QLatin1String("same-parity-repeat"));
-}
-
-void testDropoutStorm()
-{
-    TbcMetaData m;
-    buildMetadata(m, 400);
-    for (qint32 i = 320; i < 331; i++) {
-        DropOuts d;
-        for (qint32 line = 20; line < 259; line += 2) d.append(135, 135 + 456, line);   // 60% of the active width on half the lines
-        m.updateFieldDropOuts(d, i + 1);
-    }
-    {
-        DropOuts outside;
-        outside.append(0, 900, 5);       // above the active lines
-        outside.append(0, 100, 100);     // left of the active area
-        m.updateFieldDropOuts(outside, 380);
-    }
-    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), SegmentsThresholds(), 40e6, nullptr);
-    CHECK(countKind(a, "dropout_storm") == 1);
-    const SegmentEvent *storm = firstOfKind(a, "dropout_storm");
-    CHECK(storm->startField == 320 && storm->endFieldExclusive == 331);
-    CHECK(std::abs(a.dropoutCoverage[325] - 0.30) < 0.02);
-    CHECK(a.dropoutCoverage[379] == 0.0);
-}
-
-void testRolloverThroughJson()
-{
-    QTemporaryDir dir;
-    CHECK(dir.isValid());
-    TbcMetaData m;
-    buildMetadata(m, 400, 2147483647LL - 200LL * kNominal);
-    // Wrap like a 32-bit writer would: values past 2^31-1 go negative.
-    for (qint32 i = 0; i < 400; i++) {
-        TbcMetaData::Field f = m.getField(i + 1);
-        if (f.fileLoc > 2147483647LL) f.fileLoc -= 4294967296LL;
-        m.updateField(f, i + 1);
-    }
-    const QString path = dir.filePath("wrap.tbc.json");
-    CHECK(m.write(path));
-    TbcMetaData back;
-    CHECK(back.read(path));
-    const SegmentsAnalysis a = analyseSegments(back, fullRange(back), SegmentsThresholds(), 40e6, nullptr);
-    CHECK(a.fileLocRolloverFixups == 1);
-    CHECK(countKind(a, "gap") == 0);
-    CHECK(a.sections.size() == 1);
-}
-
-void testRangeResolution()
-{
-    TbcMetaData m;
-    buildMetadata(m, 400);
-    for (qint32 i = 100; i < 400; i++) { TbcMetaData::Field f = m.getField(i + 1); f.fileLoc += 5 * kNominal; m.updateField(f, i + 1); }
-    FieldRange r;
-    CHECK(resolveFieldRange(m, 51, 10, &r));
-    CHECK(r.startField == 100 && r.endFieldExclusive == 120);
-    const SegmentsAnalysis a = analyseSegments(m, r, SegmentsThresholds(), 40e6, nullptr);
-    CHECK(countKind(a, "gap") == 1);   // the seam at field 100 is the range's first field
-    CHECK(a.sections.size() == 1 && a.sections[0].startField == 100 && a.sections[0].endFieldExclusive == 120);
-    CHECK(!resolveFieldRange(m, 500, 1, &r));
-
-    TbcMetaData pal;
-    buildMetadata(pal, 100);
-    TbcMetaData::VideoParameters vp = ntscParameters(100);
-    vp.system = PAL; vp.fieldHeight = 313; vp.fieldWidth = 1135;
-    pal.setVideoParameters(vp);
-    const SegmentsAnalysis p = analyseSegments(pal, fullRange(pal), SegmentsThresholds(), 0.0, nullptr);
-    CHECK(std::abs(p.secondsPerField - 0.02) < 1e-12);
-}
-
-void testReportShape()
-{
-    TbcMetaData m;
-    buildMetadata(m, 40);
-    const FieldRange r = fullRange(m);
-    const SegmentsAnalysis a = analyseSegments(m, r, SegmentsThresholds(), 40e6, nullptr);
-    const QJsonObject report = buildReport(m, "/x/y.tbc.db", "sqlite", 0, 0, r, SegmentsThresholds(), a, nullptr, QJsonObject(), true);
-    CHECK(report.value("schemaVersion").toInt() == 1);
-    CHECK(report.value("video").toObject().value("numberOfFields").toInt() == 40);
-    CHECK(report.value("range").toObject().value("startField").toInt() == 0);
-    CHECK(report.value("counts").toObject().contains("gap"));
-    CHECK(report.value("perField").toObject().value("syncConf").toArray().size() == 40);
-    CHECK(!report.value("fieldData").toObject().value("enabled").toBool());
-    CHECK(!QJsonDocument(report).toJson(QJsonDocument::Compact).isEmpty());
 }
 
 // --- field-data tier -------------------------------------------------------------
@@ -390,15 +230,7 @@ void testFieldWalk()
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
-    testCleanCapture();
-    testGapSplitsSections();
-    testFaultsAndSyncLoss();
-    testSameParityRepeatIsAParityBreak();
-    testDropoutStorm();
-    testRolloverThroughJson();
-    testRangeResolution();
-    testReportShape();
     testFieldWalk();
-    std::cout << "testsegments: all checks passed\n";
+    std::cout << "testsegmentswalk: all checks passed\n";
     return 0;
 }

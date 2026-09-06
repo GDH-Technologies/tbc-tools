@@ -24,7 +24,9 @@
 
 #include "segments.h"
 
+#include <QDateTime>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonValue>
 #include <QPair>
 #include <QtGlobal>
@@ -125,6 +127,64 @@ void FieldMetrics::resize(qint32 numberOfFields)
     }
 }
 
+FieldMetrics FieldMetrics::fromMetadata(const TbcMetaData &metaData)
+{
+    FieldMetrics m;
+    const qint32 n = metaData.getNumberOfFields();
+    m.resize(n);
+    for (qint32 i = 0; i < n; i++) {
+        const TbcMetaData::PictureMetrics &p = metaData.getFieldPictureMetrics(i + 1);
+        m.lumaMeanIre[i] = p.lumaMeanIre;
+        m.fieldDiffIre[i] = p.fieldDiffIre;
+        m.blankingDevIre[i] = p.blankingDevIre;
+        m.syncTipDevIre[i] = p.syncTipDevIre;
+        m.noiseIre[i] = p.noiseIre;
+        m.burstAmpIre[i] = p.burstAmpIre;
+        if (p.anyFinite()) m.enabled = true;
+        if (std::isfinite(p.burstAmpIre)) m.hasBurst = true;
+    }
+    return m;
+}
+
+bool FieldMetrics::metadataIsComplete(const TbcMetaData &metaData)
+{
+    const qint32 n = metaData.getNumberOfFields();
+    if (n < 1) return false;
+    for (qint32 i = 0; i < n; i++) {
+        if (!metaData.getFieldPictureMetrics(i + 1).anyFinite()) return false;
+    }
+    return true;
+}
+
+SegmentsThresholds SegmentsThresholds::preset(SegmentSensitivity sensitivity)
+{
+    SegmentsThresholds t; // the defaults are Normal
+    switch (sensitivity) {
+    case SegmentSensitivity::Low:
+        t.syncConfThreshold = 30;
+        t.minRunFields = 4;
+        t.dropoutStormThreshold = 0.40;
+        t.sceneThresholdIre = 16.0;
+        t.noiseThresholdIre = 8.0;
+        t.minClipFields = 20;
+        t.minNonClipRunFields = 100;
+        break;
+    case SegmentSensitivity::High:
+        t.gapTolerance = 0.25;
+        t.syncConfThreshold = 70;
+        t.minRunFields = 1;
+        t.dropoutStormThreshold = 0.15;
+        t.sceneThresholdIre = 9.0;
+        t.noiseThresholdIre = 4.5;
+        t.minClipFields = 4;
+        t.minNonClipRunFields = 25;
+        break;
+    case SegmentSensitivity::Normal:
+        break;
+    }
+    return t;
+}
+
 double fieldRateForSystem(VideoSystem system)
 {
     return (system == PAL || system == SECAM || system == MESECAM) ? 50.0 : 60000.0 / 1001.0;
@@ -205,15 +265,21 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
         a.decodeFaults[i] = f.decodeFaults < 0 ? 0 : f.decodeFaults;
         diskLoc[i] = f.diskLoc;
 
+        // -1 is the library's "absent" sentinel; any other negative is a wrapped
+        // 32-bit value from a legacy JSON writer. The fixup is tbc-audio-align's
+        // (TbcJsonFixup.cs): a negative value whose predecessor was positive, or
+        // which has no predecessor, and everything after it moves up 2^32.
         const qint64 raw = f.fileLoc;
-        if (raw >= 0 || havePrevious) {
-            if (havePrevious && raw < 0 && previousRaw >= 0) {
+        if (raw >= 0 || raw < -1 || havePrevious) {
+            if (raw < 0 && raw != -1 && (!havePrevious || previousRaw > 0)) {
                 rollover += kRollover;
                 a.fileLocRolloverFixups++;
             }
-            fileLoc[i] = raw + rollover;
-            previousRaw = raw;
-            havePrevious = true;
+            if (raw != -1) {
+                fileLoc[i] = raw + rollover;
+                previousRaw = raw;
+                havePrevious = true;
+            }
         }
 
         const DropOuts &dropouts = metaData.getFieldDropOuts(i + 1);
@@ -237,9 +303,17 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
     if (haveFileLoc) {
         a.gapDetection = QStringLiteral("fileLoc");
         for (qint32 i = 0; i < n; i++) if (fileLoc[i] >= 0) position[i] = static_cast<double>(fileLoc[i]);
-        if (rfSampleRateHz > 0) {
-            a.nominalSamplesPerField = rfSampleRateHz / a.fieldRate;
-            a.nominalSource = QStringLiteral("rf-sample-rate-hz");
+        // The caller's rate wins, then the rate the decoder stored, then an
+        // estimate from the deltas themselves
+        double rate = rfSampleRateHz;
+        QString rateSource = QStringLiteral("rf-sample-rate-hz");
+        if (!(rate > 0) && vp.rfSourceSampleRateHz > 0) {
+            rate = vp.rfSourceSampleRateHz;
+            rateSource = QStringLiteral("metadata-rf-sample-rate-hz");
+        }
+        if (rate > 0) {
+            a.nominalSamplesPerField = rate / a.fieldRate;
+            a.nominalSource = rateSource;
         } else {
             QVector<double> deltas;
             for (qint32 i = 1; i < n; i++) {
@@ -437,6 +511,58 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
         }
     }
 
+    // --- decoder events ------------------------------------------------------------------
+    // Facts the decoder stored (what it knew at a seam) join the list under
+    // their own kinds. They never create a section: sections split only at
+    // fileLoc gaps, the rule tbc-audio-align applies, so the two stay equal.
+    // A seam-class decoder event within a field of a gap marks it confirmed.
+    {
+        QVector<qint32> seamFields;
+        for (const TbcMetaData::DecoderEvent &de : metaData.getDecoderEvents()) {
+            if (de.field < 0 || de.field > n || de.kind.isEmpty()) continue;
+            SegmentEvent ev;
+            ev.kind = de.kind;
+            ev.startField = std::min(de.field, n - 1);
+            ev.endFieldExclusive = ev.startField + 1;
+            ev.severity = de.isSeam() ? 0.8 : (de.kind == QLatin1String("redo") ? 0.3 : 0.7);
+            ev.detail.insert("source", de.source);
+            ev.detail.insert("decoderKind", de.kind);
+            if (de.fileLoc >= 0) ev.detail.insert("fileLoc", static_cast<double>(de.fileLoc));
+            if (de.hasRfDeltaSamples) ev.detail.insert("rfDeltaSamples", static_cast<double>(de.rfDeltaSamples));
+            if (std::isfinite(de.rfDeltaFields)) ev.detail.insert("rfDeltaFields", de.rfDeltaFields);
+            if (!de.detailJson.isEmpty()) {
+                const QJsonDocument doc = QJsonDocument::fromJson(de.detailJson.toUtf8());
+                if (doc.isObject()) ev.detail.insert("decoderDetail", doc.object());
+            }
+            a.decoderEventCount++;
+            if (de.isSeam()) seamFields.append(ev.startField);
+
+            // The metadata already derives skipped_field from decodeFaults; the
+            // decoder's row for the same field is the same fact, not a second one
+            bool duplicate = false;
+            for (const SegmentEvent &existing : events) {
+                if (existing.kind == ev.kind && existing.startField <= ev.startField
+                    && ev.startField < existing.endFieldExclusive) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) events.append(ev);
+        }
+        if (!seamFields.isEmpty()) {
+            for (SegmentEvent &ev : events) {
+                if (ev.kind != QLatin1String("gap")) continue;
+                for (qint32 seam : seamFields) {
+                    if (std::abs(seam - ev.startField) <= 1) {
+                        ev.severity = clamp01(ev.severity + 0.2);
+                        ev.detail.insert("decoderConfirmed", true);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // --- clip to the requested range and order ---------------------------------------
     QVector<SegmentEvent> clipped;
     for (SegmentEvent ev : events) {
@@ -462,6 +588,151 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
     if (range.endFieldExclusive > sectionStart) a.sections.append({sectionStart, range.endFieldExclusive});
 
     return a;
+}
+
+// ---------------------------------------------------------------------------
+// Frames
+
+qint32 frameContainingField(const TbcMetaData &metaData, qint32 field)
+{
+    const qint32 seqNo = field + 1;
+    const qint32 numberOfFields = metaData.getNumberOfFields();
+    const qint32 numberOfFrames = metaData.getNumberOfFrames();
+    if (seqNo < 1 || seqNo > numberOfFields || numberOfFrames < 1) return -1;
+
+    // The frame table is monotonic, so start near the obvious guess and step
+    qint32 frame = std::max<qint32>(1, std::min<qint32>(numberOfFrames, seqNo / 2));
+    while (frame > 1 && metaData.getFirstFieldNumber(frame) > seqNo) frame--;
+    while (frame < numberOfFrames && metaData.getSecondFieldNumber(frame) < seqNo) frame++;
+
+    const qint32 first = metaData.getFirstFieldNumber(frame);
+    const qint32 second = metaData.getSecondFieldNumber(frame);
+    if (first < 1 || second < first || second > numberOfFields) return -1;
+    return (first <= seqNo && seqNo <= second) ? frame : -1;
+}
+
+bool segmentFrameRange(const TbcMetaData &metaData, const TbcMetaData::Segment &segment,
+                       qint32 *startFrameOneBased, qint32 *lengthFrames)
+{
+    const qint32 n = metaData.getNumberOfFields();
+    if (segment.startField < 0 || segment.endFieldExclusive > n || segment.endFieldExclusive <= segment.startField) {
+        return false;
+    }
+
+    qint32 startFrame = frameContainingField(metaData, segment.startField);
+    if (startFrame < 0 && segment.startField + 1 < segment.endFieldExclusive) {
+        // A leading orphan field belongs to no frame: start at the next one
+        startFrame = frameContainingField(metaData, segment.startField + 1);
+    }
+    if (startFrame < 0) return false;
+
+    // The mixed-frame rule: a frame whose second field starts this segment
+    // belongs to the previous segment (it owns the first field)
+    if (metaData.getSecondFieldNumber(startFrame) == segment.startField + 1) startFrame++;
+
+    qint32 endFrame = frameContainingField(metaData, segment.endFieldExclusive - 1);
+    if (endFrame < 0 && segment.endFieldExclusive - 2 >= segment.startField) {
+        endFrame = frameContainingField(metaData, segment.endFieldExclusive - 2);
+    }
+    if (endFrame < 0 || startFrame > metaData.getNumberOfFrames() || endFrame < startFrame) return false;
+
+    if (startFrameOneBased) *startFrameOneBased = startFrame;
+    if (lengthFrames) *lengthFrames = endFrame - startFrame + 1;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Segments
+
+QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
+                                             const SegmentsAnalysis &a,
+                                             const SegmentsThresholds &t,
+                                             const QString &createdBy)
+{
+    Q_UNUSED(metaData);
+    QVector<TbcMetaData::Segment> out;
+    const qint32 n = a.numberOfFields;
+    if (n < 1) return out;
+
+    QVector<bool> noiseLike(n, false), blankLike(n, false), syncLoss(n, false);
+    for (const SegmentEvent &ev : a.events) {
+        QVector<bool> *mask = nullptr;
+        if (ev.kind == QLatin1String("noise") || ev.kind == QLatin1String("no_burst")) mask = &noiseLike;
+        else if (ev.kind == QLatin1String("blank_video")) mask = &blankLike;
+        else if (ev.kind == QLatin1String("sync_loss")) mask = &syncLoss;
+        if (!mask) continue;
+        for (qint32 i = std::max(0, ev.startField); i < std::min(n, ev.endFieldExclusive); i++) (*mask)[i] = true;
+    }
+
+    const QString stamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    QJsonObject provenance;
+    provenance.insert("tool", createdBy);
+    QJsonObject thresholds;
+    thresholds.insert("gapTolerance", t.gapTolerance);
+    thresholds.insert("syncConfThreshold", t.syncConfThreshold);
+    thresholds.insert("minRunFields", t.minRunFields);
+    thresholds.insert("dropoutStormThreshold", t.dropoutStormThreshold);
+    thresholds.insert("sceneThresholdIre", t.sceneThresholdIre);
+    thresholds.insert("noiseThresholdIre", t.noiseThresholdIre);
+    thresholds.insert("blankLumaIre", t.blankLumaIre);
+    thresholds.insert("minClipFields", t.minClipFields);
+    thresholds.insert("minNonClipRunFields", t.minNonClipRunFields);
+    thresholds.insert("nonClipCoverage", t.nonClipCoverage);
+    provenance.insert("thresholds", thresholds);
+    provenance.insert("nominalSource", a.nominalSource);
+    const QString derivedFrom = QString::fromUtf8(QJsonDocument(provenance).toJson(QJsonDocument::Compact));
+
+    const auto classify = [&](qint32 s, qint32 e) -> QString {
+        const double length = e - s;
+        double noise = 0, blank = 0, sync = 0;
+        for (qint32 i = s; i < e; i++) {
+            if (noiseLike[i]) noise += 1;
+            if (blankLike[i]) blank += 1;
+            if (syncLoss[i]) sync += 1;
+        }
+        if (noise / length >= t.nonClipCoverage) return QStringLiteral("noise");
+        if (blank / length >= t.nonClipCoverage) return QStringLiteral("blank");
+        if (length < t.minClipFields || sync / length >= 0.5) return QStringLiteral("unknown");
+        return QStringLiteral("clip");
+    };
+
+    const auto emitSegment = [&](qint32 s, qint32 e) {
+        if (e <= s) return;
+        TbcMetaData::Segment segment;
+        segment.id = out.size() + 1;
+        segment.startField = s;
+        segment.endFieldExclusive = e;
+        segment.kind = classify(s, e);
+        segment.source = QStringLiteral("derived");
+        segment.enabled = segment.kind == QLatin1String("clip");
+        segment.createdBy = createdBy;
+        segment.updatedAt = stamp;
+        segment.derivedFrom = derivedFrom;
+        out.append(segment);
+    };
+
+    for (const SegmentSection &section : a.sections) {
+        const qint32 length = section.endFieldExclusive - section.startField;
+        if (length < 1) continue;
+        // A long noise/blank run inside a section splits it: the run becomes
+        // its own segment and the picture on either side stays a candidate
+        QVector<bool> nonClip(length, false);
+        for (qint32 i = 0; i < length; i++) {
+            const qint32 field = section.startField + i;
+            nonClip[i] = noiseLike[field] || blankLike[field];
+        }
+        qint32 cursor = section.startField;
+        for (const auto &run : runsOf(nonClip)) {
+            if (run.second - run.first < t.minNonClipRunFields) continue;
+            const qint32 runStart = section.startField + run.first;
+            const qint32 runEnd = section.startField + run.second;
+            emitSegment(cursor, runStart);
+            emitSegment(runStart, runEnd);
+            cursor = runEnd;
+        }
+        emitSegment(cursor, section.endFieldExclusive);
+    }
+    return out;
 }
 
 namespace {
@@ -497,7 +768,9 @@ QJsonObject buildReport(const TbcMetaData &metaData,
                         const SegmentsAnalysis &a,
                         const FieldMetrics *fieldMetrics,
                         const QJsonObject &fieldDataInfo,
-                        bool perField)
+                        bool perField,
+                        const QVector<TbcMetaData::Segment> &segments,
+                        const QString &segmentsSource)
 {
     const TbcMetaData::VideoParameters &vp = metaData.getVideoParameters();
     const double spf = a.secondsPerField;
@@ -601,7 +874,38 @@ QJsonObject buildReport(const TbcMetaData &metaData,
                              "scene_change", "noise", "blank_video", "no_burst"}) {
         counts.insert(kind, a.counts.value(QString::fromLatin1(kind), 0));
     }
+    counts.insert("decoderEvents", a.decoderEventCount);
     report.insert("counts", counts);
+
+    // Segments (stored in the metadata or derived for this report) with the
+    // frames an export of each would cover, so a consumer never re-implements
+    // the frame-range rule
+    QJsonArray segmentsArray;
+    for (const TbcMetaData::Segment &segment : segments) {
+        QJsonObject o;
+        o.insert("id", segment.id);
+        o.insert("startField", segment.startField);
+        o.insert("endFieldExclusive", segment.endFieldExclusive);
+        o.insert("startSeconds", segment.startField * spf);
+        o.insert("endSeconds", segment.endFieldExclusive * spf);
+        o.insert("kind", segment.kind);
+        o.insert("source", segment.source);
+        o.insert("enabled", segment.enabled);
+        o.insert("title", segment.title);
+        o.insert("comment", segment.comment);
+        o.insert("createdBy", segment.createdBy);
+        o.insert("updatedAt", segment.updatedAt);
+        qint32 startFrame = 0, lengthFrames = 0;
+        if (!segmentFrameRange(metaData, segment, &startFrame, &lengthFrames)) {
+            startFrame = 0;
+            lengthFrames = 0;
+        }
+        o.insert("startFrame", startFrame);
+        o.insert("lengthFrames", lengthFrames);
+        segmentsArray.append(o);
+    }
+    report.insert("segments", segmentsArray);
+    report.insert("segmentsSource", segmentsSource);
 
     if (perField) {
         QJsonObject pf;
@@ -634,7 +938,7 @@ QString summariseAnalysis(const SegmentsAnalysis &a, const FieldRange &range)
                .arg(a.impliedRfSampleRateHz, 0, 'f', 0).arg(a.fileLocRolloverFixups);
     out += QStringLiteral("Sync loss below syncConf %1 (median %2)\n")
                .arg(a.effectiveSyncConfThreshold, 0, 'f', 1).arg(a.medianSyncConf, 0, 'f', 1);
-    out += QStringLiteral("Sections: %1\n").arg(a.sections.size());
+    out += QStringLiteral("Sections: %1, decoder events: %2\n").arg(a.sections.size()).arg(a.decoderEventCount);
     for (auto it = a.counts.constBegin(); it != a.counts.constEnd(); ++it) {
         out += QStringLiteral("  %1: %2\n").arg(it.key()).arg(it.value());
     }
