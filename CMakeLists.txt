@@ -393,6 +393,7 @@ if(BUILD_TESTING)
     add_subdirectory(src/library/tbc/testvitcdecoder)
     add_subdirectory(src/ld-chroma-decoder/testsourcefield)
     add_subdirectory(src/ld-analyse/testexportarguments)
+    add_subdirectory(src/ld-process-vbi/testclosedcaption)
     add_subdirectory(src/tbc-export-metadata/testffmetadata)
 
     # Tests for the ld-decode tools.
