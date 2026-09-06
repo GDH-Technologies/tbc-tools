@@ -113,7 +113,9 @@ The button in left to right order are:
 * Reset zoom
 * Interactive oscilloscope
 
-If the source TBC contains chapter numbers the start and end frame buttons will move back/forth one chapter at a time, otherwise the chapter buttons will advance to the beginning or the end of the source.
+If the source TBC contains chapter numbers the start and end frame buttons will move back/forth one chapter at a time. On a tape whose metadata holds recording segments (see the Segments Viewer below) and with View ▸ Skip by segments on (the default, persisted), they jump between segment starts instead. Otherwise the chapter buttons advance to the beginning or the end of the source (or between user markers).
+
+The frame slider carries the metadata's markers: green/red In/Out ticks, blue note-marker ticks, amber ticks at every recording-segment boundary (hover one for the segment's id, title, timecode range and disabled state) and a tint over noise (amber), blank (grey) and disabled (red) segments. Right-click the slider for Set In/Out From Segment, Split Segment Here and Open Segments Viewer; `Shift+[` / `Shift+]` set the export In/Out from the segment at the current frame and `S` opens the viewer. The status bar shows `Seg: n/N` for the segment holding the current frame.
 
 Note that clicking on the 'interactive oscilloscope' button opens the line oscilloscope.  When the interactive oscilloscope button is activated it is possible to click in the frame viewer to highlight the required line in the line scope.  It is also possible to click-drag the mouse to interactively display video lines (both in the oscilloscope window and the main window).
 
@@ -169,6 +171,8 @@ The save operation uses an atomic replacement workflow:
 
 This preserves a rollback copy while avoiding partial writes.
 
+The `.tbc.db` is the canonical store and the `.tbc.json` its projection, so the save is SQLite first: a database source is written and then a `.tbc.json` sibling, when one exists, is rewritten from the same records; a source that only has a `.tbc.json` gets a `.tbc.db` created beside it (the conversion tbc-metadata-converter performs) before the JSON is rewritten, and the reload after the save opens the database. Opening a `.tbc.json` that has a `.tbc.db` beside it opens the database. Recording segments (edited in the Segments Viewer, or derived when the file was opened) are saved with everything else.
+
 ### JSON temp/backup handling
 
 JSON metadata remains JSON throughout this workflow, including temporary and backup file names such as `.json.new` and `.json.bup`.
@@ -198,6 +202,10 @@ Export decoder selection follows metadata and profile settings, with the followi
 * NTSC export accepts `nntransform3d` and `nntsc3d` decoder names.
 * If metadata video system is `SECAM` or `MESECAM` and no decoder override is set, export defaults to `mono`.
 * When export resolves to `mono`, chroma controls are omitted (`--chroma-gain` and `--chroma-phase` are not passed).
+
+### Export each segment as a separate file
+
+When the metadata holds recording segments, the Export tab can queue one tbc-video-export run per segment instead of the In/Out range: tick `Export each segment as a separate file`, choose `Enabled clips` (blank, noise and unknown segments skipped), `Enabled segments` or `All segments`, and optionally append each segment's title to its file name. Every file is `<output base>_<NN>[_<title>]` (NN is the segment id), exported with the frame range the segment covers under the mixed-frame rule (a frame whose second field starts a segment belongs to the earlier segment, so contiguous segments tile the tape with no frame dropped or duplicated), its own `--start/--length` (so the chapters muxed by `--export-metadata` and the audio trim land correctly), and the run's proxy, audio and profile settings. Existing outputs of every queued file are listed in one overwrite prompt. The summary line shows the queued files, then `Exporting segment i / N` as the queue runs; Cancel abandons the rest of the queue. The In/Out controls are disabled while this mode is selected.
 
 ### Export tab dropout and field selection
 
@@ -428,6 +436,12 @@ The waveform monitor and vectorscope read the raw TBC samples and convert them i
 * PAL_M (ITU-R BT.1700-1): shares the NTSC levels and amplitude
 
 This replaces the older fixed 'PAL 7 mV/IRE, NTSC 7.143 mV/IRE' assumption with per-source measured levels combined with the per-system active amplitude, so the scope readings track the actual source metadata. For NTSC and PAL_M sources whose metadata does not record a separate blanking level, the 0 IRE blanking reference is derived from the 7.5 IRE setup black level so the black and blanking markers are placed correctly.
+
+## Segments Viewer
+
+Recording segments are the editable layer the decoder's evidence produces: where a camcorder recording was started, stopped or interrupted on a tape. vhs-decode stores the evidence (decoder events at every seam, per-field picture metrics) with the metadata; ld-analyse derives segments from it through the TBC library when the file holds none (the same rule tbc-segments and tbc-export-metadata apply), and shows them on the timeline. Segments derived when the file was opened are not yet saved; Save Metadata stores them.
+
+The Segments Viewer (Window menu, `S`, or the slider's context menu) lists every segment with its field range, the frames an export of it covers, duration, kind (`clip`, `blank`, `noise`, `unknown`), source (`derived` or `user`), enabled flag, title and comment. Go To Start / Go To End and Set In/Out From Segment navigate; Move Start Here and Move End Here move a boundary to the current frame (a seam shared with the neighbour moves it too); Split At Current Frame, Merge With Next and Delete reshape the list; kind, enabled, title and comment are edited in place. Every edit marks the segment `user`. Re-derive runs the derivation again with the Low / Normal / High presets or custom thresholds (minimum clip fields, minimum non-clip run, noise and scene IRE), keeping user segments and dropping derived ones they overlap. Apply writes the list into the metadata and enables Save Metadata; only enabled segments become chapters and per-segment exports.
 
 ## Closed Captions
 
