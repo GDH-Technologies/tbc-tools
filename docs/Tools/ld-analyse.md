@@ -522,3 +522,23 @@ Unticking 'Enable adaptive filter' disables the 3D filter's heuristic, making it
 # The Help menu
 
 The help menu contains an about option that displays information about the application.
+
+# Auto Audio Align
+
+Window ▸ Auto Audio Align runs tbc-audio-align (the vendored
+VhsDecodeAutoAudioAlign) on the linear and HiFi audio captured beside the
+video, splitting the audio at the gapless sections it finds in the decode
+metadata's `fileLoc` series. That rule compares each field's RF offset with
+the nominal field length, which depends on the **RF Video Sample Rate**: the
+rate the decoder's `fileLoc` values count in, not the decoded `.tbc` rate.
+
+Since vhs-decode metadata schema 2 the decoder stores that rate
+(`videoParameters.rfSourceSampleRateHz`, `capture.rf_source_sample_rate_hz`)
+and ld-analyse fills the field from the open metadata, `.tbc.db` included, and
+shows the source beside it: "from metadata (40000000 Hz)", "from metadata
+JSON (…)" when only the JSON carried the key, "default (not stored in
+metadata)" for older decodes (40 Msps, right only for a capture the decoder
+resampled to 40 Msps), or "set by user" once you change it. The sections
+tbc-audio-align finds are the gapless sections the TBC library's segment
+derivation reports (`tbc-segments`, tbc-export-metadata `--segments-json`);
+the two rules are asserted equal by the library's `testsegments`.

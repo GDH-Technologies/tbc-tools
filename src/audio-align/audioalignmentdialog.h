@@ -36,6 +36,11 @@ public:
     void setDefaultInputFile(const QString &inputFilename);
     void setDefaultOutputFile(const QString &outputFilename);
     void setDefaultRfVideoSampleRate(quint32 sampleRateHz);
+    // The RF rate the decoder stored with the metadata (videoParameters
+    // rfSourceSampleRateHz, capture.rf_source_sample_rate_hz): the rate the
+    // fileLoc values count in, which is the timebase AAA aligns against.
+    // Takes precedence over the JSON probe and names its source in the dialog.
+    void setRfVideoSampleRateFromMetadata(quint32 sampleRateHz);
     void setExportTrackOutputFile(const QString &outputFilename);
 signals:
     void exportTracksPrepared(const QStringList &trackFiles, const QStringList &trackNames);
@@ -85,7 +90,9 @@ private:
                                  bool includeHifiTrack,
                                  QString *errorMessage) const;
     quint32 currentRfVideoSampleRateHz() const;
+    void setRfVideoSampleRateSource(const QString &sourceText);
     Ui::AudioAlignmentDialog *ui;
+    bool applyingRfVideoSampleRate = false;
     QString sourceDirectory;
     QString exportTrackOutputFile;
     bool userEditedLinearOutput = false;

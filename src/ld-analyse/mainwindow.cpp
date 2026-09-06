@@ -11,6 +11,8 @@
  ******************************************************************************/
 
 #include "mainwindow.h"
+
+#include <cmath>
 #include "ui_mainwindow.h"
 #include "tbc/logging.h"
 
@@ -5291,6 +5293,15 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
     audioAlignmentDialog->setExportTrackOutputFile(QString());
     if (!defaultJsonPath.isEmpty()) {
         audioAlignmentDialog->setDefaultJson(defaultJsonPath);
+    }
+    // The decoder's stored RF rate (the rate fileLoc counts in) wins over the
+    // JSON probe: it is read from whichever store is open, .tbc.db included,
+    // where the JSON beside it may be absent or predate the key.
+    if (tbcSource.getIsSourceLoaded()) {
+        const double storedRfRateHz = tbcSource.getVideoParameters().rfSourceSampleRateHz;
+        if (storedRfRateHz > 0.0) {
+            audioAlignmentDialog->setRfVideoSampleRateFromMetadata(static_cast<quint32>(std::lround(storedRfRateHz)));
+        }
     }
 
     audioAlignmentDialog->show();
