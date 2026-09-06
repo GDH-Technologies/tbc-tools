@@ -66,6 +66,7 @@ class AudioAlignmentDialog;
 class EfmHandlerDialog;
 class MetadataExportDialog;
 class NotesViewerDialog;
+class SegmentsViewerDialog;
 class TeletextViewerDialog;
 class TimelineMarkerSlider;
 
@@ -242,6 +243,7 @@ private:
     EfmHandlerDialog *efmHandlerDialog = nullptr;
     MetadataExportDialog *metadataExportDialog = nullptr;
     NotesViewerDialog *notesViewerDialog = nullptr;
+    SegmentsViewerDialog *segmentsViewerDialog = nullptr;
     TeletextViewerDialog *teletextViewerDialog = nullptr;
 
     // Class globals
@@ -393,6 +395,7 @@ private:
     QAction *copyCurrentDisplayAction = nullptr;
     QAction *notesViewerAction = nullptr;
     QAction *skipBySegmentsAction = nullptr;
+    QAction *segmentsViewerAction = nullptr;
     QPushButton *vectorscopeSelectionPushButton = nullptr;
     TimelineMarkerSlider *timelineMarkerSlider = nullptr;
     UiStateSnapshot pendingUiStateSnapshot;
@@ -415,6 +418,10 @@ private:
     void setInOutFromSegment(qint32 segmentIndex, bool setIn, bool setOut);
     bool splitSegmentAtField(qint32 field, QString *statusText);
     QString segmentSummaryText(const TbcMetaData::Segment &segment) const;
+    void updateSegmentsViewerState();
+    void showSegmentsViewer();
+    void goToField(qint32 field);
+    void rederiveSegments(const SegmentsThresholds &thresholds);
     QFutureWatcher<QImage> asyncFrameRenderWatcher;
     bool asyncFrameRenderInProgress = false;
     bool asyncFrameRenderQueued = false;
