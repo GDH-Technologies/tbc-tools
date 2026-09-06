@@ -56,184 +56,34 @@ If you run `tbc-metadata-converter` with no arguments, it will launch the GUI by
 
 ## SQLite Schema
 
-```sql
-------------------------------------------------------------------
--- Schema Versioning
-------------------------------------------------------------------
-PRAGMA user_version = 3;
+The schema is owned by the TBC library (`src/library/tbc/sqliteio.cpp`,
+`SCHEMA_SQL`); this tool writes through `TbcMetaData::write()` and carries no
+copy of its own. The current schema is version 8 (`PRAGMA user_version`).
+Older `.tbc.db` files are migrated in place, column by column and table by
+table, the first time the library writes to them.
 
-------------------------------------------------------------------
--- 1. Capture-level metadata (one per JSON file)
-------------------------------------------------------------------
-CREATE TABLE capture (
-    capture_id INTEGER PRIMARY KEY,
-    system TEXT NOT NULL
-        CHECK (system IN ('NTSC','PAL','PAL_M')),
-    decoder TEXT NOT NULL
-        CHECK (decoder IN ('ld-decode','vhs-decode')),
-    git_branch TEXT,
-    git_commit TEXT,
+Tables: `capture` (one row per file: the video parameters, decoder
+provenance, user in/out points and markers, and, since version 8, the RF
+source sample rate `rf_source_sample_rate_hz` that `file_loc` is expressed
+in plus `os_info` / `decoder_version`), `pcm_audio_parameters`,
+`field_record` (one row per field, `field_id` 0-based), `vits_metrics`,
+`vbi`, `drop_outs`, `vitc`, `closed_caption`, and the version-8 segmentation
+tables:
 
-    video_sample_rate REAL,
-    active_video_start INTEGER,
-    active_video_end INTEGER,
-    field_width INTEGER,
-    field_height INTEGER,
-    number_of_sequential_fields INTEGER,
+- `picture_metrics` — per-field picture measurements in IRE
+  (`luma_mean_ire`, `field_diff_ire`, `blanking_dev_ire`, `sync_tip_dev_ire`,
+  `noise_ire`, `burst_amp_ire`; NULL = not measurable), written by the decoder
+  or backfilled by `tbc-segments --write`.
+- `decoder_event` — facts the decoder knew while decoding (sync-loss jumps,
+  skipped/duplicated/dropped fields at a seam, a `--resume` seam), keyed by
+  the first written field at or after the event. `source` is `decoder` or
+  `tbc-segments` (reconstructed).
+- `segment` — the editable recording-segment layer (`start_field`,
+  `end_field_exclusive`, 0-based half-open; `kind` clip/blank/noise/unknown;
+  `source` derived/user; `enabled`; title, comment, provenance).
 
-    colour_burst_start INTEGER,
-    colour_burst_end INTEGER,
-    is_mapped INTEGER
-        CHECK (is_mapped IN (0,1)),
-    is_subcarrier_locked INTEGER
-        CHECK (is_subcarrier_locked IN (0,1)),
-    is_widescreen INTEGER
-        CHECK (is_widescreen IN (0,1)),
-    white_16b_ire INTEGER,
-    black_16b_ire INTEGER,
-    blanking_16b_ire INTEGER,
-    chroma_decoder TEXT,
-    chroma_gain REAL,
-    chroma_phase REAL,
-    luma_nr REAL,
-    ntsc_adaptive INTEGER,
-    ntsc_adapt_threshold REAL,
-    ntsc_chroma_weight REAL,
-    ntsc_phase_compensation INTEGER,
-    pal_transform_threshold REAL,
-
-    capture_notes TEXT -- was JSON tape_format
-);
-
-------------------------------------------------------------------
--- 2. PCM Audio Parameters (one per capture)
-------------------------------------------------------------------
-CREATE TABLE pcm_audio_parameters (
-    capture_id INTEGER PRIMARY KEY
-        REFERENCES capture(capture_id) ON DELETE CASCADE,
-    bits INTEGER,
-    is_signed INTEGER
-        CHECK (is_signed IN (0,1)),
-    is_little_endian INTEGER
-        CHECK (is_little_endian IN (0,1)),
-    sample_rate REAL
-);
-
-------------------------------------------------------------------
--- 3. Field metadata
-------------------------------------------------------------------
-CREATE TABLE field_record (
-    capture_id INTEGER NOT NULL
-        REFERENCES capture(capture_id) ON DELETE CASCADE,
-    -- Note: Original JSON seqNo was indexed from 1, the field_id
-    -- will be the original seqNo - 1 to zero-index the ID
-    field_id INTEGER NOT NULL,
-    audio_samples INTEGER,
-    decode_faults INTEGER,
-    disk_loc REAL,
-    efm_t_values INTEGER,
-    field_phase_id INTEGER,
-    file_loc INTEGER,
-    is_first_field INTEGER
-        CHECK (is_first_field IN (0,1)),
-    median_burst_ire REAL,
-    pad INTEGER
-        CHECK (pad IN (0,1)),
-    sync_conf INTEGER,
-
-    -- NTSC specific fields (NULL for other formats)
-    ntsc_is_fm_code_data_valid INTEGER
-        CHECK (ntsc_is_fm_code_data_valid IN (0,1)),
-    ntsc_fm_code_data INTEGER,
-    ntsc_field_flag INTEGER
-        CHECK (ntsc_field_flag IN (0,1)),
-    ntsc_is_video_id_data_valid INTEGER
-        CHECK (ntsc_is_video_id_data_valid IN (0,1)),
-    ntsc_video_id_data INTEGER,
-    ntsc_white_flag INTEGER
-        CHECK (ntsc_white_flag IN (0,1)),
-
-    PRIMARY KEY (capture_id, field_id)
-);
-
-------------------------------------------------------------------
--- 4. VITS metrics (optional) - one per field
-------------------------------------------------------------------
-CREATE TABLE vits_metrics (
-    capture_id INTEGER NOT NULL,
-    field_id INTEGER NOT NULL,
-    b_psnr REAL,
-    w_snr REAL,
-    FOREIGN KEY (capture_id, field_id)
-        REFERENCES field_record(capture_id, field_id)
-        ON DELETE CASCADE,
-    PRIMARY KEY (capture_id, field_id)
-);
-
-------------------------------------------------------------------
--- 5. VBI data (optional) - stores 3 VBI data values per field
-------------------------------------------------------------------
-CREATE TABLE vbi (
-    capture_id INTEGER NOT NULL,
-    field_id INTEGER NOT NULL,
-    vbi0 INTEGER NOT NULL, -- VBI line 16 data
-    vbi1 INTEGER NOT NULL, -- VBI line 17 data  
-    vbi2 INTEGER NOT NULL, -- VBI line 18 data
-    FOREIGN KEY (capture_id, field_id)
-        REFERENCES field_record(capture_id, field_id)
-        ON DELETE CASCADE,
-    PRIMARY KEY (capture_id, field_id)
-);
-
-------------------------------------------------------------------
--- 6. Drop-out elements (optional)
-------------------------------------------------------------------
-CREATE TABLE drop_outs (
-    capture_id INTEGER NOT NULL,
-    field_id INTEGER NOT NULL, 
-    field_line INTEGER NOT NULL,
-    startx INTEGER NOT NULL,
-    endx INTEGER NOT NULL,
-    PRIMARY KEY (capture_id, field_id, field_line, startx, endx),
-    FOREIGN KEY (capture_id, field_id)
-        REFERENCES field_record(capture_id, field_id)
-        ON DELETE CASCADE
-);
-
-------------------------------------------------------------------
--- 7. VITC data (optional) - stores 8 VITC data values per field
-------------------------------------------------------------------
-CREATE TABLE vitc (
-    capture_id INTEGER NOT NULL,
-    field_id INTEGER NOT NULL,
-    vitc0 INTEGER NOT NULL, -- VITC data element 0
-    vitc1 INTEGER NOT NULL, -- VITC data element 1
-    vitc2 INTEGER NOT NULL, -- VITC data element 2
-    vitc3 INTEGER NOT NULL, -- VITC data element 3
-    vitc4 INTEGER NOT NULL, -- VITC data element 4
-    vitc5 INTEGER NOT NULL, -- VITC data element 5
-    vitc6 INTEGER NOT NULL, -- VITC data element 6
-    vitc7 INTEGER NOT NULL, -- VITC data element 7
-    FOREIGN KEY (capture_id, field_id)
-        REFERENCES field_record(capture_id, field_id)
-        ON DELETE CASCADE,
-    PRIMARY KEY (capture_id, field_id)
-);
-
-------------------------------------------------------------------
--- 8. Closed Caption data (optional) - one per field
-------------------------------------------------------------------
-CREATE TABLE closed_caption (
-    capture_id INTEGER NOT NULL,
-    field_id INTEGER NOT NULL,
-    data0 INTEGER, -- First closed caption byte (-1 if invalid)
-    data1 INTEGER, -- Second closed caption byte (-1 if invalid)
-    FOREIGN KEY (capture_id, field_id)
-        REFERENCES field_record(capture_id, field_id)
-        ON DELETE CASCADE,
-    PRIMARY KEY (capture_id, field_id)
-);
-```
+The `.tbc.db` is the canonical store and the `.tbc.json` a projection of it:
+when both exist beside a TBC, tools open the database.
 
 # JSON Format
 
