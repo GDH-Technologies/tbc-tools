@@ -113,6 +113,7 @@ def main() -> int:
         "1",
         "--input-metadata",
         str(input_db),
+        "--teletext",
         "--teletext-html-dir",
         str(html_dir),
         "--teletext-tape-format",

@@ -98,6 +98,19 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("installPath", settings.cudaPlugin.installPath);
     configuration->endGroup();
 
+    // VBI processing options
+    configuration->beginGroup("vbiProcessing");
+    configuration->setValue("vbiCore", settings.vbiProcessing.vbiCore);
+    configuration->setValue("ntsc", settings.vbiProcessing.ntsc);
+    configuration->setValue("vitc", settings.vbiProcessing.vitc);
+    configuration->setValue("closedCaptions", settings.vbiProcessing.closedCaptions);
+    configuration->setValue("teletext", settings.vbiProcessing.teletext);
+    configuration->setValue("vits", settings.vbiProcessing.vits);
+    configuration->setValue("teletextHtmlDir", settings.vbiProcessing.teletextHtmlDir);
+    configuration->setValue("teletextTapeFormat", settings.vbiProcessing.teletextTapeFormat);
+    configuration->setValue("teletextMinDuplicates", settings.vbiProcessing.teletextMinDuplicates);
+    configuration->endGroup();
+
     // Sync the settings with disk
     tbcDebugStream() << "Configuration::writeConfiguration(): Writing configuration to disk";
     configuration->sync();
@@ -162,6 +175,20 @@ void Configuration::readConfiguration(void)
     settings.cudaPlugin.trusted = configuration->value("trusted", false).toBool();
     settings.cudaPlugin.installPath = configuration->value("installPath", QString()).toString();
     configuration->endGroup();
+
+    // VBI processing options (additive keys - older config files fall back to defaults)
+    configuration->beginGroup("vbiProcessing");
+    settings.vbiProcessing.vbiCore = configuration->value("vbiCore", true).toBool();
+    settings.vbiProcessing.ntsc = configuration->value("ntsc", true).toBool();
+    settings.vbiProcessing.vitc = configuration->value("vitc", true).toBool();
+    settings.vbiProcessing.closedCaptions = configuration->value("closedCaptions", true).toBool();
+    settings.vbiProcessing.teletext = configuration->value("teletext", false).toBool();
+    settings.vbiProcessing.vits = configuration->value("vits", false).toBool();
+    settings.vbiProcessing.teletextHtmlDir = configuration->value("teletextHtmlDir", QString()).toString();
+    settings.vbiProcessing.teletextTapeFormat = configuration->value("teletextTapeFormat", QStringLiteral("vhs")).toString();
+    settings.vbiProcessing.teletextMinDuplicates = configuration->value("teletextMinDuplicates", 1).toInt();
+    if (settings.vbiProcessing.teletextMinDuplicates < 1) settings.vbiProcessing.teletextMinDuplicates = 1;
+    configuration->endGroup();
 }
 
 void Configuration::setDefault(void)
@@ -209,6 +236,17 @@ void Configuration::setDefault(void)
     settings.cudaPlugin.enabled = false;
     settings.cudaPlugin.trusted = false;
     settings.cudaPlugin.installPath = QString();
+
+    // VBI processing options (defaults match ld-process-vbi CLI defaults)
+    settings.vbiProcessing.vbiCore = true;
+    settings.vbiProcessing.ntsc = true;
+    settings.vbiProcessing.vitc = true;
+    settings.vbiProcessing.closedCaptions = true;
+    settings.vbiProcessing.teletext = false;
+    settings.vbiProcessing.vits = false;
+    settings.vbiProcessing.teletextHtmlDir = QString();
+    settings.vbiProcessing.teletextTapeFormat = QStringLiteral("vhs");
+    settings.vbiProcessing.teletextMinDuplicates = 1;
 
     // Write the configuration
     writeConfiguration();
@@ -528,4 +566,15 @@ void Configuration::setCudaPluginInstallPath(QString path)
 QString Configuration::getCudaPluginInstallPath(void)
 {
     return settings.cudaPlugin.installPath;
+}
+
+// VBI processing options
+void Configuration::setVbiProcessingOptions(const VbiProcessingOptions &options)
+{
+    settings.vbiProcessing = options;
+}
+
+VbiProcessingOptions Configuration::getVbiProcessingOptions(void)
+{
+    return settings.vbiProcessing;
 }

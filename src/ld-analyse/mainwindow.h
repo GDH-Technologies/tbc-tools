@@ -42,6 +42,7 @@
 #include "fieldtimingdialog.h"
 #include "aboutdialog.h"
 #include "vbidialog.h"
+#include "vbiprocessingdialog.h"
 #include "dropoutanalysisdialog.h"
 #include "visibledropoutanalysisdialog.h"
 #include "blacksnranalysisdialog.h"
@@ -115,7 +116,6 @@ private slots:
     void on_actionToggleChromaDuringSeek_triggered();
     void on_actionExport_Decode_Metadata_triggered();
     void on_actionProcess_VBI_triggered();
-    void on_actionProcess_VITS_triggered();
     void on_actionFix_JSON_SNR_triggered();
     void on_actionAuto_Audio_Align_triggered();
     void on_actionEFM_Handler_triggered();

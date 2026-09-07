@@ -19,6 +19,23 @@
 #include <QDir>
 #include <QDebug>
 
+// VBI processing options - which data types ld-process-vbi should
+// decode when invoked from ld-analyse, plus the teletext advanced options.
+// Default-constructed options match the ld-process-vbi CLI defaults (four
+// in-process VBI decoders on; teletext and VITS off). Defined as a free type so
+// ld-analyse dialogs and Configuration can both use it unqualified.
+struct VbiProcessingOptions {
+    bool vbiCore = true;
+    bool ntsc = true;
+    bool vitc = true;
+    bool closedCaptions = true;
+    bool teletext = false;
+    bool vits = false;
+    QString teletextHtmlDir;                 // empty -> ld-process-vbi default (<input>_teletext_html)
+    QString teletextTapeFormat = QStringLiteral("vhs");
+    qint32 teletextMinDuplicates = 1;
+};
+
 class Configuration : public QObject
 {
     Q_OBJECT
@@ -101,6 +118,10 @@ public:
     void setCudaPluginInstallPath(QString path);
     QString getCudaPluginInstallPath(void);
 
+    // Get and set methods - VBI processing options
+    void setVbiProcessingOptions(const VbiProcessingOptions &options);
+    VbiProcessingOptions getVbiProcessingOptions(void);
+
 signals:
 
 public slots:
@@ -167,6 +188,7 @@ private:
         ViewOptions viewOptions;
         UpdateCheck updateCheck;
         CudaPlugin cudaPlugin;
+        VbiProcessingOptions vbiProcessing;
     } settings;
 
     void setDefault(void);

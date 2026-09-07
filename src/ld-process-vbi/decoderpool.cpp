@@ -26,9 +26,10 @@
 #include "tbc/logging.h"
 
 DecoderPool::DecoderPool(QString _inputFilename, QString _outputMetadataFilename,
-                         qint32 _maxThreads, TbcMetaData &_metaData)
+                         qint32 _maxThreads, TbcMetaData &_metaData,
+                         VbiProcessingOptions _options)
     : inputFilename(_inputFilename), outputMetadataFilename(_outputMetadataFilename),
-      maxThreads(_maxThreads), metaData(_metaData)
+      maxThreads(_maxThreads), metaData(_metaData), processingOptions(_options)
 {
 }
 

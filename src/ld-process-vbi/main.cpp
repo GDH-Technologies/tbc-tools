@@ -35,6 +35,7 @@
 
 #include "tbc/logging.h"
 #include "decoderpool.h"
+#include "processingpool.h"
 #include "teletextintegration.h"
 namespace {
 void appendMetadataCandidate(QStringList &candidates, const QString &candidate)
@@ -175,8 +176,12 @@ int main(int argc, char *argv[])
     parser.addOption(teletextHtmlDirOption);
     QCommandLineOption noTeletextHtmlOption(QStringList() << "no-teletext-html",
                                             QCoreApplication::translate("main",
-                                                                        "Disable integrated teletext HTML export"));
+                                                                        "Disable integrated teletext HTML export (legacy alias; teletext is opt-in via --teletext)"));
     parser.addOption(noTeletextHtmlOption);
+    QCommandLineOption teletextOption(QStringList() << "teletext",
+                                      QCoreApplication::translate("main",
+                                                                  "Enable integrated teletext HTML export (off by default; failure is non-fatal)"));
+    parser.addOption(teletextOption);
     QCommandLineOption teletextTapeFormatOption(QStringList() << "teletext-tape-format",
                                                 QCoreApplication::translate("main",
                                                                             "Teletext decoder tape format profile (default: vhs)"),
@@ -189,6 +194,29 @@ int main(int argc, char *argv[])
                                                    QCoreApplication::translate("main", "number"),
                                                    QCoreApplication::translate("main", "1"));
     parser.addOption(teletextMinDuplicatesOption);
+
+    // VBI processing options - select which data types to decode (default: the four
+    // in-process VBI types on; teletext and VITS are opt-in via --teletext/--vits).
+    QCommandLineOption noVbiCoreOption(QStringList() << "no-vbi-core",
+                                       QCoreApplication::translate("main",
+                                                                   "Disable biphase VBI decoding (frame number/timecode/chapter/user code on lines 16-18)"));
+    parser.addOption(noVbiCoreOption);
+    QCommandLineOption noNtscOption(QStringList() << "no-ntsc",
+                                    QCoreApplication::translate("main",
+                                                                "Disable NTSC-specific decoding (FM code/white flag/video ID)"));
+    parser.addOption(noNtscOption);
+    QCommandLineOption noVitcOption(QStringList() << "no-vitc",
+                                    QCoreApplication::translate("main",
+                                                                "Disable VITC (vertical interval timecode) decoding"));
+    parser.addOption(noVitcOption);
+    QCommandLineOption noClosedCaptionsOption(QStringList() << "no-closed-captions",
+                                              QCoreApplication::translate("main",
+                                                                          "Disable closed caption (CEA-608) decoding"));
+    parser.addOption(noClosedCaptionsOption);
+    QCommandLineOption vitsOption(QStringList() << "vits",
+                                  QCoreApplication::translate("main",
+                                                              "Enable VITS metrics processing (off by default; runs the VITS analyser in-process; failure is non-fatal)"));
+    parser.addOption(vitsOption);
 
     // Positional argument to specify input TBC file
     parser.addPositionalArgument("input", QCoreApplication::translate("main", "Specify input TBC file"));
@@ -218,6 +246,18 @@ int main(int argc, char *argv[])
         qCritical("Specified teletext minimum duplicates must be greater than zero");
         return -1;
     }
+
+    // Build the VBI processing options from the CLI flags. Defaults match the
+    // struct defaults (four in-process decoders on; teletext/VITS off). The
+    // legacy --no-teletext-html alias forces teletext off for backward compat.
+    VbiProcessingOptions processingOptions;
+    if (parser.isSet(noVbiCoreOption)) processingOptions.vbiCore = false;
+    if (parser.isSet(noNtscOption)) processingOptions.ntsc = false;
+    if (parser.isSet(noVitcOption)) processingOptions.vitc = false;
+    if (parser.isSet(noClosedCaptionsOption)) processingOptions.closedCaptions = false;
+    if (parser.isSet(vitsOption)) processingOptions.vits = true;
+    processingOptions.teletext = parser.isSet(teletextOption);
+    if (parser.isSet(noTeletextHtmlOption)) processingOptions.teletext = false;
 
     // Get the arguments from the parser
     QString inputFilename;
@@ -275,11 +315,10 @@ int main(int argc, char *argv[])
 
     // Perform the processing
     qInfo() << "Beginning VBI processing...";
-    DecoderPool decoderPool(inputFilename, outputMetadataFilename, maxThreads, metaData);
+    DecoderPool decoderPool(inputFilename, outputMetadataFilename, maxThreads, metaData, processingOptions);
     if (!decoderPool.process()) return 1;
 
-    const bool teletextExportEnabled = !parser.isSet(noTeletextHtmlOption);
-    if (teletextExportEnabled) {
+    if (processingOptions.teletext) {
         TeletextIntegrationOptions teletextOptions;
         teletextOptions.inputFilename = inputFilename;
         if (parser.isSet(teletextHtmlDirOption)) {
@@ -294,8 +333,20 @@ int main(int argc, char *argv[])
 
         QString teletextError;
         if (!runTeletextHtmlExport(teletextOptions, &teletextError)) {
-            qCritical().noquote() << "Teletext export failed:" << teletextError;
-            return 1;
+            // Non-fatal: VBI metadata is already written. Warn and continue so the
+            // run still exits 0 (teletext is an opt-in post-step most tapes lack).
+            qWarning().noquote() << "Teletext export failed (non-fatal, VBI metadata preserved):" << teletextError;
+        }
+    }
+
+    // VITS processing mode (opt-in). Runs the shared VITS analyser in-process on
+    // the same metadata so ld-process-vbi is the single VBI/VITS processing tool.
+    if (processingOptions.vits) {
+        qInfo() << "Beginning VITS processing (in-process mode)...";
+        ProcessingPool vitsPool(inputFilename, outputMetadataFilename, maxThreads, metaData);
+        if (!vitsPool.process()) {
+            // Non-fatal: VBI metadata is already written.
+            qWarning() << "VITS processing failed (non-fatal, VBI metadata preserved)";
         }
     }
 

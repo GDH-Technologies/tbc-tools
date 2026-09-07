@@ -55,7 +55,7 @@ rm -rf build
 - **Individual tool directories**: Each tool has its own directory under `src/`
 
 ### Key Tools Categories
-- **Core Processing**: `ld-process-vbi`, `ld-process-vits`
+- **Core Processing**: `ld-process-vbi` (VBI decode + selectable processing options; also performs VITS metrics via `--vits` in-process)
 - **EFM Decoder Suite**: `efm-decoder-f2`, `efm-decoder-d24`, `efm-decoder-audio`, `efm-decoder-data`, `efm-stacker-f2`
 - **Analysis**: `ld-analyse` (GUI), `ld-discmap`, `ld-dropout-correct`
 - **Export/Conversion**: `ld-chroma-decoder`, `tbc-export-metadata`, `ld-lds-converter`, `tbc-metadata-converter`
