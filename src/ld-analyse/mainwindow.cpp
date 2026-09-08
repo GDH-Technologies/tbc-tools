@@ -234,13 +234,21 @@ void ensureSvgButtonIcon(QAbstractButton *button, const QString &resourcePath)
         QSvgRenderer renderer(resourcePath);
         if (renderer.isValid()) {
             // Rasterise at the device pixel ratio, not the logical icon size, or
-            // this fallback path produces a blurry icon on a HiDPI display.
+            // this path produces a blurry icon on a HiDPI display. (It is not a
+            // rare fallback: QIcon reports no availableSizes() for an SVG, so
+            // every toolbar button comes through here.)
+            //
+            // The render bounds must be given explicitly and in LOGICAL units.
+            // QSvgRenderer::render(painter) with no bounds fills the painter's
+            // viewport, which is the pixmap's device rect - and the painter is
+            // already scaled by the device pixel ratio, so the drawing came out
+            // ratio-times too large and cropped at anything above 100%.
             const qreal devicePixelRatio = button->devicePixelRatioF();
             QPixmap pixmap(iconSize * devicePixelRatio);
             pixmap.setDevicePixelRatio(devicePixelRatio);
             pixmap.fill(Qt::transparent);
             QPainter painter(&pixmap);
-            renderer.render(&painter);
+            renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(iconSize)));
             icon = QIcon(pixmap);
         }
     }
@@ -6883,10 +6891,22 @@ void MainWindow::setupUiScaleMenu()
 
     // An operator who exports QT_SCALE_FACTOR keeps control of the scale, and
     // this menu could not report the truth, so it is disabled rather than lying.
-    if (!qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR")) {
-        ui->menuUiScale->setEnabled(false);
-        ui->menuUiScale->setToolTip(tr("The QT_SCALE_FACTOR environment variable is set, "
-                                       "and overrides this setting"));
+    //
+    // main() puts the saved factor into QT_SCALE_FACTOR itself, so the variable
+    // being set is NOT on its own evidence that the operator set it - treating
+    // it that way disabled the menu permanently as soon as any scale was
+    // chosen, with no way back to Auto. Only a value we did not write counts.
+    const QByteArray environmentScale = qgetenv("QT_SCALE_FACTOR");
+    if (!environmentScale.isEmpty()) {
+        bool parsed = false;
+        const double environmentValue = environmentScale.toDouble(&parsed);
+        const bool isOurOwnValue = parsed && currentScale != 0.0
+            && qFuzzyCompare(environmentValue + 1.0, currentScale + 1.0);
+        if (!isOurOwnValue) {
+            ui->menuUiScale->setEnabled(false);
+            ui->menuUiScale->setToolTip(tr("The QT_SCALE_FACTOR environment variable is set, "
+                                           "and overrides this setting"));
+        }
     }
 
     connect(scaleGroup, &QActionGroup::triggered, this, &MainWindow::handleUiScaleSelected);
