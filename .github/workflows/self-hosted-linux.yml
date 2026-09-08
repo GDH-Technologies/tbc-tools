@@ -210,7 +210,11 @@ jobs:
           if [ -d result/share ]; then
             cp -a result/share/. AppDir/usr/share/
           fi
-          chmod -R u+w AppDir/usr/lib
+          # usr/share too, not just usr/lib: `cp -a` preserves the store's 555
+          # directory modes, and the AppImage assembly later writes the desktop
+          # entry and icon into usr/share/applications and usr/share/icons. The
+          # hosted job never notices because its container runs as root.
+          chmod -R u+w AppDir/usr/lib AppDir/usr/share
           LIBSTDCPP_PATH="$(ldd result/bin/.ld-analyse-wrapped | awk '$1 == "libstdc++.so.6" { print $3; exit }')"
           LIBGCC_PATH="$(ldd result/bin/.ld-analyse-wrapped | awk '$1 == "libgcc_s.so.1" { print $3; exit }')"
           [ -n "$LIBSTDCPP_PATH" ] && cp -L "$LIBSTDCPP_PATH" AppDir/usr/lib/libstdc++.so.6
@@ -262,6 +266,12 @@ jobs:
               done
             done
           done
+          # Everything the dependency loops above copied out of the Nix store
+          # is mode 444, and patchelf needs to write to it. The hosted job gets
+          # away without this because its container runs as root (--user 0),
+          # which ignores file permissions; as an ordinary user the rpath pass
+          # dies with "patchelf: open: Permission denied".
+          chmod -R u+w AppDir/usr/bin AppDir/usr/lib
           for elf in AppDir/usr/bin/* AppDir/usr/lib/*.so* AppDir/usr/plugins/*/*.so; do
             [ -f "$elf" ] || continue
             base="$(basename "$elf")"
