@@ -545,10 +545,17 @@ src/ld-analyse/install, then re-run."
 
     # Scan the legacy root too: backups taken before the assets moved into
     # tbc-tools still live under $XDG_DATA_HOME, and --uninstall is exactly
-    # when they matter.
-    local latest
-    latest="$(find "$BACKUP_ROOT" "$LEGACY_BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
-              2>/dev/null | sort | tail -n1)"
+    # when they matter. Only pass roots that exist - `find` exits non-zero on a
+    # missing one, and under `set -o pipefail` that fails the assignment and
+    # kills the run before a single message is printed.
+    local latest roots=()
+    [ -d "$BACKUP_ROOT" ] && roots+=("$BACKUP_ROOT")
+    [ -d "$LEGACY_BACKUP_ROOT" ] && roots+=("$LEGACY_BACKUP_ROOT")
+    latest=""
+    if [ "${#roots[@]}" -gt 0 ]; then
+        latest="$(find "${roots[@]}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+                  | sort | tail -n1)"
+    fi
 
     say "decode-desktop-sync: uninstalling"
     [ "$DRY_RUN" -eq 1 ] && say "(dry run - nothing will be written)"
