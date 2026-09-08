@@ -396,6 +396,33 @@ class TestBumpWritesTheVersionFile(unittest.TestCase):
         self.assertEqual(at_remote("refs/tags/v3.2.8-gdh-1.0^{commit}"),
                          at_remote("refs/heads/main"))
 
+    def test_a_rejected_push_lands_neither_the_branch_nor_the_tag(self):
+        """What --atomic buys. Landing the tag alone would leave it naming a
+        commit on no branch; landing the branch alone would wake the deploy
+        with no tag for `git describe` to find."""
+        repo = FakeRepo(self)
+        repo.commit("feat: something worth releasing")
+
+        remote = Path(tempfile.mkdtemp(prefix="gdh-origin-"))
+        self.addCleanup(shutil.rmtree, remote, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        repo.git("remote", "add", "origin", str(remote))
+
+        # Put origin/main beyond us so the branch half of the push is refused.
+        repo.commit("fix: a commit only origin has")
+        repo.git("push", "-q", "origin", "main")
+        repo.git("reset", "--hard", "--quiet", "HEAD~1")
+        repo.git("checkout", "-q", "--detach", "HEAD")
+
+        result = repo.bump("--level", "minor", "--push", "--branch", "main")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+        tags = subprocess.run(
+            ["git", "-C", str(remote), "tag", "-l"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(tags, "", "the tag reached origin despite the branch being refused")
+
     def test_bump_refuses_to_push_from_a_detached_head_without_a_branch(self):
         repo = FakeRepo(self)
         repo.commit("feat: something")

@@ -317,20 +317,24 @@ def do_bump(args: argparse.Namespace) -> int:
     print(f"created {tag}")
 
     if args.push:
-        # The version commit has to reach the branch before the tag does, or the
-        # tag names a commit that is on no branch.
         branch = args.branch or git("symbolic-ref", "--short", "HEAD", check=False)
         if not branch:
             raise VersionError(
                 "HEAD is detached; pass --branch to say where the version commit goes"
             )
-        git("push", "origin", f"HEAD:refs/heads/{branch}")
-        git("push", "origin", tag)
+        # One atomic push, not two. Pushing the branch first opens a window in
+        # which main carries the version commit and no tag names it -- and the
+        # branch push is exactly what wakes the self-hosted deploy, whose
+        # Windows job resolves APP_VERSION by `git describe`. A build starting
+        # in that window would stamp the sentinel instead of the release.
+        # Pushing the tag first is worse: it would name a commit on no branch.
+        git("push", "--atomic", "origin",
+            f"HEAD:refs/heads/{branch}", f"refs/tags/{tag}")
         print(f"pushed {branch} and {tag} to origin")
     else:
         print(
-            "not pushed; run: git push origin HEAD:refs/heads/<branch> "
-            f"&& git push origin {tag}"
+            "not pushed; run: git push --atomic origin "
+            f"HEAD:refs/heads/<branch> refs/tags/{tag}"
         )
     return 0
 
