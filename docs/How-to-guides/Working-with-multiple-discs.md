@@ -93,11 +93,11 @@ If you do not require diffDOD use the --no-diffdod option to turn it off.
 
 # Analysing the resulting SNR (Signal to Noise Ratio) of the stacked TBC
 
-The tool ld-process-vits is provided to update the white and black SNR metadata of a TBC file.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running ld-process-vits against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in ld-analyse.
+ld-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running ld-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in ld-analyse.
 
-A sample command for ld-process-vits is as follows:
+A sample command is as follows:
 
-    ld-process-vits dragonslair_stacked.tbc
+    ld-process-vbi --vits dragonslair_stacked.tbc
 
 # Multi-Source Dropout Correction
 

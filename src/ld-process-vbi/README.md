@@ -61,6 +61,19 @@ ld-process-vbi [options] <input.tbc>
 - `-n, --nobackup`: Do not create a backup of the input metadata
 - `-t, --threads <number>`: Specify the number of concurrent threads (default is the number of logical CPUs)
 
+#### Processing Options (select which data types to decode)
+By default the four in-process VBI decoders run (biphase VBI, NTSC-specific, VITC, closed captions). Teletext HTML export and VITS metrics processing are **off by default** (most tapes have no teletext; VITS is only needed when the video has been modified and SNR must be recomputed). Each type can be toggled:
+
+- `--no-vbi-core`: Disable biphase VBI decoding (frame number/timecode/chapter/user code on lines 16-18)
+- `--no-ntsc`: Disable NTSC-specific decoding (FM code/white flag/video ID)
+- `--no-vitc`: Disable VITC (vertical interval timecode) decoding
+- `--no-closed-captions`: Disable closed caption (CEA-608) decoding
+- `--teletext`: Enable integrated teletext HTML export (off by default; failure is non-fatal — VBI metadata is preserved and the run still exits 0)
+- `--vits`: Enable VITS metrics processing (off by default; runs the VITS analyser in-process as a mode of this tool; failure is non-fatal)
+- `--no-teletext-html`: Legacy alias — forces teletext off (kept for backward compatibility with older scripts)
+
+Teletext options (only used with `--teletext`): `--teletext-html-dir <directory>`, `--teletext-tape-format <name>` (default `vhs`), `--teletext-min-duplicates <number>` (default `1`).
+
 #### Arguments
 - `input`: Input TBC file (required)
 

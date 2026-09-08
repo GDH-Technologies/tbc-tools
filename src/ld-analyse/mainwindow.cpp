@@ -5316,6 +5316,17 @@ void MainWindow::on_actionProcess_VBI_triggered()
         return;
     }
 
+    // Show the VBI processing options dialog (defaults/last-used come from configuration).
+    VbiProcessingOptions opts = configuration.getVbiProcessingOptions();
+    VbiProcessingDialog processingDialog(opts, this);
+    if (processingDialog.exec() != QDialog::Accepted) {
+        statusBar()->showMessage(tr("VBI processing cancelled"), 3000);
+        return;
+    }
+    opts = processingDialog.selectedOptions();
+    configuration.setVbiProcessingOptions(opts);
+    configuration.writeConfiguration();
+
     QString backupErrorMessage;
     if (!createTimestampedMetadataBackup(metadataFilename, QStringLiteral(".bup"), &backupErrorMessage)) {
         QMessageBox::warning(this, tr("Backup failed"),
@@ -5332,11 +5343,65 @@ void MainWindow::on_actionProcess_VBI_triggered()
     if (!noBackupOption.isEmpty()) {
         toolArguments << noBackupOption;
     }
-    const QString teletextOutputDirectory = defaultTeletextHtmlDirectoryForInput(inputFileName);
-    if (!teletextOutputDirectory.isEmpty()
-        && toolHelpListsOption(toolPath, QStringLiteral("--teletext-html-dir"))) {
-        toolArguments << QStringLiteral("--teletext-html-dir") << teletextOutputDirectory;
+
+    // Processing options: disable the unticked in-process VBI decoders. Each flag
+    // is guarded so the GUI degrades gracefully against older ld-process-vbi
+    // builds that don't yet support it (the type just runs on those builds).
+    if (!opts.vbiCore && toolHelpListsOption(toolPath, QStringLiteral("--no-vbi-core"))) {
+        toolArguments << QStringLiteral("--no-vbi-core");
     }
+    if (!opts.ntsc && toolHelpListsOption(toolPath, QStringLiteral("--no-ntsc"))) {
+        toolArguments << QStringLiteral("--no-ntsc");
+    }
+    if (!opts.vitc && toolHelpListsOption(toolPath, QStringLiteral("--no-vitc"))) {
+        toolArguments << QStringLiteral("--no-vitc");
+    }
+    if (!opts.closedCaptions && toolHelpListsOption(toolPath, QStringLiteral("--no-closed-captions"))) {
+        toolArguments << QStringLiteral("--no-closed-captions");
+    }
+
+    // Teletext is opt-in. New builds default teletext off and use --teletext to
+    // enable it; older builds default teletext on and use --no-teletext-html to
+    // suppress it. Handle both so the GUI works across build versions.
+    QString teletextOutputDirectory;
+    const bool toolHasTeletextFlag = toolHelpListsOption(toolPath, QStringLiteral("--teletext"));
+    if (opts.teletext) {
+        teletextOutputDirectory = opts.teletextHtmlDir.trimmed().isEmpty()
+            ? defaultTeletextHtmlDirectoryForInput(inputFileName)
+            : opts.teletextHtmlDir.trimmed();
+        if (toolHasTeletextFlag) {
+            toolArguments << QStringLiteral("--teletext");
+        }
+        if (!teletextOutputDirectory.isEmpty()
+            && toolHelpListsOption(toolPath, QStringLiteral("--teletext-html-dir"))) {
+            toolArguments << QStringLiteral("--teletext-html-dir") << teletextOutputDirectory;
+        }
+        if (toolHelpListsOption(toolPath, QStringLiteral("--teletext-tape-format"))
+            && !opts.teletextTapeFormat.trimmed().isEmpty()
+            && opts.teletextTapeFormat.trimmed().compare(QStringLiteral("vhs"), Qt::CaseInsensitive) != 0) {
+            toolArguments << QStringLiteral("--teletext-tape-format") << opts.teletextTapeFormat.trimmed();
+        }
+        if (toolHelpListsOption(toolPath, QStringLiteral("--teletext-min-duplicates"))
+            && opts.teletextMinDuplicates > 1) {
+            toolArguments << QStringLiteral("--teletext-min-duplicates") << QString::number(opts.teletextMinDuplicates);
+        }
+    } else if (!toolHasTeletextFlag && toolHelpListsOption(toolPath, QStringLiteral("--no-teletext-html"))) {
+        // Old build where teletext defaults on: explicitly suppress it.
+        toolArguments << QStringLiteral("--no-teletext-html");
+    }
+
+    // VITS is an opt-in in-process mode of ld-process-vbi (--vits).
+    if (opts.vits) {
+        if (toolHelpListsOption(toolPath, QStringLiteral("--vits"))) {
+            toolArguments << QStringLiteral("--vits");
+        } else {
+            QMessageBox::warning(this, tr("VITS not supported"),
+                                 tr("The selected ld-process-vbi build does not support the --vits flag. "
+                                    "VITS metrics were not processed. Use a newer ld-process-vbi build."));
+            // Continue without --vits rather than aborting the whole VBI run.
+        }
+    }
+
     toolArguments << inputFileName;
 
     QString errorMessage;
@@ -5368,10 +5433,27 @@ void MainWindow::on_actionProcess_VBI_triggered()
         }
         if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
             teletextViewerDialog->setDirectory(autoTeletextDirectory);
+    // Only auto-open the teletext viewer when teletext was actually requested
+    // and produced output.
+    QString autoTeletextDirectory;
+    if (opts.teletext) {
+        autoTeletextDirectory = resolveTeletextHtmlDirectoryFromHints({
+            teletextOutputDirectory,
+            inputFileName,
+            metadataFilename
+        });
+        if (!autoTeletextDirectory.isEmpty()) {
+            if (!teletextViewerDialog) {
+                teletextViewerDialog = new TeletextViewerDialog(nullptr);
+                teletextViewerDialog->setWindowFlag(Qt::Window, true);
+            }
+            if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
+                teletextViewerDialog->setDirectory(autoTeletextDirectory);
+            }
+            teletextViewerDialog->show();
+            teletextViewerDialog->raise();
+            teletextViewerDialog->activateWindow();
         }
-        teletextViewerDialog->show();
-        teletextViewerDialog->raise();
-        teletextViewerDialog->activateWindow();
     }
     if (reloadingCurrentSource) {
         queueAnalysisRefreshPreservingUserState(inputFileName);
@@ -5385,95 +5467,6 @@ void MainWindow::on_actionProcess_VBI_triggered()
         } else {
             statusBar()->showMessage(tr("VBI processing completed for %1").arg(inputFileName), 4000);
         }
-    }
-}
-
-void MainWindow::on_actionProcess_VITS_triggered()
-{
-    QString defaultInput;
-    if (tbcSource.getIsSourceLoaded()) {
-        defaultInput = tbcSource.getCurrentSourceFilename();
-    }
-    QString inputFileName;
-    if (tbcSource.getIsSourceLoaded() && !tbcSource.getIsMetadataOnly()) {
-        const QString loadedSourceFilename = tbcSource.getCurrentSourceFilename();
-        if (!loadedSourceFilename.isEmpty() && QFileInfo::exists(loadedSourceFilename)) {
-            inputFileName = loadedSourceFilename;
-        }
-    }
-
-    if (inputFileName.isEmpty()) {
-        const QString startPath = defaultInput.isEmpty() ? configuration.getSourceDirectory() : defaultInput;
-#if defined(Q_OS_MACOS)
-        inputFileName = chooseFileViaAppleScript(startPath);
-#else
-        inputFileName = QFileDialog::getOpenFileName(this,
-                                                     tr("Select TBC file for VITS processing"),
-                                                     startPath,
-                                                     tr("TBC files (*.tbc *.ytbc *.ctbc *.tbcy *.tbcc);;All Files (*)"));
-#endif
-    }
-    if (inputFileName.isEmpty()) {
-        return;
-    }
-
-    const QString toolPath = resolveExternalExecutable({QStringLiteral("ld-process-vits")});
-    if (toolPath.isEmpty()) {
-        QMessageBox::warning(this, tr("Tool not found"),
-                             tr("ld-process-vits was not found in PATH or alongside the application."));
-        return;
-    }
-
-    QString preferredMetadataFilename;
-    if (tbcSource.getIsSourceLoaded()
-        && sameFilePath(inputFileName, tbcSource.getCurrentSourceFilename())) {
-        preferredMetadataFilename = tbcSource.getCurrentMetadataFilename();
-    }
-    const QString metadataFilename = resolveMetadataFilenameForSource(inputFileName, preferredMetadataFilename);
-    if (metadataFilename.isEmpty()) {
-        QMessageBox::warning(this, tr("Metadata not found"),
-                             tr("Could not find metadata for:\n%1\n\nExpected .db or .json metadata file.")
-                                 .arg(inputFileName));
-        return;
-    }
-
-    QString backupErrorMessage;
-    if (!createTimestampedMetadataBackup(metadataFilename, QStringLiteral(".vbup"), &backupErrorMessage)) {
-        QMessageBox::warning(this, tr("Backup failed"),
-                             backupErrorMessage.isEmpty()
-                                 ? tr("Could not create metadata backup before processing.")
-                                 : backupErrorMessage);
-        return;
-    }
-
-    QStringList toolArguments = {
-        metadataInputOptionForTool(toolPath), metadataFilename
-    };
-    const QString noBackupOption = noBackupOptionForTool(toolPath);
-    if (!noBackupOption.isEmpty()) {
-        toolArguments << noBackupOption;
-    }
-    toolArguments << inputFileName;
-
-    QString errorMessage;
-    if (!runExternalToolWithProgress(toolPath, toolArguments, tr("VITS processing"), &errorMessage)) {
-        if (errorMessage.contains(tr("cancelled"), Qt::CaseInsensitive)) {
-            statusBar()->showMessage(tr("VITS processing cancelled for %1").arg(inputFileName), 4000);
-            return;
-        }
-        QMessageBox::warning(this, tr("Process failed"),
-                             errorMessage.isEmpty()
-                                 ? tr("ld-process-vits failed.")
-                                 : errorMessage);
-        return;
-    }
-
-    const bool reloadingCurrentSource = tbcSource.getIsSourceLoaded()
-                                        && sameFilePath(inputFileName, tbcSource.getCurrentSourceFilename());
-    if (reloadingCurrentSource) {
-        queueAnalysisRefreshPreservingUserState(inputFileName);
-    } else {
-        statusBar()->showMessage(tr("VITS processing completed for %1").arg(inputFileName), 4000);
     }
 }
 
@@ -5491,10 +5484,13 @@ void MainWindow::on_actionFix_JSON_SNR_triggered()
                || filename.endsWith(QStringLiteral(".tbcc"), Qt::CaseInsensitive);
     };
 
-    const QString toolPath = resolveExternalExecutable({QStringLiteral("ld-process-vits")});
+    // VITS metrics processing is now a mode of ld-process-vbi (--vits), so fix
+    // JSON SNR by running ld-process-vbi with only VITS enabled (the four VBI
+    // decoders disabled to preserve any manually-edited VBI metadata).
+    const QString toolPath = resolveExternalExecutable({QStringLiteral("ld-process-vbi")});
     if (toolPath.isEmpty()) {
         QMessageBox::warning(this, tr("Tool not found"),
-                             tr("ld-process-vits was not found in PATH or alongside the application."));
+                             tr("ld-process-vbi was not found in PATH or alongside the application."));
         return;
     }
 
@@ -5567,6 +5563,32 @@ void MainWindow::on_actionFix_JSON_SNR_triggered()
     const QString noBackupOption = noBackupOptionForTool(toolPath);
     if (!noBackupOption.isEmpty()) {
         toolArguments << noBackupOption;
+    }
+
+    // Only recompute SNR: enable VITS and disable the four VBI decoders so
+    // existing VBI/NTSC/VITC/closed-caption metadata is round-tripped unchanged.
+    // Each flag is guarded so an older ld-process-vbi build degrades gracefully
+    // (missing --no-* flags just mean those decoders re-run, which is harmless;
+    // a missing --vits flag makes the operation a no-op and is reported below).
+    if (toolHelpListsOption(toolPath, QStringLiteral("--vits"))) {
+        toolArguments << QStringLiteral("--vits");
+    } else {
+        QMessageBox::warning(this, tr("VITS not supported"),
+                             tr("The selected ld-process-vbi build does not support the --vits flag, "
+                                "so the SNR metrics cannot be recomputed. Use a newer ld-process-vbi build."));
+        return;
+    }
+    if (toolHelpListsOption(toolPath, QStringLiteral("--no-vbi-core"))) {
+        toolArguments << QStringLiteral("--no-vbi-core");
+    }
+    if (toolHelpListsOption(toolPath, QStringLiteral("--no-ntsc"))) {
+        toolArguments << QStringLiteral("--no-ntsc");
+    }
+    if (toolHelpListsOption(toolPath, QStringLiteral("--no-vitc"))) {
+        toolArguments << QStringLiteral("--no-vitc");
+    }
+    if (toolHelpListsOption(toolPath, QStringLiteral("--no-closed-captions"))) {
+        toolArguments << QStringLiteral("--no-closed-captions");
     }
     toolArguments << inputTbcFilename;
 

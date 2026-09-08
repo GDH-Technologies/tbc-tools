@@ -9,6 +9,8 @@ add_library(tbc-library STATIC
     tbc/segments.cpp
     tbc/sourceaudio.cpp
     tbc/sourcevideo.cpp
+    tbc/vitsanalyser.cpp
+    tbc/processingpool.cpp
     tbc/vbidecoder.cpp
     tbc/videoiddecoder.cpp
     tbc/vitcdecoder.cpp
