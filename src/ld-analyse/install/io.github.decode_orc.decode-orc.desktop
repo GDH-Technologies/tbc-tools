@@ -1,0 +1,22 @@
+# OVERRIDE - not a package file. Do NOT add this to install(FILES ... share/applications):
+# upstream decode-orc installs a file of this exact name into the same nix profile, and two
+# packages claiming one filename is a `nix profile add` conflict. decode-desktop-sync writes
+# it into $XDG_DATA_HOME/applications instead, which wins by XDG precedence.
+#
+# Upstream ships this entry with a bare `Exec=orc-gui` and no MimeType=, so a file manager has
+# no way to open a .orcprj with it. orc/gui/main.cpp already takes a positional project file
+# and dispatches .orcprj to openProject(), so only these two lines were ever missing.
+# The type itself is defined by orcprj.xml alongside this file.
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Decode Orc
+GenericName=LaserDisc Workflow Orchestrator
+Comment=Orchestration and processing framework for LaserDisc and tape decoding workflows
+Exec=orc-gui %f
+Icon=io.github.decode_orc.decode-orc
+Terminal=false
+MimeType=application/x-orcprj;
+Categories=AudioVideo;Video;
+Keywords=laserdisc;video;decode;tbc;processing;
+StartupNotify=true
