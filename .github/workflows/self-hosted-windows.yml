@@ -220,15 +220,31 @@ jobs:
         #
         # qtbase covers Core, Gui, Widgets, Sql and Network; qtsvg is the one
         # extra module CMakeLists.txt asks for.
+        #
+        # A Qt installed by hand is used as-is rather than duplicated, so the
+        # official installer's default location works as well as ours. Set
+        # TBC_QT_DIR on the runner to point somewhere else entirely; otherwise
+        # the candidates below are probed in order and aqt only runs if none
+        # of them holds a usable Qt of the pinned version.
         run: |
           $ErrorActionPreference = 'Stop'
           $qtRoot = "$env:TOOLS_ROOT\Qt"
-          $qtDir  = "$qtRoot\$env:QT_VERSION\$env:QT_DIR_NAME"
-          if (-not (Test-Path "$qtDir\bin\windeployqt.exe")) {
+          $candidates = @()
+          if ($env:TBC_QT_DIR) { $candidates += $env:TBC_QT_DIR }
+          $candidates += @(
+            "$qtRoot\$env:QT_VERSION\$env:QT_DIR_NAME",
+            "C:\Qt\$env:QT_VERSION\$env:QT_DIR_NAME"
+          )
+          $qtDir = $candidates | Where-Object { Test-Path "$_\bin\windeployqt.exe" } | Select-Object -First 1
+          if ($qtDir) {
+            Write-Host "Found an existing Qt at $qtDir"
+          } else {
+            Write-Host "No Qt $env:QT_VERSION found in: $($candidates -join '; ')"
             python -m pip install --upgrade aqtinstall
             if ($LASTEXITCODE -ne 0) { throw "aqtinstall install failed" }
             python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -m qtsvg -O $qtRoot
             if ($LASTEXITCODE -ne 0) { throw "aqt install-qt failed" }
+            $qtDir = "$qtRoot\$env:QT_VERSION\$env:QT_DIR_NAME"
           }
           foreach ($probe in @("$qtDir\bin\windeployqt.exe",
                                "$qtDir\bin\Qt6Core.dll",
