@@ -294,11 +294,16 @@ jobs:
         # run; the test binaries are filtered back out of the release copy.
         run: |
           $ErrorActionPreference = 'Stop'
+          # The triplet argument MUST be quoted. Unquoted, PowerShell parses
+          # `-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET` with its `-Param:Value`
+          # colon-binding syntax and hands vcpkg the literal text, which fails
+          # with "Invalid triplet name ... on expression: $env:VCPKG_TRIPLET".
+          # Quoting forces ordinary string interpolation.
           cmake --preset vcpkg `
             -DCMAKE_BUILD_TYPE=Release `
             -DUSE_QT_VERSION=6 `
             -DBUILD_PYTHON=false `
-            -DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET `
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET" `
             -DVCPKG_APPLOCAL_DEPS=ON `
             -DBUILD_TESTING=ON
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
