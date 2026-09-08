@@ -790,11 +790,25 @@
     <property name="title">
      <string>View</string>
     </property>
+    <widget class="QMenu" name="menuUiScale">
+     <property name="title">
+      <string>UI Scale</string>
+     </property>
+     <addaction name="actionUiScaleAuto"/>
+     <addaction name="separator"/>
+     <addaction name="actionUiScale100"/>
+     <addaction name="actionUiScale125"/>
+     <addaction name="actionUiScale150"/>
+     <addaction name="actionUiScale175"/>
+     <addaction name="actionUiScale200"/>
+    </widget>
     <addaction name="actionZoom_In"/>
     <addaction name="actionZoom_Out"/>
     <addaction name="actionZoom_1x"/>
     <addaction name="actionZoom_2x"/>
     <addaction name="actionZoom_3x"/>
+    <addaction name="separator"/>
+    <addaction name="menuUiScale"/>
     <addaction name="separator"/>
     <addaction name="toggleAutoResize"/>
     <addaction name="actionResizeFrameWithWindow"/>
@@ -1004,6 +1018,54 @@
   <action name="actionVideo_metadata">
    <property name="text">
     <string>Video metadata...</string>
+   </property>
+  </action>
+  <action name="actionUiScaleAuto">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Auto (follow the desktop)</string>
+   </property>
+  </action>
+  <action name="actionUiScale100">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>100%</string>
+   </property>
+  </action>
+  <action name="actionUiScale125">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>125%</string>
+   </property>
+  </action>
+  <action name="actionUiScale150">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>150%</string>
+   </property>
+  </action>
+  <action name="actionUiScale175">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>175%</string>
+   </property>
+  </action>
+  <action name="actionUiScale200">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>200%</string>
    </property>
   </action>
   <action name="actionZoom_1x">

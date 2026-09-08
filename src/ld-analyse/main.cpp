@@ -9,6 +9,7 @@
  ******************************************************************************/
 
 #include "mainwindow.h"
+#include "configuration.h"
 #include <QApplication>
 #include <QDebug>
 #include <QtGlobal>
@@ -164,14 +165,35 @@ int main(int argc, char *argv[])
 #endif
     configureBundledQtPluginPaths(argc, argv);
 
-    tbc::ui::prepareStockThemeEnvironment();
-
-    tbc::ui::ThemedApplication a(argc, argv);
-
-    // Set application name and version
+    // Set application name and version BEFORE anything reads the configuration
+    // file or constructs the application. QStandardPaths::ConfigLocation - which
+    // Configuration uses to locate ld-analyse.ini - includes the application
+    // name on Windows, so reading the UI scale below with the name still unset
+    // would silently look in the wrong directory there.
     QCoreApplication::setApplicationName("ld-analyse");
     QCoreApplication::setApplicationVersion(QString(APP_VERSION));
     QCoreApplication::setOrganizationDomain("github.com");
+
+    // Apply the saved UI scale. Qt has no runtime API for a manual global scale
+    // factor, so this has to be in the environment before the application is
+    // constructed. 0 means "follow the OS scale", and an operator who has set
+    // QT_SCALE_FACTOR themselves keeps control of it.
+    {
+        Configuration startupConfiguration;
+        const double uiScaleFactor = startupConfiguration.getUiScaleFactor();
+        if (uiScaleFactor != 0.0 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR")) {
+            qputenv("QT_SCALE_FACTOR", QByteArray::number(uiScaleFactor));
+        }
+    }
+
+    // Qt 6 already defaults to PassThrough; stating it pins fractional desktop
+    // scales (125%, 150%) against a future change of the platform default.
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
+    tbc::ui::prepareStockThemeEnvironment();
+
+    tbc::ui::ThemedApplication a(argc, argv);
 
     // Set desktop file name for proper GNOME integration
     // This must match the installed .desktop file name (without .desktop extension)

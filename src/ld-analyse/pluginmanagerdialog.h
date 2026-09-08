@@ -27,6 +27,7 @@
 
 #include "plugincatalog.h"
 
+class Configuration;
 class CudaPluginManager;
 class GenericPluginInstaller;
 class QLabel;
@@ -44,6 +45,10 @@ class PluginManagerDialog : public QDialog
 public:
     explicit PluginManagerDialog(QWidget *parent = nullptr);
     ~PluginManagerDialog() override;
+
+    // Supplies the shared configuration so the local-archive picker opens where
+    // an archive was last chosen. Not owned; may be left unset.
+    void setConfiguration(Configuration *configuration);
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -77,6 +82,8 @@ private:
     int m_selectedIndex = -1;  // index into m_plugins, or -1 if none selected
     bool m_catalogFetchInProgress = false;
     bool m_installCancelled = false;  // set by Cancel download; consumed by onInstallFailed
+
+    Configuration *m_configuration = nullptr;  // shared settings; not owned, may be null
 
     PluginCatalog *m_catalog;              // discovery (bundled/cached/remote)
     CudaPluginManager *m_cudaManager;      // backend for cuda-runtime plugins

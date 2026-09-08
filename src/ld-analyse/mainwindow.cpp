@@ -17,6 +17,7 @@
 #include "tbc/logging.h"
 
 #include <QAbstractButton>
+#include <QActionGroup>
 #include <QApplication>
 #include <QDir>
 #include <QFile>
@@ -232,7 +233,11 @@ void ensureSvgButtonIcon(QAbstractButton *button, const QString &resourcePath)
     if (icon.isNull() || icon.availableSizes().isEmpty()) {
         QSvgRenderer renderer(resourcePath);
         if (renderer.isValid()) {
-            QPixmap pixmap(iconSize);
+            // Rasterise at the device pixel ratio, not the logical icon size, or
+            // this fallback path produces a blurry icon on a HiDPI display.
+            const qreal devicePixelRatio = button->devicePixelRatioF();
+            QPixmap pixmap(iconSize * devicePixelRatio);
+            pixmap.setDevicePixelRatio(devicePixelRatio);
             pixmap.fill(Qt::transparent);
             QPainter painter(&pixmap);
             renderer.render(&painter);
@@ -1397,6 +1402,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     videoParametersDialog = new VideoParametersDialog(this);
     chromaDecoderConfigDialog = new ChromaDecoderConfigDialog(this);
     metadataConversionDialog = new MetadataConversionDialog(this);
+    metadataConversionDialog->setConfiguration(&configuration);
     metadataStatusDialog = new MetadataStatusDialog(this);
     metadataEditorDialog = new MetadataEditorDialog(this);
     connect(metadataEditorDialog, &MetadataEditorDialog::videoParametersChanged,
@@ -1487,6 +1493,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
                 updateSegmentsViewerState();
             });
     exportDialog = new ExportDialog(this);
+    exportDialog->setConfiguration(&configuration);
     ui->mainTabWidget->addTab(exportDialog, tr("Export"));
     exportDialog->setGenerateProxyEnabledPreference(configuration.getGenerateProxyEnabled());
     exportDialog->setExportProfileConfigPreference(configuration.getExportProfileConfigEnabled(),
@@ -1628,6 +1635,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
         restoreGeometry(savedMainGeometry);
     }
     scaleFactor = configuration.getMainWindowScaleFactor();
+    setupUiScaleMenu();
 
     vbiDialog->restoreGeometry(configuration.getVbiDialogGeometry());
     oscilloscopeDialog->restoreGeometry(configuration.getOscilloscopeDialogGeometry());
@@ -2167,17 +2175,23 @@ bool MainWindow::mapViewerToSourceCoordinates(const QPoint &viewerPoint, qint32 
 #else
     const QPixmap viewerPixmap = *(ui->imageViewerLabel->pixmap());
 #endif
-    if (viewerPixmap.isNull() || viewerPixmap.width() <= 0 || viewerPixmap.height() <= 0) {
+    // viewerPoint and QLabel::width()/height() are logical (device-independent)
+    // pixels, but QPixmap::width()/height() are device pixels. On a HiDPI or
+    // fractionally-scaled display the two differ, so the pixmap's logical size
+    // is what the centring, bounds and normalisation below must use - mixing
+    // them offsets the origin and halves the reported source coordinates.
+    const QSizeF viewerSize = viewerPixmap.deviceIndependentSize();
+    if (viewerPixmap.isNull() || viewerSize.width() <= 0.0 || viewerSize.height() <= 0.0) {
         return false;
     }
 
-    const double offsetX = (static_cast<double>(ui->imageViewerLabel->width()) - static_cast<double>(viewerPixmap.width())) / 2.0;
-    const double offsetY = (static_cast<double>(ui->imageViewerLabel->height()) - static_cast<double>(viewerPixmap.height())) / 2.0;
+    const double offsetX = (static_cast<double>(ui->imageViewerLabel->width()) - viewerSize.width()) / 2.0;
+    const double offsetY = (static_cast<double>(ui->imageViewerLabel->height()) - viewerSize.height()) / 2.0;
     const double localX = static_cast<double>(viewerPoint.x()) - offsetX;
     const double localY = static_cast<double>(viewerPoint.y()) - offsetY;
     if (localX < 0.0 || localY < 0.0
-        || localX >= static_cast<double>(viewerPixmap.width())
-        || localY >= static_cast<double>(viewerPixmap.height())) {
+        || localX >= viewerSize.width()
+        || localY >= viewerSize.height()) {
         return false;
     }
 
@@ -2192,10 +2206,10 @@ bool MainWindow::mapViewerToSourceCoordinates(const QPoint &viewerPoint, qint32 
     }
 
     sourceX = qBound<qint32>(0,
-                             static_cast<qint32>((localX / static_cast<double>(viewerPixmap.width())) * sourceWidth),
+                             static_cast<qint32>((localX / viewerSize.width()) * sourceWidth),
                              sourceWidth - 1);
     sourceY = qBound<qint32>(0,
-                             static_cast<qint32>((localY / static_cast<double>(viewerPixmap.height())) * sourceHeight),
+                             static_cast<qint32>((localY / viewerSize.height()) * sourceHeight),
                              sourceHeight - 1);
     return true;
 }
@@ -2285,6 +2299,7 @@ void MainWindow::dropEvent(QDropEvent *event)
     if (isTeletextStreamInputExtension(droppedFile)) {
         if (!teletextViewerDialog) {
             teletextViewerDialog = new TeletextViewerDialog(nullptr);
+            teletextViewerDialog->setConfiguration(&configuration);
             teletextViewerDialog->setWindowFlag(Qt::Window, true);
         }
         QString errorMessage;
@@ -3085,16 +3100,29 @@ void MainWindow::updateImageViewer()
 
     // Scale and apply the pixmap (only if it's valid)
     if (!pixmap.isNull()) {
+        // width/height are logical (device-independent) pixels: the size the
+        // frame occupies in the layout. The pixmap itself is rendered at the
+        // display's device pixel ratio so it stays sharp on a HiDPI or
+        // fractionally-scaled screen, and carries that ratio so Qt lays it out
+        // at the logical size instead of upscaling it a second time.
+        //
+        // NOTE: from here on scaledPixmap.width()/height() are DEVICE pixels
+        // while every QPainter below works in LOGICAL ones - use width/height.
         const int width = static_cast<int>(scaleFactor * (pixmap.size().width() + adjustment));
         const int height = static_cast<int>(scaleFactor * pixmap.size().height());
-        QPixmap scaledPixmap = pixmap.scaled(width, height,
+        const qreal devicePixelRatio = ui->imageViewerLabel->devicePixelRatioF();
+        QPixmap scaledPixmap = pixmap.scaled(QSize(width, height) * devicePixelRatio,
                                              Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        scaledPixmap.setDevicePixelRatio(devicePixelRatio);
 
         if (yuvRangeSettings.overlayEnabled && !tbcSource.getIsMetadataOnly()) {
             const QImage overlayImage = tbcSource.getYuvRangeOverlayImage(yuvRangeSettings);
             if (!overlayImage.isNull() && overlayImage.width() > 0 && overlayImage.height() > 0) {
-                const QPixmap scaledOverlay = QPixmap::fromImage(overlayImage).scaled(
+                // The overlay is source resolution, so scaling it to the frame's
+                // device size costs nothing and keeps it as sharp as the frame.
+                QPixmap scaledOverlay = QPixmap::fromImage(overlayImage).scaled(
                     scaledPixmap.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+                scaledOverlay.setDevicePixelRatio(devicePixelRatio);
                 QPainter painter(&scaledPixmap);
                 painter.setRenderHint(QPainter::Antialiasing, false);
                 painter.drawPixmap(0, 0, scaledOverlay);
@@ -3104,8 +3132,8 @@ void MainWindow::updateImageViewer()
         if (showExportBoundary) {
             const QVector<QRect> activeRects = getActiveVideoRects();
             if (!activeRects.isEmpty() && pixmap.width() > 0 && pixmap.height() > 0) {
-                const double scaleX = static_cast<double>(scaledPixmap.width()) / static_cast<double>(pixmap.width());
-                const double scaleY = static_cast<double>(scaledPixmap.height()) / static_cast<double>(pixmap.height());
+                const double scaleX = static_cast<double>(width) / static_cast<double>(pixmap.width());
+                const double scaleY = static_cast<double>(height) / static_cast<double>(pixmap.height());
                 QPainter painter(&scaledPixmap);
                 painter.setRenderHint(QPainter::Antialiasing, false);
 
@@ -3136,13 +3164,13 @@ void MainWindow::updateImageViewer()
             && cursorReadoutImage.width() > 0 && cursorReadoutImage.height() > 0) {
             const QRect sourceSelectionRect = vectorscopeDialog->customAreaRect();
             if (sourceSelectionRect.width() > 0 && sourceSelectionRect.height() > 0) {
-                const double scaleX = static_cast<double>(scaledPixmap.width()) / static_cast<double>(cursorReadoutImage.width());
-                const double scaleY = static_cast<double>(scaledPixmap.height()) / static_cast<double>(cursorReadoutImage.height());
+                const double scaleX = static_cast<double>(width) / static_cast<double>(cursorReadoutImage.width());
+                const double scaleY = static_cast<double>(height) / static_cast<double>(cursorReadoutImage.height());
                 QRect scaledSelectionRect(qRound(sourceSelectionRect.x() * scaleX),
                                           qRound(sourceSelectionRect.y() * scaleY),
                                           qMax(1, qRound(sourceSelectionRect.width() * scaleX)),
                                           qMax(1, qRound(sourceSelectionRect.height() * scaleY)));
-                scaledSelectionRect = scaledSelectionRect.intersected(QRect(0, 0, scaledPixmap.width(), scaledPixmap.height()));
+                scaledSelectionRect = scaledSelectionRect.intersected(QRect(0, 0, width, height));
 
                 if (scaledSelectionRect.width() > 0 && scaledSelectionRect.height() > 0) {
                     QPainter painter(&scaledPixmap);
@@ -5111,6 +5139,14 @@ void MainWindow::on_actionOpen_TBC_file_triggered()
     }
 #endif
 
+    // Remember where the user browsed to as soon as they pick something. The
+    // source directory used to be written only after a load succeeded, so an
+    // unsupported or broken file left the next Open dialog somewhere else.
+    if (!inputFileName.isEmpty()) {
+        configuration.setSourceDirectory(QFileInfo(inputFileName).absolutePath());
+        configuration.writeConfiguration();
+    }
+
     if (!inputFileName.isEmpty() && !isSupportedInputExtension(inputFileName)) {
         QMessageBox::warning(this, tr("Unsupported file"),
                              tr("Please select a supported file type (.tbc, .ytbc, .ctbc, .tbcy, .tbcc, .db, .json)."));
@@ -5396,6 +5432,7 @@ void MainWindow::on_actionProcess_VBI_triggered()
         if (!autoTeletextDirectory.isEmpty()) {
             if (!teletextViewerDialog) {
                 teletextViewerDialog = new TeletextViewerDialog(nullptr);
+                teletextViewerDialog->setConfiguration(&configuration);
                 teletextViewerDialog->setWindowFlag(Qt::Window, true);
             }
             if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
@@ -5681,6 +5718,7 @@ void MainWindow::on_actionEFM_Handler_triggered()
 {
     if (!efmHandlerDialog) {
         efmHandlerDialog = new EfmHandlerDialog(this);
+        efmHandlerDialog->setConfiguration(&configuration);
         efmHandlerDialog->setModal(false);
         efmHandlerDialog->setWindowModality(Qt::NonModal);
         efmHandlerDialog->setWindowFlags(Qt::Window
@@ -5888,6 +5926,7 @@ void MainWindow::on_actionPluginManager_triggered()
 {
     if (!pluginManagerDialog) {
         pluginManagerDialog = new PluginManagerDialog(this);
+        pluginManagerDialog->setConfiguration(&configuration);
         pluginManagerDialog->setWindowFlag(Qt::Window, true);
     }
     pluginManagerDialog->show();
@@ -6084,6 +6123,7 @@ void MainWindow::on_actionTeletext_Viewer_triggered()
 {
     if (!teletextViewerDialog) {
         teletextViewerDialog = new TeletextViewerDialog(nullptr);
+        teletextViewerDialog->setConfiguration(&configuration);
         teletextViewerDialog->setWindowFlag(Qt::Window, true);
     }
     const QString suggestedDirectory = resolveTeletextHtmlDirectoryFromHints({
@@ -6814,6 +6854,96 @@ void MainWindow::on_actionZoom_1x_triggered()
 	MainWindow::resize_on_aspect();
 }
 
+// Build the View -> UI Scale submenu. The zoom actions above size the picture;
+// these size the application itself. Qt reads its scale factor from the
+// environment while the application is constructed, so a change here applies at
+// the next start (see main.cpp) rather than immediately.
+void MainWindow::setupUiScaleMenu()
+{
+    if (!ui || !ui->menuUiScale) {
+        return;
+    }
+
+    // Factor of 0 means "follow the desktop scale"; the rest are absolute.
+    const QVector<QPair<QAction *, double>> scaleActions = {
+        { ui->actionUiScaleAuto, 0.0 },  { ui->actionUiScale100, 1.0 },
+        { ui->actionUiScale125, 1.25 },  { ui->actionUiScale150, 1.5 },
+        { ui->actionUiScale175, 1.75 },  { ui->actionUiScale200, 2.0 },
+    };
+
+    QActionGroup *scaleGroup = new QActionGroup(this);
+    scaleGroup->setExclusive(true);
+    const double currentScale = configuration.getUiScaleFactor();
+    for (const auto &entry : scaleActions) {
+        if (!entry.first) continue;
+        entry.first->setData(entry.second);
+        entry.first->setChecked(qFuzzyCompare(entry.second + 1.0, currentScale + 1.0));
+        scaleGroup->addAction(entry.first);
+    }
+
+    // An operator who exports QT_SCALE_FACTOR keeps control of the scale, and
+    // this menu could not report the truth, so it is disabled rather than lying.
+    if (!qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR")) {
+        ui->menuUiScale->setEnabled(false);
+        ui->menuUiScale->setToolTip(tr("The QT_SCALE_FACTOR environment variable is set, "
+                                       "and overrides this setting"));
+    }
+
+    connect(scaleGroup, &QActionGroup::triggered, this, &MainWindow::handleUiScaleSelected);
+}
+
+void MainWindow::handleUiScaleSelected(QAction *action)
+{
+    if (!action) {
+        return;
+    }
+
+    const double selectedScale = action->data().toDouble();
+    if (qFuzzyCompare(selectedScale + 1.0, configuration.getUiScaleFactor() + 1.0)) {
+        return;
+    }
+
+    configuration.setUiScaleFactor(selectedScale);
+    configuration.writeConfiguration();
+
+    QMessageBox restartBox(this);
+    restartBox.setIcon(QMessageBox::Information);
+    restartBox.setWindowTitle(tr("UI scale changed"));
+    restartBox.setText(tr("The UI scale is applied when ld-analyse starts."));
+    restartBox.setInformativeText(tr("Restart now to use the new scale?"));
+    QPushButton *restartButton = restartBox.addButton(tr("Restart now"), QMessageBox::AcceptRole);
+    restartBox.addButton(tr("Later"), QMessageBox::RejectRole);
+    restartBox.setDefaultButton(restartButton);
+    restartBox.exec();
+    if (restartBox.clickedButton() != restartButton) {
+        return;
+    }
+
+    // Never restart out from under unsaved metadata edits. "Save Metadata"
+    // being enabled is how the rest of the GUI tracks that state.
+    if (ui->actionSave_Metadata && ui->actionSave_Metadata->isEnabled()) {
+        QMessageBox::warning(this, tr("Unsaved metadata changes"),
+                             tr("This source has unsaved metadata changes, so ld-analyse was not "
+                                "restarted. Save the metadata and restart when you are ready; the "
+                                "new UI scale is applied at the next start."));
+        return;
+    }
+
+    // Carry the loaded source across the restart so the session comes back.
+    QStringList arguments;
+    const QString currentSource = tbcSource.getCurrentSourceFilename();
+    if (!currentSource.isEmpty()) {
+        arguments << currentSource;
+    }
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments)) {
+        QMessageBox::warning(this, tr("Could not restart"),
+                             tr("ld-analyse could not be restarted automatically. The new UI scale "
+                                "is applied the next time you start it."));
+        return;
+    }
+    close();
+}
+
 // 2:1 zoom menu option
 void MainWindow::on_actionZoom_2x_triggered()
 {
@@ -7359,8 +7489,12 @@ void MainWindow::resize_on_aspect()
 
     const int nonViewerWidth = this->width() - viewportSize.width();
     const int nonViewerHeight = this->height() - viewportSize.height();
-    QSize targetWindowSize(pixmap.width() + nonViewerWidth,
-                           pixmap.height() + nonViewerHeight);
+    // The window geometry is in logical pixels, so the frame must contribute its
+    // logical size here - its raw pixmap size is device pixels, which on a HiDPI
+    // display would ask for a window several times too large.
+    const QSize pixmapLogicalSize = pixmap.deviceIndependentSize().toSize();
+    QSize targetWindowSize(pixmapLogicalSize.width() + nonViewerWidth,
+                           pixmapLogicalSize.height() + nonViewerHeight);
     targetWindowSize = targetWindowSize.expandedTo(this->minimumSize());
 
     if (QScreen *windowScreen = this->screen()) {

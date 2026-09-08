@@ -17,6 +17,7 @@
 #include <QSize>
 
 class QCheckBox;
+class Configuration;
 class QComboBox;
 class QDragEnterEvent;
 class QDragMoveEvent;
@@ -38,6 +39,10 @@ class TeletextViewerDialog : public QDialog
 
 public:
     explicit TeletextViewerDialog(QWidget *parent = nullptr);
+
+    // Supplies the shared configuration so the directory and stream pickers open
+    // where teletext files were last used. Not owned; may be left unset.
+    void setConfiguration(Configuration *configuration);
     void setDirectory(const QString &directoryPath);
     QString directory() const;
     bool openTeletextStream(const QString &streamPath, QString *errorMessage = nullptr);
@@ -70,6 +75,7 @@ private:
     bool directoryContainsHtml() const;
     QString selectedPagePath() const;
 
+    Configuration *configuration = nullptr;  // shared settings; not owned, may be null
     QString currentDirectoryPath;
     QString lastLoadedPagePath;
     QDateTime lastLoadedPageModified;

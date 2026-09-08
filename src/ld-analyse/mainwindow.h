@@ -351,6 +351,8 @@ private:
     QString outputRootDirectoryForCurrentSource();
     QString outputBaseNameForCurrentSource();
     void applyEfmHandlerAutoloads(const QString &directoryPath);
+    void setupUiScaleMenu();
+    void handleUiScaleSelected(QAction *action);
     void updateImageViewer();
     bool shouldRenderFrameAsync() const;
     void startAsyncFrameRender();

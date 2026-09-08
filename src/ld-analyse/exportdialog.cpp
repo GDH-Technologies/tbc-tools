@@ -3,6 +3,9 @@
 #include "ui_exportdialog.h"
 
 #include "tbcsource.h"
+#include "configuration.h"
+
+#include "tbc/uistyle.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -134,79 +137,12 @@ QString formatShellCommand(const QString &program, const QStringList &args)
     return parts.join(' ');
 }
 
-QWidget *dialogParentWidget(QWidget *widget)
-{
-    if (!widget) {
-        return nullptr;
-    }
+// The file-dialog helpers these call sites use are shared by every GUI
+// tool and live in tbc/uistyle.h; this file used to carry its own copy.
+using tbc::ui::runDirectoryDialog;
+using tbc::ui::runOpenFileDialog;
+using tbc::ui::runSaveFileDialog;
 
-    QWidget *window = widget->window();
-    return window ? window : widget;
-}
-
-QStringList dialogNameFilters(const QString &filters)
-{
-    return filters.split(QStringLiteral(";;"), Qt::SkipEmptyParts);
-}
-
-void applyCommonFileDialogOptions(QFileDialog *dialog)
-{
-    if (!dialog) {
-        return;
-    }
-
-    dialog->setOption(QFileDialog::DontResolveSymlinks, true);
-#if defined(Q_OS_MACOS)
-    dialog->setOption(QFileDialog::DontUseNativeDialog, true);
-#endif
-}
-
-QString runOpenFileDialog(QWidget *parent,
-                          const QString &title,
-                          const QString &startPath,
-                          const QString &filters)
-{
-    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setNameFilters(dialogNameFilters(filters));
-    applyCommonFileDialogOptions(&dialog);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-        return QString();
-    }
-    return dialog.selectedFiles().constFirst();
-}
-
-QString runSaveFileDialog(QWidget *parent,
-                          const QString &title,
-                          const QString &startPath,
-                          const QString &filters)
-{
-    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
-    dialog.setAcceptMode(QFileDialog::AcceptSave);
-    dialog.setFileMode(QFileDialog::AnyFile);
-    dialog.setNameFilters(dialogNameFilters(filters));
-    dialog.setDefaultSuffix(QStringLiteral("json"));
-    applyCommonFileDialogOptions(&dialog);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-        return QString();
-    }
-    return dialog.selectedFiles().constFirst();
-}
-
-QString runDirectoryDialog(QWidget *parent,
-                           const QString &title,
-                           const QString &startPath)
-{
-    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
-    dialog.setFileMode(QFileDialog::Directory);
-    dialog.setOption(QFileDialog::ShowDirsOnly, true);
-    applyCommonFileDialogOptions(&dialog);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-        return QString();
-    }
-    return dialog.selectedFiles().constFirst();
-}
 QString normalizeAudioTrackPathInput(const QString &path)
 {
     QString normalized = path.trimmed();
@@ -1842,6 +1778,31 @@ ExportDialog::~ExportDialog()
     delete ui;
 }
 
+void ExportDialog::setConfiguration(Configuration *newConfiguration)
+{
+    configuration = newConfiguration;
+}
+
+QString ExportDialog::audioTrackStartDirectory() const
+{
+    const QString inputDirectory =
+        currentInputFile.isEmpty() ? QString() : QFileInfo(currentInputFile).absolutePath();
+    if (configuration) {
+        return configuration->getLastDirectory(DirectoryPurpose::AudioTrack, inputDirectory);
+    }
+    return inputDirectory;
+}
+
+void ExportDialog::rememberExportDirectory(const char *purpose, const QString &chosenPath)
+{
+    if (!configuration || chosenPath.isEmpty()) {
+        return;
+    }
+    configuration->setLastDirectory(QString::fromLatin1(purpose),
+                                    QFileInfo(chosenPath).absolutePath());
+    configuration->writeConfiguration();
+}
+
 void ExportDialog::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
@@ -2834,11 +2795,18 @@ void ExportDialog::on_outputBrowseButton_clicked()
     if (initialDirectory.isEmpty()) {
         initialDirectory = QDir::homePath();
     }
+    if (configuration) {
+        initialDirectory = configuration->getLastDirectory(DirectoryPurpose::Export, initialDirectory);
+    }
     const QString selectedDirectory = runDirectoryDialog(this,
                                                          tr("Select output directory"),
                                                          initialDirectory);
     if (selectedDirectory.isEmpty()) {
         return;
+    }
+    if (configuration) {
+        configuration->setLastDirectory(DirectoryPurpose::Export, selectedDirectory);
+        configuration->writeConfiguration();
     }
     const QString sanitizedSuggestedOutput = sanitizeOutputBaseName(suggestedOutput);
     QString baseName = QFileInfo(sanitizedSuggestedOutput).fileName();
@@ -2857,10 +2825,11 @@ void ExportDialog::on_audio1BrowseButton_clicked()
 {
     const QString selected = runOpenFileDialog(this,
                                                tr("Select audio track 1"),
-                                               currentInputFile.isEmpty() ? QString() : QFileInfo(currentInputFile).absolutePath(),
+                                               audioTrackStartDirectory(),
                                                tr("Audio Files (*.wav *.flac *.aiff *.aif *.mp3 *.m4a *.aac *.ogg *.pcm);;All Files (*)"));
     if (!selected.isEmpty()) {
         ui->audio1LineEdit->setText(selected);
+        rememberExportDirectory(DirectoryPurpose::AudioTrack, selected);
     }
 }
 
@@ -2868,10 +2837,11 @@ void ExportDialog::on_audio2BrowseButton_clicked()
 {
     const QString selected = runOpenFileDialog(this,
                                                tr("Select audio track 2"),
-                                               currentInputFile.isEmpty() ? QString() : QFileInfo(currentInputFile).absolutePath(),
+                                               audioTrackStartDirectory(),
                                                tr("Audio Files (*.wav *.flac *.aiff *.aif *.mp3 *.m4a *.aac *.ogg *.pcm);;All Files (*)"));
     if (!selected.isEmpty()) {
         ui->audio2LineEdit->setText(selected);
+        rememberExportDirectory(DirectoryPurpose::AudioTrack, selected);
     }
 }
 
@@ -2879,10 +2849,11 @@ void ExportDialog::on_audio3BrowseButton_clicked()
 {
     const QString selected = runOpenFileDialog(this,
                                                tr("Select audio track 3"),
-                                               currentInputFile.isEmpty() ? QString() : QFileInfo(currentInputFile).absolutePath(),
+                                               audioTrackStartDirectory(),
                                                tr("Audio Files (*.wav *.flac *.aiff *.aif *.mp3 *.m4a *.aac *.ogg *.pcm);;All Files (*)"));
     if (!selected.isEmpty()) {
         ui->audio3LineEdit->setText(selected);
+        rememberExportDirectory(DirectoryPurpose::AudioTrack, selected);
     }
 }
 
@@ -2890,10 +2861,11 @@ void ExportDialog::on_audio4BrowseButton_clicked()
 {
     const QString selected = runOpenFileDialog(this,
                                                tr("Select audio track 4"),
-                                               currentInputFile.isEmpty() ? QString() : QFileInfo(currentInputFile).absolutePath(),
+                                               audioTrackStartDirectory(),
                                                tr("Audio Files (*.wav *.flac *.aiff *.aif *.mp3 *.m4a *.aac *.ogg *.pcm);;All Files (*)"));
     if (!selected.isEmpty()) {
         ui->audio4LineEdit->setText(selected);
+        rememberExportDirectory(DirectoryPurpose::AudioTrack, selected);
     }
 }
 
@@ -2923,6 +2895,10 @@ void ExportDialog::on_exportProfileConfigLoadButton_clicked()
         startPath = QDir::homePath();
     }
 
+    if (configuration) {
+        startPath = configuration->getLastDirectory(DirectoryPurpose::Profile, startPath);
+    }
+
     const QString selectedPath = runOpenFileDialog(this,
                                                    tr("Select custom tbc-video-export JSON profile set"),
                                                    startPath,
@@ -2931,6 +2907,7 @@ void ExportDialog::on_exportProfileConfigLoadButton_clicked()
         updateProfileDependentControls();
         return;
     }
+    rememberExportDirectory(DirectoryPurpose::Profile, selectedPath);
 
     const QFileInfo selectedInfo(selectedPath);
     if (!selectedInfo.exists() || !selectedInfo.isFile() || !selectedInfo.isReadable()) {
@@ -2968,11 +2945,18 @@ void ExportDialog::on_exportProfileConfigEjectButton_clicked()
     if (startPath.isEmpty()) {
         startPath = QDir(QDir::homePath()).filePath(QStringLiteral("tbc-video-export.json"));
     }
+    if (configuration) {
+        // Keep the suggested filename, but move it into the remembered directory.
+        const QString rememberedDirectory =
+            configuration->getLastDirectory(DirectoryPurpose::Profile, QFileInfo(startPath).absolutePath());
+        startPath = QDir(rememberedDirectory).filePath(QFileInfo(startPath).fileName());
+    }
 
     QString selectedPath = runSaveFileDialog(this,
                                              tr("Eject default tbc-video-export profile set"),
                                              startPath,
-                                             tr("JSON Files (*.json);;All Files (*)"));
+                                             tr("JSON Files (*.json);;All Files (*)"),
+                                             QStringLiteral("json"));
     if (selectedPath.isEmpty()) {
         updateProfileDependentControls();
         return;
@@ -2981,6 +2965,7 @@ void ExportDialog::on_exportProfileConfigEjectButton_clicked()
         selectedPath += QStringLiteral(".json");
     }
     selectedPath = QFileInfo(selectedPath).absoluteFilePath();
+    rememberExportDirectory(DirectoryPurpose::Profile, selectedPath);
 
     const QString exportPath = resolveVideoExportPath();
     if (exportPath.isEmpty()) {
