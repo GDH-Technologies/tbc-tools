@@ -635,7 +635,7 @@ class ContractCoverageTests(unittest.TestCase):
             "merge --ff-only",
             "fetch --no-tags origin main:main",
             "nix profile upgrade tbc-tools",
-            'grep -q "rev=$GITHUB_SHA"',
+            'grep -q "Locked flake URL:.*$GITHUB_SHA"',
             "decode-desktop-sync",
             "Refusing to deploy: tbc-tools is running from",
         }

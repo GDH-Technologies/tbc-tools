@@ -344,7 +344,10 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # discard work in the developer's checkout.
     "merge --ff-only",
     "nix profile upgrade tbc-tools",
-    'grep -q "rev=$GITHUB_SHA"',
+    # Matched on the Locked flake URL line, not a `rev=` prefix: wm's git+file
+    # lock has `rev=<sha>` but air0's github: lock is `github:owner/repo/<sha>`,
+    # so a `rev=`-anchored check could never pass on macOS.
+    'grep -q "Locked flake URL:.*$GITHUB_SHA"',
     # INSTALL.md makes this required after an upgrade: a nix profile install
     # registers nothing with XDG.
     "decode-desktop-sync",
