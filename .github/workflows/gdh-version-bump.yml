@@ -14,9 +14,19 @@ name: "GDH version bump"
 #
 # GDH tags are excluded from release.yml's trigger, so cutting one here does NOT
 # publish a GitHub Release or touch harrypm's release path.
+#
+# The bump ends by dispatching self-hosted-deploy.yml explicitly. It has to:
+# GitHub does not create workflow runs for pushes made with GITHUB_TOKEN, so
+# although .gdh-version is in that workflow's paths filter, the push above can
+# never trigger it -- cutting v3.2.8-gdh-1.0 produced zero runs and left the
+# fleet reporting the previous version. workflow_dispatch is one of the
+# documented exceptions to that rule, so asking for the run directly works
+# where the push does not.
 
 permissions:
   contents: write
+  # For the deploy dispatch at the end of the job, not for the tag push.
+  actions: write
 
 on:
   workflow_dispatch:
@@ -105,6 +115,29 @@ jobs:
           # first step of this job has already refused anything but main.
           python3 scripts/gdh_version.py bump --level "$LEVEL" --push --branch main \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy the new version to the fleet
+        # Only after a real bump that actually pushed. `gh workflow run` with
+        # GITHUB_TOKEN does create a run -- workflow_dispatch is exempt from
+        # the rule that blocks token-driven events -- which is the whole reason
+        # this step exists instead of relying on the push.
+        #
+        # Not fatal if it fails: the tag and .gdh-version are already pushed at
+        # this point, and a missed deploy is recoverable by dispatching the
+        # workflow by hand, whereas failing here would report a version cut
+        # that in fact succeeded.
+        if: ${{ inputs.dry_run == false && steps.propose.outputs.proceed == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh workflow run self-hosted-deploy.yml --repo "$GITHUB_REPOSITORY" --ref main; then
+            echo "Dispatched self-hosted-deploy.yml; the fleet will pick up the new version." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Could not dispatch self-hosted-deploy.yml. The version is cut and pushed;" \
+                 "run that workflow by hand to update the fleet." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Note that this was a dry run
         if: ${{ inputs.dry_run == true && steps.propose.outputs.proceed == 'true' }}
