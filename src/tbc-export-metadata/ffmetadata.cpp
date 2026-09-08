@@ -25,12 +25,14 @@
 #include "ffmetadata.h"
 
 #include "navigation.h"
+#include "segments.h"
 #include "vitcdecoder.h"
 
 #include <QtGlobal>
 #include <QFile>
 #include <QRegularExpression>
 #include <QTextStream>
+#include <algorithm>
 #include <vector>
 
 #include "tbc/logging.h"
@@ -91,54 +93,6 @@ QString firstValidVitcTimecodeInRange(TbcMetaData &metaData,
         return formatVitcTimecode(decoded);
     }
     return QString();
-}
-
-bool getFieldRangeForFrames(TbcMetaData &metaData,
-                            qint32 startFrameOneBased,
-                            qint32 lengthFrames,
-                            qint32 *startField,
-                            qint32 *endFieldExclusive)
-{
-    if (!startField || !endFieldExclusive) {
-        return false;
-    }
-
-    const qint32 totalFrames = metaData.getNumberOfFrames();
-    const qint32 totalFields = metaData.getVideoParameters().numberOfSequentialFields;
-    if (totalFrames < 1 || totalFields < 1) {
-        return false;
-    }
-
-    const qint32 resolvedStartFrame = startFrameOneBased > 0 ? startFrameOneBased : 1;
-    if (resolvedStartFrame < 1 || resolvedStartFrame > totalFrames) {
-        return false;
-    }
-
-    const qint32 maxLength = totalFrames - resolvedStartFrame + 1;
-    if (maxLength < 1) {
-        return false;
-    }
-    const qint32 resolvedLength = lengthFrames > 0 ? qMin(lengthFrames, maxLength) : maxLength;
-    if (resolvedLength < 1) {
-        return false;
-    }
-
-    const qint32 resolvedEndFrame = resolvedStartFrame + resolvedLength - 1;
-    const qint32 startFieldOneBased = metaData.getFirstFieldNumber(resolvedStartFrame);
-    const qint32 endFieldOneBased = metaData.getSecondFieldNumber(resolvedEndFrame);
-    if (startFieldOneBased < 1 || endFieldOneBased < 1) {
-        return false;
-    }
-
-    const qint32 resolvedStartField = qMax<qint32>(0, startFieldOneBased - 1);
-    const qint32 resolvedEndFieldExclusive = qMin<qint32>(totalFields, endFieldOneBased);
-    if (resolvedStartField >= resolvedEndFieldExclusive) {
-        return false;
-    }
-
-    *startField = resolvedStartField;
-    *endFieldExclusive = resolvedEndFieldExclusive;
-    return true;
 }
 
 bool clipChapterToRange(const FfmetadataChapter &source,
@@ -224,23 +178,21 @@ bool writeFfmetadata(TbcMetaData &metaData,
                      const QString &fileName,
                      qint32 startFrameOneBased,
                      qint32 lengthFrames,
-                     bool includeVitcTimecode)
+                     bool includeVitcTimecode,
+                     FfmetadataSegmentMode segmentMode)
 {
     const auto videoParameters = metaData.getVideoParameters();
 
     // Select the appropriate timebase to make 0-based field numbers work
     const QString timeBase = (videoParameters.system == PAL || videoParameters.system == SECAM || videoParameters.system == MESECAM) ? "1/50" : "1001/60000";
 
-    qint32 exportStartField = 0;
-    qint32 exportEndFieldExclusive = 0;
-    if (!getFieldRangeForFrames(metaData,
-                                startFrameOneBased,
-                                lengthFrames,
-                                &exportStartField,
-                                &exportEndFieldExclusive)) {
+    FieldRange exportRange;
+    if (!resolveFieldRange(metaData, startFrameOneBased, lengthFrames, &exportRange)) {
         tbcDebug(QStringLiteral("writeFfmetadata: Could not resolve export start/length range"));
         return false;
     }
+    const qint32 exportStartField = exportRange.startField;
+    const qint32 exportEndFieldExclusive = exportRange.endFieldExclusive;
     const QString vitcTimecode = includeVitcTimecode
                                      ? firstValidVitcTimecodeInRange(metaData,
                                                                      exportStartField,
@@ -250,31 +202,54 @@ bool writeFfmetadata(TbcMetaData &metaData,
     // Extract navigation information
     const NavigationInfo navInfo(metaData);
     std::vector<FfmetadataChapter> chapters;
-    chapters.reserve(navInfo.chapters.size() + 1);
 
-    for (const auto &chapter : navInfo.chapters) {
-        FfmetadataChapter candidate;
-        candidate.startField = chapter.startField;
-        candidate.endFieldExclusive = chapter.endField;
-        candidate.title = QStringLiteral("Chapter %1").arg(chapter.number);
-        FfmetadataChapter clipped;
-        if (clipChapterToRange(candidate, exportStartField, exportEndFieldExclusive, &clipped)) {
-            chapters.push_back(clipped);
+    // Recording segments stored in the metadata take the place of the
+    // LaserDisc navigation chapters (a tape has none; a disc has no segments)
+    QVector<TbcMetaData::Segment> segments = metaData.getSegments();
+    const bool useSegments = segmentMode != FfmetadataSegmentMode::NoSegments && !segments.isEmpty();
+    if (useSegments) {
+        std::stable_sort(segments.begin(), segments.end(),
+                         [](const TbcMetaData::Segment &a, const TbcMetaData::Segment &b) {
+                             return a.startField < b.startField;
+                         });
+        chapters.reserve(static_cast<size_t>(segments.size()) + 1);
+        for (const TbcMetaData::Segment &segment : segments) {
+            if (segmentMode == FfmetadataSegmentMode::EnabledSegments && !segment.enabled) {
+                continue;
+            }
+            FfmetadataChapter candidate;
+            candidate.startField = segment.startField;
+            candidate.endFieldExclusive = segment.endFieldExclusive;
+            candidate.title = segment.title.trimmed().isEmpty()
+                                  ? QStringLiteral("Segment %1").arg(segment.id)
+                                  : segment.title.trimmed();
+            candidate.comment = segment.comment.trimmed();
+            FfmetadataChapter clipped;
+            if (clipChapterToRange(candidate, exportStartField, exportEndFieldExclusive, &clipped)) {
+                chapters.push_back(clipped);
+            }
+        }
+    } else {
+        chapters.reserve(navInfo.chapters.size() + 1);
+        for (const auto &chapter : navInfo.chapters) {
+            FfmetadataChapter candidate;
+            candidate.startField = chapter.startField;
+            candidate.endFieldExclusive = chapter.endField;
+            candidate.title = QStringLiteral("Chapter %1").arg(chapter.number);
+            FfmetadataChapter clipped;
+            if (clipChapterToRange(candidate, exportStartField, exportEndFieldExclusive, &clipped)) {
+                chapters.push_back(clipped);
+            }
         }
     }
 
     if (videoParameters.userMarkerSelection > 0) {
         const qint32 markerFrame = videoParameters.userMarkerSelection;
-        qint32 markerStartField = 0;
-        qint32 markerEndFieldExclusive = 0;
-        if (getFieldRangeForFrames(metaData,
-                                   markerFrame,
-                                   1,
-                                   &markerStartField,
-                                   &markerEndFieldExclusive)) {
+        FieldRange markerRange;
+        if (resolveFieldRange(metaData, markerFrame, 1, &markerRange)) {
             FfmetadataChapter markerChapter;
-            markerChapter.startField = markerStartField;
-            markerChapter.endFieldExclusive = markerEndFieldExclusive;
+            markerChapter.startField = markerRange.startField;
+            markerChapter.endFieldExclusive = markerRange.endFieldExclusive;
             markerChapter.comment = videoParameters.userMarkerComment.trimmed();
             markerChapter.title = markerChapter.comment.isEmpty()
                                       ? QStringLiteral("User Marker (%1)").arg(markerFrame)

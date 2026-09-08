@@ -36,6 +36,8 @@ public:
         bool exportFfmpegVitc = false;
         bool exportFfmetadataVitcTimecode = true;
         bool exportClosedCaptions = false;
+        bool exportSegmentsJson = false;
+        int ffmetadataSegmentMode = 0;   // 0 enabled segments, 1 all segments, 2 no segments
         qint32 ffmetadataStart = -1;
         qint32 ffmetadataLength = -1;
         bool debug = false;
@@ -72,6 +74,7 @@ private:
     Ui::MetadataExportDialog *ui;
     QString sourceDirectory;
     QString exportExecutablePath;
+    bool ffmetadataSegmentsSupported = true;
 };
 
 #endif // METADATAEXPORTDIALOG_H

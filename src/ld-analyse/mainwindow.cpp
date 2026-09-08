@@ -11,6 +11,8 @@
  ******************************************************************************/
 
 #include "mainwindow.h"
+
+#include <cmath>
 #include "ui_mainwindow.h"
 #include "tbc/logging.h"
 
@@ -75,6 +77,7 @@
 
 #include "metadataconverterutil.h"
 #include "notesviewerdialog.h"
+#include "segmentsviewerdialog.h"
 #include "teletextviewerdialog.h"
 #include "timelinemarkerslider.h"
 #include "efmhandlerdialog.h"
@@ -1481,6 +1484,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
                 updateMetadataStatusPanel();
                 updateTimelineMarkers();
                 updateNotesViewerState();
+                updateSegmentsViewerState();
             });
     exportDialog = new ExportDialog(this);
     ui->mainTabWidget->addTab(exportDialog, tr("Export"));
@@ -1507,10 +1511,33 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     }
     connect(notesViewerAction, &QAction::triggered, this, [this]() {
         updateNotesViewerState();
+        updateSegmentsViewerState();
         notesViewerDialog->show();
         notesViewerDialog->raise();
         notesViewerDialog->activateWindow();
     });
+
+    // Segments viewer: the editable recording-segment layer of the metadata
+    segmentsViewerDialog = new SegmentsViewerDialog(this);
+    segmentsViewerDialog->setWindowFlag(Qt::Window, true);
+    connect(segmentsViewerDialog, &SegmentsViewerDialog::goToFieldRequested, this, &MainWindow::goToField);
+    connect(segmentsViewerDialog, &SegmentsViewerDialog::setInOutRequested, this, [this](qint32 segmentIndex) {
+        setInOutFromSegment(segmentIndex, true, true);
+    });
+    connect(segmentsViewerDialog, &SegmentsViewerDialog::segmentsUpdated, this,
+            [this](const QVector<TbcMetaData::Segment> &segments) {
+                if (!tbcSource.getIsSourceLoaded()) {
+                    return;
+                }
+                applySegmentEdit(segments, tr("Segments updated (%1); Save Metadata stores them").arg(segments.size()));
+                updateSegmentsViewerState();
+            });
+    connect(segmentsViewerDialog, &SegmentsViewerDialog::rederiveRequested, this, &MainWindow::rederiveSegments);
+    segmentsViewerAction = new QAction(tr("Segments Viewer..."), this);
+    if (ui->menuWindow) {
+        ui->menuWindow->addAction(segmentsViewerAction);
+    }
+    connect(segmentsViewerAction, &QAction::triggered, this, &MainWindow::showSegmentsViewer);
 
     // Add a status bar to show the state of the source video file
     ui->statusBar->addWidget(&sourceVideoStatus);
@@ -1713,6 +1740,19 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     
     // Load configuration settings
     ui->actionToggleChromaDuringSeek->setChecked(configuration.getToggleChromaDuringSeek());
+
+    // Segment-aware chapter skipping (View menu, persisted)
+    skipBySegmentsAction = new QAction(tr("Skip by segments"), this);
+    skipBySegmentsAction->setCheckable(true);
+    skipBySegmentsAction->setChecked(configuration.getSkipBySegments());
+    skipBySegmentsAction->setToolTip(tr("Previous/next chapter buttons jump between recording segments when the metadata holds any"));
+    if (ui->menuView) {
+        ui->menuView->addAction(skipBySegmentsAction);
+    }
+    connect(skipBySegmentsAction, &QAction::toggled, this, [this](bool enabled) {
+        configuration.setSkipBySegments(enabled);
+        configuration.writeConfiguration();
+    });
 
     // Was a filename specified on the command line?
     if (!inputFilenameParam.isEmpty()) {
@@ -2425,6 +2465,7 @@ void MainWindow::updateGuiLoaded()
     }
     updateTimelineMarkers();
     updateNotesViewerState();
+    updateSegmentsViewerState();
 
     updateMetadataStatusPanel();
 }
@@ -2504,6 +2545,7 @@ void MainWindow::updateGuiUnloaded()
     yuvRangeScopeLastRefreshMs = 0;
     updateTimelineMarkers();
     updateNotesViewerState();
+    updateSegmentsViewerState();
 
     updateMetadataStatusPanel();
     if (exportDialog) {
@@ -3989,11 +4031,22 @@ void MainWindow::updateBottomStatusReadout()
     const qint32 frameCurrent = qBound(1, currentFrameNumber, totalFrames);
     const qint32 firstField = qBound(1, tbcSource.getFirstFieldNumber(), totalFields);
     const qint32 secondField = qBound(1, tbcSource.getSecondFieldNumber(), totalFields);
-    fieldNumberStatus.setText(QStringLiteral(" Frames: %1/%2 Fields: %3/%4")
-                                  .arg(frameCurrent)
-                                  .arg(totalFrames)
-                                  .arg(firstField)
-                                  .arg(secondField));
+    QString readout = QStringLiteral(" Frames: %1/%2 Fields: %3/%4")
+                          .arg(frameCurrent)
+                          .arg(totalFrames)
+                          .arg(firstField)
+                          .arg(secondField);
+    const QVector<TbcMetaData::Segment> &segments = tbcSource.getSegments();
+    if (!segments.isEmpty()) {
+        const qint32 index = segmentIndexContainingField(qMax<qint32>(0, firstField - 1));
+        readout += index >= 0
+                       ? QStringLiteral(" Seg: %1/%2").arg(index + 1).arg(segments.size())
+                       : QStringLiteral(" Seg: -/%1").arg(segments.size());
+    }
+    fieldNumberStatus.setText(readout);
+    if (segmentsViewerDialog && segmentsViewerDialog->isVisible()) {
+        updateSegmentsViewerState();
+    }
 }
 void MainWindow::setViewValues()
 {
@@ -4127,6 +4180,304 @@ void MainWindow::updateTimelineMarkers()
         }
     }
     timelineMarkerSlider->setMarkerFrames(inPosition, outPosition, notePositions);
+
+    // Recording segments: a tick per boundary (with a tooltip), a tint over
+    // noise, blank and disabled spans
+    QVector<qint32> boundaryPositions;
+    QStringList boundaryTooltips;
+    QVector<TimelineSegmentSpan> spans;
+    const QVector<TbcMetaData::Segment> &segments = tbcSource.getSegments();
+    for (qint32 i = 0; i < segments.size(); ++i) {
+        const TbcMetaData::Segment &segment = segments.at(i);
+        if (segment.startField > 0) {
+            const qint32 position = sliderPositionForField(segment.startField);
+            if (position > 0) {
+                boundaryPositions.append(position);
+                boundaryTooltips.append(segmentSummaryText(segment));
+            }
+        }
+        QColor tint;
+        if (segment.kind == QLatin1String("noise")) {
+            tint = QColor(255, 170, 0, 50);
+        } else if (segment.kind == QLatin1String("blank")) {
+            tint = QColor(128, 128, 128, 60);
+        } else if (!segment.enabled) {
+            tint = QColor(220, 45, 45, 40);
+        }
+        if (tint.isValid()) {
+            TimelineSegmentSpan span;
+            span.startPosition = sliderPositionForField(segment.startField);
+            span.endPosition = sliderPositionForField(qMax(segment.startField, segment.endFieldExclusive - 1));
+            span.color = tint;
+            if (span.startPosition > 0 && span.endPosition >= span.startPosition) {
+                spans.append(span);
+            }
+        }
+    }
+    timelineMarkerSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
+}
+
+qint32 MainWindow::sliderPositionForField(qint32 field) const
+{
+    if (field < 0 || !tbcSource.getIsSourceLoaded()) {
+        return -1;
+    }
+    if (tbcSource.getFieldViewEnabled()) {
+        const qint32 totalFields = qMax<qint32>(1, tbcSource.getNumberOfFields());
+        return qBound<qint32>(1, field + 1, totalFields);
+    }
+    const qint32 totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
+    qint32 frame = tbcSource.frameContainingField(field);
+    if (frame < 1) {
+        frame = (field / 2) + 1;
+    }
+    return qBound<qint32>(1, frame, totalFrames);
+}
+
+qint32 MainWindow::currentFirstFieldZeroBased() const
+{
+    if (!tbcSource.getIsSourceLoaded()) {
+        return -1;
+    }
+    if (tbcSource.getFieldViewEnabled()) {
+        return qMax<qint32>(0, currentFieldNumber - 1);
+    }
+    const qint32 first = tbcSource.firstFieldOfFrame(currentFrameNumber);
+    return first >= 0 ? first : qMax<qint32>(0, (currentFrameNumber - 1) * 2);
+}
+
+qint32 MainWindow::segmentIndexContainingField(qint32 field) const
+{
+    const QVector<TbcMetaData::Segment> &segments = tbcSource.getSegments();
+    for (qint32 i = 0; i < segments.size(); ++i) {
+        if (field >= segments.at(i).startField && field < segments.at(i).endFieldExclusive) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+qint32 MainWindow::segmentStartFrame(const TbcMetaData::Segment &segment) const
+{
+    qint32 startFrame = 0;
+    qint32 lengthFrames = 0;
+    if (tbcSource.segmentFrameRange(segment, &startFrame, &lengthFrames)) {
+        return startFrame;
+    }
+    const qint32 frame = tbcSource.frameContainingField(segment.startField);
+    return frame >= 1 ? frame : -1;
+}
+
+bool MainWindow::skipBySegmentsEnabled() const
+{
+    return skipBySegmentsAction && skipBySegmentsAction->isChecked() && !tbcSource.getSegments().isEmpty();
+}
+
+QString MainWindow::segmentSummaryText(const TbcMetaData::Segment &segment) const
+{
+    qint32 startFrame = 0;
+    qint32 lengthFrames = 0;
+    QString range;
+    if (tbcSource.segmentFrameRange(segment, &startFrame, &lengthFrames)) {
+        range = QStringLiteral("%1–%2").arg(frameToTimecode(startFrame)).arg(frameToTimecode(startFrame + lengthFrames - 1));
+    } else {
+        range = tr("no whole frame");
+    }
+    const QString title = segment.title.trimmed().isEmpty() ? segment.kind : segment.title.trimmed();
+    return tr("Segment %1: %2 (%3)%4")
+        .arg(segment.id)
+        .arg(title)
+        .arg(range)
+        .arg(segment.enabled ? QString() : tr(" [disabled]"));
+}
+
+// The notesUpdated sequence, for segment edits: metadata, Save, timeline, panels
+void MainWindow::applySegmentEdit(const QVector<TbcMetaData::Segment> &segments, const QString &statusText)
+{
+    tbcSource.setSegments(segments);
+    ui->actionSave_Metadata->setEnabled(true);
+    updateMetadataStatusPanel();
+    updateTimelineMarkers();
+    updateBottomStatusReadout();
+    if (exportDialog) {
+        exportDialog->refreshSegmentsFromSource();
+    }
+    if (!statusText.isEmpty()) {
+        statusBar()->showMessage(statusText, 3000);
+    }
+}
+
+void MainWindow::setInOutFromSegment(qint32 segmentIndex, bool setIn, bool setOut)
+{
+    if (!exportDialog || !tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
+        return;
+    }
+    const QVector<TbcMetaData::Segment> &segments = tbcSource.getSegments();
+    if (segmentIndex < 0 || segmentIndex >= segments.size()) {
+        return;
+    }
+    qint32 startFrame = 0;
+    qint32 lengthFrames = 0;
+    if (!tbcSource.segmentFrameRange(segments.at(segmentIndex), &startFrame, &lengthFrames)) {
+        statusBar()->showMessage(tr("Segment %1 holds no whole frame").arg(segments.at(segmentIndex).id), 3000);
+        return;
+    }
+    if (setIn) {
+        exportDialog->setInPoint(startFrame);
+    }
+    if (setOut) {
+        exportDialog->setOutPoint(startFrame + lengthFrames - 1);
+    }
+    statusBar()->showMessage(tr("Export %1 set from segment %2 (frames %3–%4)")
+                                 .arg(setIn && setOut ? tr("In/Out") : setIn ? tr("In") : tr("Out"))
+                                 .arg(segments.at(segmentIndex).id)
+                                 .arg(startFrame)
+                                 .arg(startFrame + lengthFrames - 1), 3000);
+}
+
+// Split the segment containing `field` at that field: the head keeps its id,
+// the tail becomes a new user segment. Both are marked user-edited.
+bool MainWindow::splitSegmentAtField(qint32 field, QString *statusText)
+{
+    QVector<TbcMetaData::Segment> segments = tbcSource.getSegments();
+    const qint32 index = segmentIndexContainingField(field);
+    if (index < 0 || field <= segments.at(index).startField) {
+        if (statusText) {
+            *statusText = tr("No segment to split at field %1").arg(field);
+        }
+        return false;
+    }
+    qint32 maxId = 0;
+    for (const TbcMetaData::Segment &segment : segments) {
+        maxId = qMax(maxId, segment.id);
+    }
+    const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    TbcMetaData::Segment head = segments.at(index);
+    TbcMetaData::Segment tail = head;
+    head.endFieldExclusive = field;
+    head.source = QStringLiteral("user");
+    head.updatedAt = now;
+    tail.id = maxId + 1;
+    tail.startField = field;
+    tail.title.clear();
+    tail.comment.clear();
+    tail.source = QStringLiteral("user");
+    tail.createdBy = QStringLiteral("ld-analyse");
+    tail.updatedAt = now;
+    tail.derivedFrom.clear();
+    segments[index] = head;
+    segments.insert(index + 1, tail);
+    applySegmentEdit(segments, QString());
+    if (statusText) {
+        *statusText = tr("Segment %1 split at field %2; segment %3 created").arg(head.id).arg(field).arg(tail.id);
+    }
+    return true;
+}
+
+void MainWindow::updateSegmentsViewerState()
+{
+    if (!segmentsViewerDialog) {
+        return;
+    }
+    SegmentsViewerState state;
+    state.frameRate = timecodeFrameRate();
+    state.frameBaseRate = timecodeFrameBaseRate();
+    if (tbcSource.getIsSourceLoaded()) {
+        state.totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
+        state.totalFields = qMax<qint32>(1, tbcSource.getNumberOfFields());
+        state.currentFrame = qBound<qint32>(1, currentFrameNumber, state.totalFrames);
+        state.currentFirstField = currentFirstFieldZeroBased();
+        state.metadataOnly = tbcSource.getIsMetadataOnly();
+        state.derivedAtLoad = tbcSource.getSegmentsDerivedAtLoad();
+        state.evidenceAvailable = tbcSource.hasSegmentEvidence();
+        const QVector<TbcMetaData::Segment> &segments = tbcSource.getSegments();
+        state.rows.reserve(segments.size());
+        for (const TbcMetaData::Segment &segment : segments) {
+            SegmentsViewerRow row;
+            row.segment = segment;
+            row.hasFrames = tbcSource.segmentFrameRange(segment, &row.startFrame, &row.lengthFrames);
+            state.rows.append(row);
+        }
+    }
+    segmentsViewerDialog->setState(state);
+}
+
+void MainWindow::showSegmentsViewer()
+{
+    if (!segmentsViewerDialog) {
+        return;
+    }
+    updateSegmentsViewerState();
+    segmentsViewerDialog->show();
+    segmentsViewerDialog->raise();
+    segmentsViewerDialog->activateWindow();
+}
+
+void MainWindow::goToField(qint32 field)
+{
+    if (!tbcSource.getIsSourceLoaded() || field < 0) {
+        return;
+    }
+    setPlaybackRunning(false);
+    if (tbcSource.getFieldViewEnabled()) {
+        const qint32 totalFields = qMax<qint32>(1, tbcSource.getNumberOfFields());
+        setCurrentField(qBound<qint32>(1, field + 1, totalFields));
+    } else {
+        const qint32 totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
+        qint32 frame = tbcSource.frameContainingField(field);
+        if (frame < 1) {
+            frame = (field / 2) + 1;
+        }
+        setCurrentFrame(qBound<qint32>(1, frame, totalFrames));
+    }
+    const qint32 currentNumber = tbcSource.getFieldViewEnabled() ? currentFieldNumber : currentFrameNumber;
+    updatePositionEditorValue(currentNumber);
+    ui->posHorizontalSlider->setValue(currentNumber);
+}
+
+// Derive again with the given thresholds. User-edited segments are kept and
+// derived segments they overlap are dropped, so a re-derive never undoes an edit.
+void MainWindow::rederiveSegments(const SegmentsThresholds &thresholds)
+{
+    if (!tbcSource.getIsSourceLoaded()) {
+        return;
+    }
+    QVector<TbcMetaData::Segment> kept;
+    for (const TbcMetaData::Segment &segment : tbcSource.getSegments()) {
+        if (segment.source == QLatin1String("user")) {
+            kept.append(segment);
+        }
+    }
+    const QVector<TbcMetaData::Segment> derived = tbcSource.deriveSegments(thresholds);
+    qint32 nextId = 0;
+    for (const TbcMetaData::Segment &segment : kept) {
+        nextId = qMax(nextId, segment.id);
+    }
+    QVector<TbcMetaData::Segment> merged = kept;
+    qint32 dropped = 0;
+    for (TbcMetaData::Segment segment : derived) {
+        bool overlapsUser = false;
+        for (const TbcMetaData::Segment &user : kept) {
+            if (segment.startField < user.endFieldExclusive && user.startField < segment.endFieldExclusive) {
+                overlapsUser = true;
+                break;
+            }
+        }
+        if (overlapsUser) {
+            dropped++;
+            continue;
+        }
+        segment.id = ++nextId;
+        merged.append(segment);
+    }
+    std::stable_sort(merged.begin(), merged.end(), [](const TbcMetaData::Segment &a, const TbcMetaData::Segment &b) {
+        return a.startField < b.startField;
+    });
+    applySegmentEdit(merged, tr("Segments re-derived: %1 derived (%2 dropped for user segments), %3 user kept")
+                                 .arg(derived.size() - dropped)
+                                 .arg(dropped)
+                                 .arg(kept.size()));
+    updateSegmentsViewerState();
 }
 
 void MainWindow::updateNotesViewerState()
@@ -5301,6 +5652,15 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
     audioAlignmentDialog->setExportTrackOutputFile(QString());
     if (!defaultJsonPath.isEmpty()) {
         audioAlignmentDialog->setDefaultJson(defaultJsonPath);
+    }
+    // The decoder's stored RF rate (the rate fileLoc counts in) wins over the
+    // JSON probe: it is read from whichever store is open, .tbc.db included,
+    // where the JSON beside it may be absent or predate the key.
+    if (tbcSource.getIsSourceLoaded()) {
+        const double storedRfRateHz = tbcSource.getVideoParameters().rfSourceSampleRateHz;
+        if (storedRfRateHz > 0.0) {
+            audioAlignmentDialog->setRfVideoSampleRateFromMetadata(static_cast<quint32>(std::lround(storedRfRateHz)));
+        }
     }
 
     audioAlignmentDialog->show();
@@ -6637,6 +6997,14 @@ void MainWindow::on_endPushButton_clicked()
     qint32 targetFrame = currentFrameNumber;
     if (tbcSource.hasChapterMap()) {
         targetFrame = tbcSource.startOfNextChapter(currentFrameNumber);
+    } else if (skipBySegmentsEnabled()) {
+        targetFrame = totalFrames;
+        for (const TbcMetaData::Segment &segment : tbcSource.getSegments()) {
+            const qint32 startFrame = segmentStartFrame(segment);
+            if (startFrame > currentFrameNumber && startFrame < targetFrame) {
+                targetFrame = startFrame;
+            }
+        }
     } else {
         const QVector<UserNoteMarker> userChapterMarkers = userNoteMarkersFromVideoParameters(
             tbcSource.getVideoParameters(), totalFrames);
@@ -6668,6 +7036,14 @@ void MainWindow::on_startPushButton_clicked()
     qint32 targetFrame = currentFrameNumber;
     if (tbcSource.hasChapterMap()) {
         targetFrame = tbcSource.startOfChapter(currentFrameNumber);
+    } else if (skipBySegmentsEnabled()) {
+        targetFrame = 1;
+        for (const TbcMetaData::Segment &segment : tbcSource.getSegments()) {
+            const qint32 startFrame = segmentStartFrame(segment);
+            if (startFrame < currentFrameNumber && startFrame > targetFrame) {
+                targetFrame = startFrame;
+            }
+        }
     } else {
         const qint32 totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
         const QVector<UserNoteMarker> userChapterMarkers = userNoteMarkersFromVideoParameters(
@@ -6824,6 +7200,25 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
     removeNoteAction->setEnabled(noteRemovalAvailable);
     sliderMenu.addSeparator();
     QAction *openNotesViewerAction = sliderMenu.addAction(tr("Open Marker Viewer..."));
+    // Recording segments: act on the segment holding the clicked frame
+    const qint32 clickedFirstField = tbcSource.firstFieldOfFrame(framePoint);
+    const qint32 segmentIndexAtFrame = clickedFirstField >= 0 ? segmentIndexContainingField(clickedFirstField) : -1;
+    QAction *setInOutFromSegmentAction = nullptr;
+    QAction *splitSegmentAction = nullptr;
+    if (!tbcSource.getSegments().isEmpty()) {
+        sliderMenu.addSeparator();
+        const qint32 segmentId = segmentIndexAtFrame >= 0 ? tbcSource.getSegments().at(segmentIndexAtFrame).id : -1;
+        setInOutFromSegmentAction = sliderMenu.addAction(segmentIndexAtFrame >= 0
+                                                             ? tr("Set In/Out From Segment %1").arg(segmentId)
+                                                             : tr("Set In/Out From Segment"));
+        setInOutFromSegmentAction->setEnabled(segmentIndexAtFrame >= 0 && !tbcSource.getIsMetadataOnly());
+        splitSegmentAction = sliderMenu.addAction(tr("Split Segment Here (%1 | %2)")
+                                                      .arg(framePoint)
+                                                      .arg(framePointTimecode));
+        splitSegmentAction->setEnabled(segmentIndexAtFrame >= 0
+                                       && clickedFirstField > tbcSource.getSegments().at(segmentIndexAtFrame).startField);
+    }
+    QAction *openSegmentsViewerAction = sliderMenu.addAction(tr("Open Segments Viewer..."));
     QAction *selectedAction = sliderMenu.exec(ui->posHorizontalSlider->mapToGlobal(pos));
     if (!selectedAction) {
         return;
@@ -6837,6 +7232,7 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
         ui->actionSave_Metadata->setEnabled(true);
         updateTimelineMarkers();
         updateNotesViewerState();
+        updateSegmentsViewerState();
         updateMetadataStatusPanel();
         return true;
     };
@@ -6883,9 +7279,19 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
         }
     } else if (selectedAction == openNotesViewerAction) {
         updateNotesViewerState();
+        updateSegmentsViewerState();
         notesViewerDialog->show();
         notesViewerDialog->raise();
         notesViewerDialog->activateWindow();
+    } else if (setInOutFromSegmentAction && selectedAction == setInOutFromSegmentAction) {
+        setInOutFromSegment(segmentIndexAtFrame, true, true);
+    } else if (splitSegmentAction && selectedAction == splitSegmentAction) {
+        QString splitStatus;
+        splitSegmentAtField(clickedFirstField, &splitStatus);
+        statusBar()->showMessage(splitStatus, 3000);
+        updateSegmentsViewerState();
+    } else if (selectedAction == openSegmentsViewerAction) {
+        showSegmentsViewer();
     }
 }
 
@@ -7355,7 +7761,14 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         && (event->modifiers() == Qt::NoModifier);
     const bool setOutPointKeyPressed = (event->key() == Qt::Key_BracketRight)
         && (event->modifiers() == Qt::NoModifier);
-    if (!markerKeyPressed && !markerViewerKeyPressed && !setInPointKeyPressed && !setOutPointKeyPressed) {
+    const bool segmentsViewerKeyPressed = (event->key() == Qt::Key_S)
+        && (event->modifiers() == Qt::NoModifier);
+    const bool segmentInKeyPressed = (event->key() == Qt::Key_BraceLeft || event->key() == Qt::Key_BracketLeft)
+        && (event->modifiers() == Qt::ShiftModifier);
+    const bool segmentOutKeyPressed = (event->key() == Qt::Key_BraceRight || event->key() == Qt::Key_BracketRight)
+        && (event->modifiers() == Qt::ShiftModifier);
+    if (!markerKeyPressed && !markerViewerKeyPressed && !setInPointKeyPressed && !setOutPointKeyPressed
+        && !segmentInKeyPressed && !segmentOutKeyPressed && !segmentsViewerKeyPressed) {
         QMainWindow::keyPressEvent(event);
         return;
     }
@@ -7385,9 +7798,25 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
+    if (segmentsViewerKeyPressed) {
+        showSegmentsViewer();
+        event->accept();
+        return;
+    }
+    if (segmentInKeyPressed || segmentOutKeyPressed) {
+        const qint32 index = segmentIndexContainingField(currentFirstFieldZeroBased());
+        if (index >= 0) {
+            setInOutFromSegment(index, segmentInKeyPressed, segmentOutKeyPressed);
+        } else {
+            statusBar()->showMessage(tr("No recording segment at the current frame"), 3000);
+        }
+        event->accept();
+        return;
+    }
     if (markerViewerKeyPressed) {
         if (notesViewerDialog) {
             updateNotesViewerState();
+            updateSegmentsViewerState();
             notesViewerDialog->show();
             notesViewerDialog->raise();
             notesViewerDialog->activateWindow();
@@ -7435,6 +7864,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         ui->actionSave_Metadata->setEnabled(true);
         updateTimelineMarkers();
         updateNotesViewerState();
+        updateSegmentsViewerState();
         updateMetadataStatusPanel();
         statusBar()->showMessage(tr("Marker saved at frame %1 (%2)")
                                      .arg(framePoint)
@@ -7668,6 +8098,7 @@ void MainWindow::videoParametersChangedSignalHandler(const TbcMetaData::VideoPar
     updateVideoPushButton();
     updateTimelineMarkers();
     updateNotesViewerState();
+    updateSegmentsViewerState();
 
     updateMetadataStatusPanel();
 }
@@ -7707,6 +8138,7 @@ void MainWindow::exportRangeSelectionChangedSignalHandler(int inPoint, int outPo
     ui->actionSave_Metadata->setEnabled(true);
     updateTimelineMarkers();
     updateNotesViewerState();
+    updateSegmentsViewerState();
     updateMetadataStatusPanel();
 }
 

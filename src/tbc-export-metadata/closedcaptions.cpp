@@ -41,38 +41,44 @@ using std::vector;
 QString generateTimeStamp(qint32 fieldIndex, VideoSystem system)
 {
     // Convert to a 0-based count of frames
-    double frameIndex = static_cast<double>((fieldIndex - 1) / 2);
+    const qint32 frameIndex = (fieldIndex - 1) / 2;
 
-    // Set some constants for the timecode calculations.
-    // We are generating non-drop timecode (:ff not ;ff), so
-    // the clock actually counts at 29.97 FPS.
-    const double framesPerSecond = (system == PAL || system == SECAM || system == MESECAM) ? 25.0 : 29.97;
-    const double framesPerMinute = framesPerSecond * 60.0;
-    const double framesPerHour = framesPerMinute * 60.0;
+    // We are generating non-drop timecode (:ff not ;ff), which counts whole
+    // frames -- 30 per second for 525-line systems, 25 for 625-line. (NTSC
+    // plays those 30 frames back over 30/1.001 seconds, which is exactly the
+    // drift that drop-frame timecode exists to correct; a non-drop timestamp
+    // must not try to correct it itself, or it stops matching frame numbers.)
+    const qint32 framesPerSecond = (system == PAL || system == SECAM || system == MESECAM) ? 25 : 30;
+    const qint32 framesPerMinute = framesPerSecond * 60;
+    const qint32 framesPerHour = framesPerMinute * 60;
 
-    // Since the subtitle is relative to the video we
-    // can simply calculate the timecode from the sequential
-    // field number (which should work even in the input
-    // is a snippet from a LaserDisc sample
-    //
-    // Note: There should probably be the option to choose if the
-    // subtitle timecodes are relative to the video or the VBI
-    // frame-number/CLV timecode; as both are useful depending on
-    // the use-case?
-    //
-    const qint32 hh = static_cast<qint32>(frameIndex / framesPerHour);
-    frameIndex -= static_cast<double>(hh) * framesPerHour;
-    const qint32 mm = static_cast<qint32>(frameIndex / framesPerMinute);
-    frameIndex -= static_cast<double>(mm) * framesPerMinute;
-    const qint32 ss = static_cast<qint32>(frameIndex / framesPerSecond);
-    frameIndex -= static_cast<double>(ss) * framesPerSecond;
-    const qint32 ff = static_cast<qint32>(frameIndex);
+    // Since the subtitle is relative to the video we can simply calculate the
+    // timecode from the sequential field number (which should work even if the
+    // input is a snippet from a LaserDisc sample)
+    const qint32 hh = frameIndex / framesPerHour;
+    const qint32 mm = (frameIndex % framesPerHour) / framesPerMinute;
+    const qint32 ss = (frameIndex % framesPerMinute) / framesPerSecond;
+    const qint32 ff = frameIndex % framesPerSecond;
 
     // Create the timestamp
     return QString("%1:%2:%3:%4").arg(hh, 2, 10, QLatin1Char('0'))
                                  .arg(mm, 2, 10, QLatin1Char('0'))
                                  .arg(ss, 2, 10, QLatin1Char('0'))
                                  .arg(ff, 2, 10, QLatin1Char('0'));
+}
+
+// Add the odd parity bit that line 21 bytes are transmitted with, which is
+// what an SCC file records [CTA-608 p14]
+qint32 addOddParity(qint32 dataByte)
+{
+    const qint32 value = dataByte & 0x7F;
+
+    qint32 ones = 0;
+    for (qint32 bit = 0; bit < 7; bit++) {
+        if ((value >> bit) & 1) ones++;
+    }
+
+    return ((ones % 2) == 0) ? (value | 0x80) : value;
 }
 
 // Sanity check the CC data byte and set to -1 if it probably is invalid
@@ -121,70 +127,69 @@ bool writeClosedCaptions(TbcMetaData &metaData, const QString &fileName)
     bool captionInProgress = false;
     QString debugCaption;
     for (qint32 fieldIndex = 1; fieldIndex <= videoParameters.numberOfSequentialFields; fieldIndex++) {
-        // Get the CC data bytes from the field
-        qint32 data0 = sanityCheckData(metaData.getFieldClosedCaption(fieldIndex).data0);
-        qint32 data1 = sanityCheckData(metaData.getFieldClosedCaption(fieldIndex).data1);
+        // SCC V1.0 records the line 21 data of field 1 only. Anything
+        // recovered from field 2 is a different caption service (CC3/CC4 or
+        // XDS), and splicing it into this byte stream would corrupt it.
+        if (!metaData.getField(fieldIndex).isFirstField) continue;
 
-        // Sometimes random data is passed through; so this sanity check makes sure
-        // each new caption starts with data0 = 0x14 which (according to wikipedia)
-        // should always be the case
-        if (!captionInProgress && data0 > 0) {
-            if (data0 != 0x14) {
+        // Get the CC data bytes from the field. A field with no caption data,
+        // or whose bytes failed their parity check, contributes nothing.
+        const TbcMetaData::ClosedCaption &closedCaption = metaData.getFieldClosedCaption(fieldIndex);
+        qint32 data0 = 0;
+        qint32 data1 = 0;
+        if (closedCaption.inUse) {
+            data0 = sanityCheckData(closedCaption.data0);
+            data1 = sanityCheckData(closedCaption.data1);
+            if (data0 < 0 || data1 < 0) {
                 data0 = 0;
                 data1 = 0;
             }
         }
 
-        // Check incoming data is valid
-        if (data0 == -1 || data1 == -1) {
-            // Invalid
-        } else {
-            // Valid
-            if (data0 > 0 || data1 > 0) {
-                if (captionInProgress == false) {
-                    // Start of new caption
+        if (data0 > 0 || data1 > 0) {
+            if (!captionInProgress) {
+                // Start of new caption
 
-                    // Output a timecode followed by a tab character (in SCC format)
-                    QString timeStamp = generateTimeStamp(fieldIndex, videoParameters.system);
-                    stream << "\n\n" << timeStamp << "\t";
-                    debugCaption = "writeClosedCaptions(): Caption data at " + timeStamp + " : [";
+                // Output a timecode followed by a tab character (in SCC format)
+                QString timeStamp = generateTimeStamp(fieldIndex, videoParameters.system);
+                stream << "\n\n" << timeStamp << "\t";
+                debugCaption = "writeClosedCaptions(): Caption data at " + timeStamp + " : [";
 
-                    // Set the caption in progress flag
-                    captionInProgress = true;
-                }
-
-                // Output the 2 bytes of data as 2 hexadecimal values
-                // i.e. 0x12 and 0x41 would be 1241 followed by a space
-                // Hex output is padded with leading zeros
-                stream << QString("%1").arg(data0, 2, 16, QLatin1Char('0'));
-                stream << QString("%1").arg(data1, 2, 16, QLatin1Char('0'));
-                stream << " ";
-
-                // Add the 2 bytes of the data output to the debug caption too
-                if (data0 >= 0x10 && data0 <= 0x1F) {
-                    // This is a command byte, so output a space
-                    debugCaption = debugCaption + " ";
-                } else {
-                    // Normal text - display
-
-                    // Create a string from the two characters
-                    char string[3];
-                    string[0] = static_cast<char>(data0);
-                    string[1] = static_cast<char>(data1);
-                    string[2] = static_cast<char>(0);
-
-                    // Add it to the debug output
-                    debugCaption = debugCaption + QString::fromLocal8Bit(string);
-                }
-            } else {
-                // No CC data for this frame
-                if (captionInProgress) {
-                    // End of current caption
-                    debugCaption = debugCaption + "]";
-                    tbcDebugStream() << debugCaption;
-                }
-                captionInProgress = false;
+                // Set the caption in progress flag
+                captionInProgress = true;
             }
+
+            // Output the 2 bytes of data as 2 hexadecimal values, as
+            // transmitted -- that is, with their odd parity bits. So 0x14 and
+            // 0x2C are written as 942c, followed by a space.
+            stream << QString("%1").arg(addOddParity(data0), 2, 16, QLatin1Char('0'));
+            stream << QString("%1").arg(addOddParity(data1), 2, 16, QLatin1Char('0'));
+            stream << " ";
+
+            // Add the 2 bytes of the data output to the debug caption too
+            if (data0 >= 0x10 && data0 <= 0x1F) {
+                // This is a command byte, so output a space
+                debugCaption = debugCaption + " ";
+            } else {
+                // Normal text - display
+
+                // Create a string from the two characters
+                char string[3];
+                string[0] = static_cast<char>(data0);
+                string[1] = static_cast<char>(data1);
+                string[2] = static_cast<char>(0);
+
+                // Add it to the debug output
+                debugCaption = debugCaption + QString::fromLocal8Bit(string);
+            }
+        } else {
+            // No CC data for this frame
+            if (captionInProgress) {
+                // End of current caption
+                debugCaption = debugCaption + "]";
+                tbcDebugStream() << debugCaption;
+            }
+            captionInProgress = false;
         }
     }
 

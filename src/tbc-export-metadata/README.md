@@ -21,6 +21,10 @@ tbc-export-metadata exports and converts metadata from TBC files into various hu
 - `--ffmetadata <file>`: Write navigation information as FFMETADATA1 (includes VITC `timecode` when available)
 - `--ffmpeg-vitc <file>`: Write FFmpeg readvitc filter style VITC text (`lavfi.readvitc.*`) for all frames
 - `--ffmetadata-no-vitc-timecode`: Disable writing FFmpeg-style VITC `timecode` in FFMETADATA output
+- `--ffmetadata-all-segments`: Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)
+- `--ffmetadata-no-segments`: Ignore stored recording segments; write LaserDisc navigation chapters only
+- `--start <frame>` / `--length <frames>`: 1-based frame window for `--ffmetadata` and `--segments-json` (chapter times are rebased to the window)
+- `--segments-json <file>`: Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; `-` for stdout
 - `--closed-captions <file>`: Write closed captions as Scenarist SCC V1.0 format
 
 ### Data Categories
@@ -66,6 +70,10 @@ tbc-export-metadata [options] <input>
 - `--ffmetadata <file>`: Write navigation information as FFMETADATA1 (includes VITC `timecode` when available)
 - `--ffmpeg-vitc <file>`: Write FFmpeg readvitc filter style VITC text (`lavfi.readvitc.*`) for all frames
 - `--ffmetadata-no-vitc-timecode`: Disable writing FFmpeg-style VITC `timecode` in FFMETADATA output
+- `--ffmetadata-all-segments`: Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)
+- `--ffmetadata-no-segments`: Ignore stored recording segments; write LaserDisc navigation chapters only
+- `--start <frame>` / `--length <frames>`: 1-based frame window for `--ffmetadata` and `--segments-json` (chapter times are rebased to the window)
+- `--segments-json <file>`: Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; `-` for stdout
 - `--closed-captions <file>`: Write closed captions as Scenarist SCC V1.0 format
 
 #### Arguments
@@ -204,12 +212,28 @@ awk -F',' 'NR>1 {print $1}' vbi_data.csv | sort -u > frames_with_vbi.txt
 
 ### FFmpeg Chapter Integration
 ```bash
-# Export chapters
+# Export chapters (LaserDisc navigation, or the recording segments stored
+# in the metadata when there are any)
 tbc-export-metadata --ffmetadata chapters.txt input.tbc
 
 # Add to final video
-ffmpeg -i video.mkv -i chapters.txt -map_metadata 1 -codec copy output.mkv
+ffmpeg -i video.mkv -i chapters.txt -map_metadata 1 -map_chapters 1 -codec copy output.mkv
 ```
+
+### Recording Segments
+```bash
+# Every segment with the frame range an export of it covers
+tbc-export-metadata --segments-json - input.tbc.db | jq '.segments[] | {id, kind, enabled, startFrame, lengthFrames}'
+
+# Chapters for one segment's export (same --start/--length as tbc-video-export)
+tbc-export-metadata --ffmetadata seg02.ffmetadata --start 1201 --length 600 input.tbc.db
+```
+
+Stored segments replace the navigation chapters: one `[CHAPTER]` per enabled
+segment (`--ffmetadata-all-segments` for disabled ones too,
+`--ffmetadata-no-segments` to ignore them), `START`/`END` rebased to the
+export start field, title from the segment or `Segment N`. The rules live in
+the TBC library (`src/library/tbc/segments.h`); see `docs/Tools/tbc-segments.md`.
 
 
 

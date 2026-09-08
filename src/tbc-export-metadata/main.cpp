@@ -34,6 +34,7 @@
 #include "audacity.h"
 #include "csv.h"
 #include "ffmetadata.h"
+#include "segmentsreport.h"
 #include "vitcffmetadata.h"
 #include "closedcaptions.h"
 #include "metadataconverter.h"
@@ -67,6 +68,9 @@ struct ExportCommandLineOptions {
     QCommandLineOption ffmetadataNoVitcTimecodeOption;
     QCommandLineOption ffmetadataStartOption;
     QCommandLineOption ffmetadataLengthOption;
+    QCommandLineOption ffmetadataAllSegmentsOption;
+    QCommandLineOption ffmetadataNoSegmentsOption;
+    QCommandLineOption writeSegmentsJsonOption;
     QCommandLineOption writeClosedCaptionsOption;
 
     ExportCommandLineOptions() :
@@ -111,11 +115,18 @@ struct ExportCommandLineOptions {
         ffmetadataNoVitcTimecodeOption("ffmetadata-no-vitc-timecode",
                                        QCoreApplication::translate("main", "Disable FFmpeg-style VITC timecode output in FFMETADATA")),
         ffmetadataStartOption("start",
-                              QCoreApplication::translate("main", "FFMETADATA export start frame (1-based)"),
+                              QCoreApplication::translate("main", "FFMETADATA / segments JSON export start frame (1-based)"),
                               QCoreApplication::translate("main", "frame")),
         ffmetadataLengthOption("length",
-                               QCoreApplication::translate("main", "FFMETADATA export frame length"),
+                               QCoreApplication::translate("main", "FFMETADATA / segments JSON export frame length"),
                                QCoreApplication::translate("main", "frames")),
+        ffmetadataAllSegmentsOption("ffmetadata-all-segments",
+                                    QCoreApplication::translate("main", "Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)")),
+        ffmetadataNoSegmentsOption("ffmetadata-no-segments",
+                                   QCoreApplication::translate("main", "Ignore stored recording segments; write LaserDisc navigation chapters only")),
+        writeSegmentsJsonOption("segments-json",
+                                QCoreApplication::translate("main", "Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; '-' for stdout"),
+                                QCoreApplication::translate("main", "file")),
         writeClosedCaptionsOption("closed-captions",
                                   QCoreApplication::translate("main", "Write closed captions as Scenarist SCC V1.0 format"),
                                   QCoreApplication::translate("main", "file"))
@@ -141,6 +152,9 @@ struct ExportCommandLineOptions {
         parser.addOption(ffmetadataNoVitcTimecodeOption);
         parser.addOption(ffmetadataStartOption);
         parser.addOption(ffmetadataLengthOption);
+        parser.addOption(ffmetadataAllSegmentsOption);
+        parser.addOption(ffmetadataNoSegmentsOption);
+        parser.addOption(writeSegmentsJsonOption);
         parser.addOption(writeClosedCaptionsOption);
     }
 };
@@ -274,6 +288,9 @@ int main(int argc, char *argv[])
         initialOptions.exportFfmpegVitc = parser.isSet(options.writeFfmpegVitcOption);
         initialOptions.exportFfmetadataVitcTimecode = !parser.isSet(options.ffmetadataNoVitcTimecodeOption);
         initialOptions.exportClosedCaptions = parser.isSet(options.writeClosedCaptionsOption);
+        initialOptions.exportSegmentsJson = parser.isSet(options.writeSegmentsJsonOption);
+        initialOptions.ffmetadataSegmentMode = parser.isSet(options.ffmetadataNoSegmentsOption) ? 2
+                                               : parser.isSet(options.ffmetadataAllSegmentsOption) ? 1 : 0;
         parsePositiveOption(parser, options.ffmetadataStartOption, &initialOptions.ffmetadataStart, nullptr);
         parsePositiveOption(parser, options.ffmetadataLengthOption, &initialOptions.ffmetadataLength, nullptr);
         initialOptions.debug = parser.isSet(QStringLiteral("debug"));
@@ -354,10 +371,15 @@ int main(int argc, char *argv[])
                                   || parser.isSet(options.writeAudacityLabelsOption)
                                   || parser.isSet(options.writeFfmetadataOption)
                                   || parser.isSet(options.writeFfmpegVitcOption)
+                                  || parser.isSet(options.writeSegmentsJsonOption)
                                   || parser.isSet(options.writeClosedCaptionsOption);
 
     if (!exportJsonRequested && !hasFormatExports) {
         qCritical("You must specify at least one output option");
+        return 1;
+    }
+    if (parser.isSet(options.ffmetadataAllSegmentsOption) && parser.isSet(options.ffmetadataNoSegmentsOption)) {
+        qCritical("--ffmetadata-all-segments and --ffmetadata-no-segments are mutually exclusive");
         return 1;
     }
 
@@ -431,7 +453,27 @@ int main(int argc, char *argv[])
             qCritical() << errorMessage;
             return 1;
         }
-        if (!writeFfmetadata(metaData, fileName, startFrame, lengthFrames, includeVitcTimecode)) {
+        const FfmetadataSegmentMode segmentMode = parser.isSet(options.ffmetadataNoSegmentsOption)
+                                                      ? FfmetadataSegmentMode::NoSegments
+                                                  : parser.isSet(options.ffmetadataAllSegmentsOption)
+                                                      ? FfmetadataSegmentMode::AllSegments
+                                                      : FfmetadataSegmentMode::EnabledSegments;
+        if (!writeFfmetadata(metaData, fileName, startFrame, lengthFrames, includeVitcTimecode, segmentMode)) {
+            qCritical() << "Failed to write output file:" << fileName;
+            return 1;
+        }
+    }
+    if (parser.isSet(options.writeSegmentsJsonOption)) {
+        const QString &fileName = parser.value(options.writeSegmentsJsonOption);
+        qint32 startFrame = -1;
+        qint32 lengthFrames = -1;
+        QString errorMessage;
+        if (!parsePositiveOption(parser, options.ffmetadataStartOption, &startFrame, &errorMessage)
+            || !parsePositiveOption(parser, options.ffmetadataLengthOption, &lengthFrames, &errorMessage)) {
+            qCritical() << errorMessage;
+            return 1;
+        }
+        if (!writeSegmentsJson(metaData, fileName, inputFileName, startFrame, lengthFrames)) {
             qCritical() << "Failed to write output file:" << fileName;
             return 1;
         }

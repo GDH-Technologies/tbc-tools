@@ -223,6 +223,13 @@
          </property>
         </widget>
        </item>
+       <item>
+        <widget class="QLabel" name="rfVideoRateSourceLabel">
+         <property name="text">
+          <string>default (not stored in metadata)</string>
+         </property>
+        </widget>
+       </item>
       </layout>
      </item>
      <item row="6" column="0">

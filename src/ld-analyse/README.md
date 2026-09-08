@@ -113,3 +113,7 @@ ld-analyse capture.tbc
 - Monitor dropout analysis to identify disc damage patterns
 - Compare SNR across the disc to find optimal playback regions
 - Use VBI data to verify frame numbers and chapter markers
+
+## Recording segments
+
+Recording segments (tape record start/stop seams) live in the metadata's segment layer (`segments` in the JSON, the `segment` table in the `.tbc.db`). `TbcSource` exposes them, derives them through the TBC library (`src/library/tbc/segments.h`) at load when none are stored but decoder events or picture metrics are, and wraps the library's frame rules; the GUI never re-implements a segment rule. The timeline slider paints boundaries and spans, the chapter buttons skip by segment (View ▸ Skip by segments), the Segments Viewer (`segmentsviewerdialog.*`) edits the layer (Apply writes it back through `TbcSource::setSegments`; Save Metadata persists it, SQLite first), and the Export tab queues one tbc-video-export run per segment (`ExportDialog::ExportJob`, `startExportJob`, `finishJobAndAdvance`; the single range is a one-job queue).

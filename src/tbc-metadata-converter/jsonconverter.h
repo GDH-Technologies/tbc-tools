@@ -12,9 +12,6 @@
 #define JSONCONVERTER_H
 
 #include <QString>
-#include <QSqlDatabase>
-#include <QSqlQuery>
-#include <QSqlError>
 #include "tbcmetadata.h"
 
 class JsonConverter
@@ -34,15 +31,11 @@ private:
     Direction m_direction;
     QString m_inputFilename;
     QString m_outputFilename;
-    QSqlDatabase m_database;
     bool processJsonToSqlite();
     bool processSqliteToJson();
     void reportMetadataContents(TbcMetaData &metaData);
     void reportJsonContents(TbcMetaData &metaData);
     void countDropouts(const TbcMetaData &metaData, qint32 &totalDropouts);
-    bool createDatabase();
-    bool createSchema();
-    bool insertData(TbcMetaData &metaData);
 };
 
 #endif // JSONCONVERTER_H

@@ -9,6 +9,8 @@
  ******************************************************************************/
 
 #include "audioalignmentdialog.h"
+
+#include <QScopeGuard>
 #include "ui_audioalignmentdialog.h"
 
 #include "audioalignmentutil.h"
@@ -49,6 +51,9 @@ AudioAlignmentDialog::AudioAlignmentDialog(QWidget *parent) :
                 QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this,
                 [this](int presetIndex) {
+            if (!applyingRfVideoSampleRate) {
+                setRfVideoSampleRateSource(tr("set by user"));
+            }
             const bool customSelected = (presetIndex == 3);
             if (ui->rfVideoSampleRateCustomSpinBox) {
                 ui->rfVideoSampleRateCustomSpinBox->setEnabled(customSelected);
@@ -68,6 +73,21 @@ AudioAlignmentDialog::AudioAlignmentDialog(QWidget *parent) :
         ui->rfVideoSampleRateCustomSpinBox->setValue(40000000);
         ui->rfVideoSampleRateCustomSpinBox->setEnabled(false);
         ui->rfVideoSampleRateCustomSpinBox->setToolTip(rfTimebaseWarning);
+        connect(ui->rfVideoSampleRateCustomSpinBox,
+                QOverload<int>::of(&QSpinBox::valueChanged),
+                this,
+                [this](int) {
+            if (!applyingRfVideoSampleRate && ui->rfVideoRatePresetComboBox
+                && ui->rfVideoRatePresetComboBox->currentIndex() == 3) {
+                setRfVideoSampleRateSource(tr("set by user"));
+            }
+        });
+    }
+    if (ui->rfVideoRateSourceLabel) {
+        ui->rfVideoRateSourceLabel->setToolTip(tr("Where the RF Video Sample Rate came from: the decoder stores the rate "
+                                                 "its fileLoc values count in (vhs-decode metadata schema 2 and later); "
+                                                 "older metadata leaves the 40 Msps default, which is only right for a "
+                                                 "capture the decoder resampled to 40 Msps."));
     }
     if (ui->rfVideoRatePresetLabel) {
         ui->rfVideoRatePresetLabel->setToolTip(rfTimebaseWarning);
@@ -444,6 +464,25 @@ void AudioAlignmentDialog::applyRfSourceRateFromJson(const QString &jsonFilename
     const quint32 rfSourceRateHz = AudioAlignmentUtil::detectRfSourceSampleRateFromJson(jsonFilename);
     if (rfSourceRateHz > 0) {
         setDefaultRfVideoSampleRate(rfSourceRateHz);
+        setRfVideoSampleRateSource(tr("from metadata JSON (%1 Hz)").arg(rfSourceRateHz));
+    } else {
+        setRfVideoSampleRateSource(tr("default (not stored in metadata)"));
+    }
+}
+
+void AudioAlignmentDialog::setRfVideoSampleRateFromMetadata(quint32 sampleRateHz)
+{
+    if (sampleRateHz == 0) {
+        return;
+    }
+    setDefaultRfVideoSampleRate(sampleRateHz);
+    setRfVideoSampleRateSource(tr("from metadata (%1 Hz)").arg(sampleRateHz));
+}
+
+void AudioAlignmentDialog::setRfVideoSampleRateSource(const QString &sourceText)
+{
+    if (ui->rfVideoRateSourceLabel) {
+        ui->rfVideoRateSourceLabel->setText(sourceText);
     }
 }
 
@@ -498,6 +537,8 @@ void AudioAlignmentDialog::setDefaultRfVideoSampleRate(quint32 sampleRateHz)
     if (!ui->rfVideoRatePresetComboBox || !ui->rfVideoSampleRateCustomSpinBox) {
         return;
     }
+    applyingRfVideoSampleRate = true;
+    const auto releaseFlag = qScopeGuard([this]() { applyingRfVideoSampleRate = false; });
 
     if (sampleRateHz == 40000000) {
         ui->rfVideoRatePresetComboBox->setCurrentIndex(0);

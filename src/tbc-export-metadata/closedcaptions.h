@@ -30,7 +30,8 @@
 
 #include "tbcmetadata.h"
 
-QString generateTimeStamp(qint32 fieldIndex);
+QString generateTimeStamp(qint32 fieldIndex, VideoSystem system);
+qint32 addOddParity(qint32 dataByte);
 qint32 sanityCheckData(qint32 dataByte);
 bool writeClosedCaptions(TbcMetaData &metaData, const QString &fileName);
 

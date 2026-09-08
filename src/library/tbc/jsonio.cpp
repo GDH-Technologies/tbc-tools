@@ -195,8 +195,15 @@ void JsonReader::discard()
         beginArray();
         while (readElement()) discard();
         endArray();
+    } else if (c == 'n') {
+        // null: only ever inside a member this library does not model (its
+        // own writers never emit null), so consume it rather than abort the
+        // whole parse
+        spaceGet();
+        for (const char expected : {'u', 'l', 'l'}) {
+            if (get() != expected) throwError("unrecognised value");
+        }
     } else {
-        // XXX recognise null
         throwError("unrecognised value");
     }
 }

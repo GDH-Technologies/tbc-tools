@@ -11,6 +11,7 @@
 
 #include "sqliteio.h"
 
+#include <cmath>
 #include <QSqlDriver>
 #include <QUuid>
 #include <QDebug>
@@ -48,9 +49,69 @@ namespace SqliteValue
     }
 }
 
+// The schema version this library writes. Every migration helper below sets
+// the file to this value once it has brought the file up to date, so a partial
+// migration can never leave the version behind (or ahead of) the tables.
+// Keep in step with the PRAGMA at the top of SCHEMA_SQL.
+static constexpr int kSchemaUserVersion = 8;
+
+// The segmentation tables added in schema version 8. Shared verbatim with
+// vhs-decode's lddecode/tbc_db.py (its schema version 2), which writes the
+// picture_metrics and decoder_event rows during a decode; this library writes
+// segment rows (the editable layer) and backfilled metrics/events.
+static const QString SEGMENTATION_SCHEMA_SQL = QStringLiteral(R"(
+CREATE TABLE IF NOT EXISTS picture_metrics (
+    capture_id INTEGER NOT NULL,
+    field_id INTEGER NOT NULL,
+    luma_mean_ire REAL,
+    field_diff_ire REAL,
+    blanking_dev_ire REAL,
+    sync_tip_dev_ire REAL,
+    noise_ire REAL,
+    burst_amp_ire REAL,
+    FOREIGN KEY (capture_id, field_id)
+        REFERENCES field_record(capture_id, field_id) ON DELETE CASCADE,
+    PRIMARY KEY (capture_id, field_id)
+);
+
+CREATE TABLE IF NOT EXISTS decoder_event (
+    event_id INTEGER PRIMARY KEY,
+    capture_id INTEGER NOT NULL
+        REFERENCES capture(capture_id) ON DELETE CASCADE,
+    field_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    file_loc INTEGER,
+    rf_delta_samples INTEGER,
+    rf_delta_fields REAL,
+    source TEXT NOT NULL,
+    detail_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS decoder_event_field ON decoder_event(capture_id, field_id);
+
+CREATE TABLE IF NOT EXISTS segment (
+    segment_id INTEGER PRIMARY KEY,
+    capture_id INTEGER NOT NULL
+        REFERENCES capture(capture_id) ON DELETE CASCADE,
+    start_field INTEGER NOT NULL,
+    end_field_exclusive INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
+        CHECK (enabled IN (0,1)),
+    title TEXT,
+    comment TEXT,
+    created_by TEXT,
+    updated_at TEXT,
+    derived_from TEXT
+);
+
+CREATE INDEX IF NOT EXISTS segment_start ON segment(capture_id, start_field);
+)");
+
 // SQL schema as per documentation
-static const QString SCHEMA_SQL = R"(
-PRAGMA user_version = 7;
+static const QString SCHEMA_SQL = QStringLiteral(R"(
+PRAGMA user_version = 8;
 
 CREATE TABLE IF NOT EXISTS capture (
     capture_id INTEGER PRIMARY KEY,
@@ -98,6 +159,14 @@ CREATE TABLE IF NOT EXISTS capture (
     user_marker_comment TEXT,
     user_markers_json TEXT,
 
+    -- The rate file_loc/disk_loc count in (schema version 8), NULL when the
+    -- decoder did not record it. No semicolons in these comments: createSchema
+    -- splits the script on them.
+    rf_source_sample_rate_hz REAL,
+    -- Decoder provenance the JSON carries as osInfo/version (schema version 8)
+    os_info TEXT,
+    decoder_version TEXT,
+
     capture_notes TEXT
 );
 
@@ -129,7 +198,7 @@ CREATE TABLE IF NOT EXISTS field_record (
         CHECK (pad IN (0,1)),
     sync_conf INTEGER,
 
-    -- SECAM line identity (schema version 7); see TbcMetaData::Field::secamFirstLineIsRed
+    -- SECAM line identity (schema version 7), see TbcMetaData::Field::secamFirstLineIsRed
     secam_first_line_is_red INTEGER
         CHECK (secam_first_line_is_red IN (0,1)),
 
@@ -203,7 +272,42 @@ CREATE TABLE IF NOT EXISTS closed_caption (
         REFERENCES field_record(capture_id, field_id) ON DELETE CASCADE,
     PRIMARY KEY (capture_id, field_id)
 );
-)";
+)") + SEGMENTATION_SCHEMA_SQL;
+
+// Execute each ;-separated statement of a schema string
+static bool executeSchemaStatements(QSqlDatabase &db, const QString &schema, const char *what)
+{
+    const QStringList statements = schema.split(";", Qt::SkipEmptyParts);
+    for (const QString &statement : statements) {
+        const QString trimmed = statement.trimmed();
+        if (trimmed.isEmpty()) continue;
+        QSqlQuery query(db);
+        if (!query.exec(trimmed)) {
+            qCritical() << "Failed to execute" << what << "statement:" << trimmed.left(60);
+            qCritical() << "SQL Error:" << query.lastError().text();
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool setSchemaUserVersion(QSqlDatabase &db)
+{
+    QSqlQuery versionQuery(db);
+    if (!versionQuery.exec(QStringLiteral("PRAGMA user_version = %1").arg(kSchemaUserVersion))) {
+        qWarning() << "Failed to update SQLite user_version to" << kSchemaUserVersion << ":"
+                   << versionQuery.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+static int readSchemaUserVersion(QSqlDatabase &db)
+{
+    QSqlQuery versionQuery(db);
+    if (!versionQuery.exec(QStringLiteral("PRAGMA user_version")) || !versionQuery.next()) return -1;
+    return versionQuery.value(0).toInt();
+}
 
 SqliteReader::SqliteReader(const QString &fileName)
 {
@@ -255,10 +359,15 @@ bool SqliteReader::readCaptureMetadata(int &captureId, QString &system, QString 
                                      int &userEditInSelection, int &userEditOutSelection,
                                      int &userMarkerSelection, QString &userMarkerComment,
                                      QString &userMarkersJson,
-                                     QString &captureNotes)
+                                     QString &captureNotes,
+                                     double &rfSourceSampleRateHz,
+                                     QString &osInfo, QString &decoderVersion)
 {
     // Check if blanking_16b_ire column exists (for backward compatibility)
     bool hasBlankingColumn = false;
+    bool hasRfSourceSampleRateColumn = false;
+    bool hasOsInfoColumn = false;
+    bool hasDecoderVersionColumn = false;
     bool hasChromaDecoderColumn = false;
     bool hasChromaGainColumn = false;
     bool hasChromaPhaseColumn = false;
@@ -320,6 +429,12 @@ bool SqliteReader::readCaptureMetadata(int &captureId, QString &system, QString 
                 hasFirstActiveFrameLineColumn = true;
             } else if (columnName == "last_active_frame_line") {
                 hasLastActiveFrameLineColumn = true;
+            } else if (columnName == "rf_source_sample_rate_hz") {
+                hasRfSourceSampleRateColumn = true;
+            } else if (columnName == "os_info") {
+                hasOsInfoColumn = true;
+            } else if (columnName == "decoder_version") {
+                hasDecoderVersionColumn = true;
             }
         }
     }
@@ -330,6 +445,15 @@ bool SqliteReader::readCaptureMetadata(int &captureId, QString &system, QString 
                        "field_width, field_height, number_of_sequential_fields, "
                        "colour_burst_start, colour_burst_end, is_mapped, is_subcarrier_locked, "
                        "is_widescreen, white_16b_ire, black_16b_ire";
+    if (hasRfSourceSampleRateColumn) {
+        queryStr += ", rf_source_sample_rate_hz";
+    }
+    if (hasOsInfoColumn) {
+        queryStr += ", os_info";
+    }
+    if (hasDecoderVersionColumn) {
+        queryStr += ", decoder_version";
+    }
     if (hasFirstActiveFieldLineColumn) {
         queryStr += ", first_active_field_line";
     }
@@ -529,6 +653,12 @@ bool SqliteReader::readCaptureMetadata(int &captureId, QString &system, QString 
     
     captureNotes = query.value("capture_notes").toString();
 
+    rfSourceSampleRateHz = hasRfSourceSampleRateColumn
+                               ? SqliteValue::toDoubleOrDefault(query, "rf_source_sample_rate_hz", -1.0)
+                               : -1.0;
+    osInfo = hasOsInfoColumn ? query.value("os_info").toString() : QString();
+    decoderVersion = hasDecoderVersionColumn ? query.value("decoder_version").toString() : QString();
+
     return true;
 }
 static bool ensureCaptureColumns(QSqlDatabase &db)
@@ -567,7 +697,10 @@ static bool ensureCaptureColumns(QSqlDatabase &db)
         {"user_edit_out_selection", "INTEGER"},
         {"user_marker_selection", "INTEGER"},
         {"user_marker_comment", "TEXT"},
-        {"user_markers_json", "TEXT"}
+        {"user_markers_json", "TEXT"},
+        {"rf_source_sample_rate_hz", "REAL"},
+        {"os_info", "TEXT"},
+        {"decoder_version", "TEXT"}
     };
 
     bool altered = false;
@@ -585,11 +718,10 @@ static bool ensureCaptureColumns(QSqlDatabase &db)
         }
     }
 
-    if (altered) {
-        QSqlQuery versionQuery(db);
-        if (!versionQuery.exec("PRAGMA user_version = 6")) {
-            qWarning() << "Failed to update SQLite user_version to 6:" << versionQuery.lastError().text();
-        }
+    // Only ever move the version forward: this helper used to stamp 6 even
+    // on a newer file, so a later migration's version could regress.
+    if (altered && readSchemaUserVersion(db) < kSchemaUserVersion) {
+        setSchemaUserVersion(db);
     }
 
     return true;
@@ -618,12 +750,26 @@ static bool ensureFieldRecordColumns(QSqlDatabase &db)
             qCritical() << "Failed to add field_record column secam_first_line_is_red:" << alterQuery.lastError().text();
             return false;
         }
-        QSqlQuery versionQuery(db);
-        if (!versionQuery.exec("PRAGMA user_version = 7")) {
-            qWarning() << "Failed to update SQLite user_version to 7:" << versionQuery.lastError().text();
+        if (readSchemaUserVersion(db) < kSchemaUserVersion) {
+            setSchemaUserVersion(db);
         }
     }
 
+    return true;
+}
+
+// Ensure the schema-version-8 segmentation tables exist (picture_metrics,
+// decoder_event, segment) and the file carries the current version. The DDL
+// is all IF NOT EXISTS, so this is idempotent on any earlier .tbc.db,
+// including the version-1/2 files vhs-decode writes.
+static bool ensureSegmentationTables(QSqlDatabase &db)
+{
+    if (!executeSchemaStatements(db, SEGMENTATION_SCHEMA_SQL, "segmentation schema")) {
+        return false;
+    }
+    if (readSchemaUserVersion(db) < kSchemaUserVersion) {
+        setSchemaUserVersion(db);
+    }
     return true;
 }
 
@@ -899,6 +1045,12 @@ bool SqliteWriter::createSchema()
     if (!ensureFieldRecordColumns(db)) {
         return false;
     }
+    if (!ensureCaptureColumns(db)) {
+        return false;
+    }
+    if (!ensureSegmentationTables(db)) {
+        return false;
+    }
 
     return true;
 }
@@ -918,7 +1070,9 @@ int SqliteWriter::writeCaptureMetadata(const QString &system, const QString &dec
                                      int userEditInSelection, int userEditOutSelection,
                                      int userMarkerSelection, const QString &userMarkerComment,
                                      const QString &userMarkersJson,
-                                     const QString &captureNotes)
+                                     const QString &captureNotes,
+                                     double rfSourceSampleRateHz,
+                                     const QString &osInfo, const QString &decoderVersion)
 {
     QSqlQuery query(db);
     query.prepare("INSERT INTO capture (system, decoder, git_branch, git_commit, "
@@ -930,8 +1084,9 @@ int SqliteWriter::writeCaptureMetadata(const QString &system, const QString &dec
                  "chroma_decoder, chroma_gain, chroma_phase, luma_nr, "
                  "ntsc_adaptive, ntsc_adapt_threshold, ntsc_chroma_weight, ntsc_phase_compensation, "
                  "pal_transform_threshold, user_edit_in_selection, user_edit_out_selection, "
-                 "user_marker_selection, user_marker_comment, user_markers_json, capture_notes) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                 "user_marker_selection, user_marker_comment, user_markers_json, capture_notes, "
+                 "rf_source_sample_rate_hz, os_info, decoder_version) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
     query.addBindValue(system);
     query.addBindValue(decoder);
@@ -970,9 +1125,12 @@ int SqliteWriter::writeCaptureMetadata(const QString &system, const QString &dec
     query.addBindValue(userMarkerComment.isEmpty() ? QVariant() : userMarkerComment);
     query.addBindValue(userMarkersJson.isEmpty() ? QVariant() : userMarkersJson);
     query.addBindValue(captureNotes.isEmpty() ? QVariant() : captureNotes);
+    query.addBindValue(rfSourceSampleRateHz > 0.0 ? QVariant(rfSourceSampleRateHz) : QVariant());
+    query.addBindValue(osInfo.isEmpty() ? QVariant() : QVariant(osInfo));
+    query.addBindValue(decoderVersion.isEmpty() ? QVariant() : QVariant(decoderVersion));
 
     if (!query.exec()) {
-        tbcDebugStream() << "Failed to insert capture metadata:" << query.lastError().text();
+        qCritical() << "Failed to insert capture metadata:" << query.lastError().text();
         return -1;
     }
 
@@ -994,12 +1152,17 @@ bool SqliteWriter::updateCaptureMetadata(int captureId, const QString &system, c
                                        int userEditInSelection, int userEditOutSelection,
                                        int userMarkerSelection, const QString &userMarkerComment,
                                        const QString &userMarkersJson,
-                                       const QString &captureNotes)
+                                       const QString &captureNotes,
+                                       double rfSourceSampleRateHz,
+                                       const QString &osInfo, const QString &decoderVersion)
 {
     if (!ensureCaptureColumns(db)) {
         return false;
     }
     if (!ensureFieldRecordColumns(db)) {
+        return false;
+    }
+    if (!ensureSegmentationTables(db)) {
         return false;
     }
     QSqlQuery query(db);
@@ -1012,7 +1175,8 @@ bool SqliteWriter::updateCaptureMetadata(int captureId, const QString &system, c
                  "chroma_decoder=?, chroma_gain=?, chroma_phase=?, luma_nr=?, "
                  "ntsc_adaptive=?, ntsc_adapt_threshold=?, ntsc_chroma_weight=?, ntsc_phase_compensation=?, "
                  "pal_transform_threshold=?, user_edit_in_selection=?, user_edit_out_selection=?, "
-                 "user_marker_selection=?, user_marker_comment=?, user_markers_json=?, capture_notes=? "
+                 "user_marker_selection=?, user_marker_comment=?, user_markers_json=?, capture_notes=?, "
+                 "rf_source_sample_rate_hz=?, os_info=?, decoder_version=? "
                  "WHERE capture_id=?");
 
     query.addBindValue(system);
@@ -1052,10 +1216,13 @@ bool SqliteWriter::updateCaptureMetadata(int captureId, const QString &system, c
     query.addBindValue(userMarkerComment.isEmpty() ? QVariant() : userMarkerComment);
     query.addBindValue(userMarkersJson.isEmpty() ? QVariant() : userMarkersJson);
     query.addBindValue(captureNotes.isEmpty() ? QVariant() : captureNotes);
+    query.addBindValue(rfSourceSampleRateHz > 0.0 ? QVariant(rfSourceSampleRateHz) : QVariant());
+    query.addBindValue(osInfo.isEmpty() ? QVariant() : QVariant(osInfo));
+    query.addBindValue(decoderVersion.isEmpty() ? QVariant() : QVariant(decoderVersion));
     query.addBindValue(captureId);
 
     if (!query.exec()) {
-        tbcDebugStream() << "Failed to update capture metadata:" << query.lastError().text();
+        qCritical() << "Failed to update capture metadata:" << query.lastError().text();
         return false;
     }
 
@@ -1084,7 +1251,7 @@ bool SqliteWriter::writePcmAudioParameters(int captureId, int bits, bool isSigne
 }
 
 bool SqliteWriter::writeField(int captureId, int fieldId, int audioSamples, int decodeFaults,
-                            double diskLoc, int efmTValues, int fieldPhaseId, int fileLoc,
+                            double diskLoc, int efmTValues, int fieldPhaseId, qint64 fileLoc,
                             bool isFirstField, double medianBurstIre, bool pad, int syncConf,
                             bool ntscIsFmCodeDataValid, int ntscFmCodeData, bool ntscFieldFlag,
                             bool ntscIsVideoIdDataValid, int ntscVideoIdData, bool ntscWhiteFlag,
@@ -1201,6 +1368,21 @@ bool SqliteWriter::writeFieldClosedCaption(int captureId, int fieldId, int data0
     return true;
 }
 
+bool SqliteWriter::deleteFieldDropouts(int captureId, int fieldId)
+{
+    QSqlQuery query(db);
+    query.prepare("DELETE FROM drop_outs WHERE capture_id = ? AND field_id = ?");
+    query.addBindValue(captureId);
+    query.addBindValue(fieldId);
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to delete dropouts:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
 bool SqliteWriter::writeFieldDropouts(int captureId, int fieldId, int startx, int endx, int fieldLine)
 {
     QSqlQuery query(db);
@@ -1214,6 +1396,152 @@ bool SqliteWriter::writeFieldDropouts(int captureId, int fieldId, int startx, in
 
     if (!query.exec()) {
         tbcDebugStream() << "Failed to insert dropout:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+// -- Segmentation tables (schema version 8) --
+
+static QVariant metricOrNull(double value)
+{
+    return std::isfinite(value) ? QVariant(value) : QVariant();
+}
+
+bool SqliteReader::readAllFieldPictureMetrics(int captureId, QSqlQuery &metricsQuery)
+{
+    metricsQuery = QSqlQuery(db);
+    metricsQuery.prepare("SELECT field_id, luma_mean_ire, field_diff_ire, blanking_dev_ire, "
+                         "sync_tip_dev_ire, noise_ire, burst_amp_ire FROM picture_metrics "
+                         "WHERE capture_id = ? ORDER BY field_id");
+    metricsQuery.addBindValue(captureId);
+    return metricsQuery.exec();
+}
+
+bool SqliteReader::readAllDecoderEvents(int captureId, QSqlQuery &eventsQuery)
+{
+    eventsQuery = QSqlQuery(db);
+    eventsQuery.prepare("SELECT event_id, field_id, kind, file_loc, rf_delta_samples, rf_delta_fields, "
+                        "source, detail_json FROM decoder_event "
+                        "WHERE capture_id = ? ORDER BY field_id, event_id");
+    eventsQuery.addBindValue(captureId);
+    return eventsQuery.exec();
+}
+
+bool SqliteReader::readAllSegments(int captureId, QSqlQuery &segmentsQuery)
+{
+    segmentsQuery = QSqlQuery(db);
+    segmentsQuery.prepare("SELECT segment_id, start_field, end_field_exclusive, kind, source, enabled, "
+                          "title, comment, created_by, updated_at, derived_from FROM segment "
+                          "WHERE capture_id = ? ORDER BY start_field, segment_id");
+    segmentsQuery.addBindValue(captureId);
+    return segmentsQuery.exec();
+}
+
+bool SqliteWriter::writeFieldPictureMetrics(int captureId, int fieldId, double lumaMeanIre, double fieldDiffIre,
+                                            double blankingDevIre, double syncTipDevIre, double noiseIre,
+                                            double burstAmpIre)
+{
+    QSqlQuery query(db);
+    query.prepare("INSERT OR REPLACE INTO picture_metrics (capture_id, field_id, luma_mean_ire, field_diff_ire, "
+                  "blanking_dev_ire, sync_tip_dev_ire, noise_ire, burst_amp_ire) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+
+    query.addBindValue(captureId);
+    query.addBindValue(fieldId);
+    query.addBindValue(metricOrNull(lumaMeanIre));
+    query.addBindValue(metricOrNull(fieldDiffIre));
+    query.addBindValue(metricOrNull(blankingDevIre));
+    query.addBindValue(metricOrNull(syncTipDevIre));
+    query.addBindValue(metricOrNull(noiseIre));
+    query.addBindValue(metricOrNull(burstAmpIre));
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to insert picture metrics:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+bool SqliteWriter::deleteDecoderEvents(int captureId)
+{
+    QSqlQuery query(db);
+    query.prepare("DELETE FROM decoder_event WHERE capture_id = ?");
+    query.addBindValue(captureId);
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to delete decoder events:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+bool SqliteWriter::writeDecoderEvent(int captureId, int fieldId, const QString &kind, const QVariant &fileLoc,
+                                     const QVariant &rfDeltaSamples, const QVariant &rfDeltaFields,
+                                     const QString &source, const QString &detailJson)
+{
+    QSqlQuery query(db);
+    query.prepare("INSERT INTO decoder_event (capture_id, field_id, kind, file_loc, rf_delta_samples, "
+                  "rf_delta_fields, source, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+
+    query.addBindValue(captureId);
+    query.addBindValue(fieldId);
+    query.addBindValue(kind);
+    query.addBindValue(fileLoc);
+    query.addBindValue(rfDeltaSamples);
+    query.addBindValue(rfDeltaFields);
+    query.addBindValue(source);
+    query.addBindValue(detailJson.isEmpty() ? QVariant() : QVariant(detailJson));
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to insert decoder event:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+bool SqliteWriter::deleteSegments(int captureId)
+{
+    QSqlQuery query(db);
+    query.prepare("DELETE FROM segment WHERE capture_id = ?");
+    query.addBindValue(captureId);
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to delete segments:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+bool SqliteWriter::writeSegment(int captureId, int segmentId, int startField, int endFieldExclusive,
+                                const QString &kind, const QString &source, bool enabled,
+                                const QString &title, const QString &comment, const QString &createdBy,
+                                const QString &updatedAt, const QString &derivedFrom)
+{
+    QSqlQuery query(db);
+    query.prepare("INSERT INTO segment (segment_id, capture_id, start_field, end_field_exclusive, kind, source, "
+                  "enabled, title, comment, created_by, updated_at, derived_from) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+    query.addBindValue(segmentId);
+    query.addBindValue(captureId);
+    query.addBindValue(startField);
+    query.addBindValue(endFieldExclusive);
+    query.addBindValue(kind);
+    query.addBindValue(source);
+    query.addBindValue(enabled ? 1 : 0);
+    query.addBindValue(title.isEmpty() ? QVariant() : QVariant(title));
+    query.addBindValue(comment.isEmpty() ? QVariant() : QVariant(comment));
+    query.addBindValue(createdBy.isEmpty() ? QVariant() : QVariant(createdBy));
+    query.addBindValue(updatedAt.isEmpty() ? QVariant() : QVariant(updatedAt));
+    query.addBindValue(derivedFrom.isEmpty() ? QVariant() : QVariant(derivedFrom));
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to insert segment:" << query.lastError().text();
         return false;
     }
 

@@ -7,6 +7,7 @@ add_executable(tbc-export-metadata
     ffmetadata.cpp
     jsonio.cpp
     metadataconverter.cpp
+    segmentsreport.cpp
     vitcffmetadata.cpp
     metadataexportdialog.cpp
     metadataexportdialog.ui
