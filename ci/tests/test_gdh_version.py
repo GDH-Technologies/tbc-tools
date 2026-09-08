@@ -29,6 +29,41 @@ CMAKELISTS = REPO_ROOT / "CMakeLists.txt"
 BEGIN_MARKER = "# --- gdh-version block: begin"
 END_MARKER = "# --- gdh-version block: end ---"
 
+VERSION_FILE_NAME = ".gdh-version"
+
+
+def extract_cmake_block() -> str:
+    """The gdh-version block from CMakeLists.txt, verbatim."""
+    text = CMAKELISTS.read_text(encoding="utf-8")
+    start = text.index(BEGIN_MARKER)
+    end = text.index(END_MARKER) + len(END_MARKER)
+    return text[start:end]
+
+
+def resolve_with_cmake(source_dir: Path) -> str:
+    """Run the extracted CMake block against `source_dir` and return APP_VERSION.
+
+    This is how the no-git tiers get exercised: the block is the only thing a
+    source tarball or a Nix build sandbox has to go on.
+    """
+    with tempfile.TemporaryDirectory(prefix="gdh-cmake-") as tmp:
+        script = Path(tmp) / "resolve.cmake"
+        script.write_text(
+            f'set(CMAKE_SOURCE_DIR "{source_dir.as_posix()}")\n'
+            f"{extract_cmake_block()}\n"
+            'message(STATUS "APP_VERSION=${APP_VERSION}")\n',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["cmake", "-P", str(script)], capture_output=True, text=True
+        )
+    if result.returncode != 0:
+        raise AssertionError(f"cmake -P failed: {result.stderr}")
+    match = re.search(r"APP_VERSION=(\S+)", result.stderr + result.stdout)
+    if match is None:
+        raise AssertionError(f"no APP_VERSION in cmake output:\n{result.stderr}")
+    return match.group(1)
+
 
 def run_script(*args: str, script: Path | None = None) -> subprocess.CompletedProcess:
     """Invoke gdh_version.py.
@@ -97,6 +132,15 @@ class FakeRepo:
 
     def tag(self, name: str) -> None:
         self.git("tag", "-a", name, "-m", name)
+
+    def write_version_file(self, version: str) -> None:
+        (self.root / VERSION_FILE_NAME).write_text(version + "\n", encoding="utf-8")
+
+    def read_version_file(self) -> str:
+        return (self.root / VERSION_FILE_NAME).read_text(encoding="utf-8").strip()
+
+    def bump(self, *args: str) -> subprocess.CompletedProcess:
+        return run_script("bump", *args, script=self.script)
 
     def show(self, *args: str) -> str:
         result = run_script("show", *args, script=self.script)
@@ -231,12 +275,6 @@ class TestBumpClassification(unittest.TestCase):
 class TestCMakeParity(unittest.TestCase):
     """The CMake block and the script must resolve the same version."""
 
-    def extract_block(self) -> str:
-        text = CMAKELISTS.read_text(encoding="utf-8")
-        start = text.index(BEGIN_MARKER)
-        end = text.index(END_MARKER) + len(END_MARKER)
-        return text[start:end]
-
     def test_markers_are_present_and_ordered(self):
         text = CMAKELISTS.read_text(encoding="utf-8")
         self.assertEqual(text.count(BEGIN_MARKER), 1)
@@ -245,27 +283,135 @@ class TestCMakeParity(unittest.TestCase):
 
     @unittest.skipIf(shutil.which("cmake") is None, "cmake is not installed")
     def test_cmake_block_matches_script(self):
-        block = self.extract_block()
-        with tempfile.TemporaryDirectory(prefix="gdh-cmake-") as tmp:
-            script = Path(tmp) / "resolve.cmake"
-            script.write_text(
-                f'set(CMAKE_SOURCE_DIR "{REPO_ROOT.as_posix()}")\n'
-                f"{block}\n"
-                'message(STATUS "APP_VERSION=${APP_VERSION}")\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                ["cmake", "-P", str(script)],
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        match = re.search(r"APP_VERSION=(\S+)", result.stderr + result.stdout)
-        self.assertIsNotNone(match, f"no APP_VERSION in cmake output:\n{result.stderr}")
-
         expected = run_script("show").stdout.strip()
-        self.assertEqual(match.group(1), expected)
+        self.assertEqual(resolve_with_cmake(REPO_ROOT), expected)
+
+
+@unittest.skipIf(shutil.which("cmake") is None, "cmake is not installed")
+class TestVersionFileTier(unittest.TestCase):
+    """`.gdh-version` is the tier for consumers that cannot see git tags.
+
+    Nix copies only tracked files into the build sandbox and flakes never
+    expose tags, so without this tier a Nix build silently reports upstream's
+    version instead of the fork's.
+    """
+
+    def make_tarball(self, upstream: str = "3.2.8", version: str | None = None) -> Path:
+        """A source tree with no .git, as a tarball or a Nix sandbox sees it."""
+        root = Path(tempfile.mkdtemp(prefix="gdh-tarball-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "vcpkg.json").write_text(
+            json.dumps({"name": "tbc-tools", "version": upstream}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if version is not None:
+            (root / VERSION_FILE_NAME).write_text(version + "\n", encoding="utf-8")
+        return root
+
+    def test_version_file_is_used_when_there_is_no_git(self):
+        root = self.make_tarball(version="3.2.8-gdh-1.0")
+        self.assertEqual(resolve_with_cmake(root), "3.2.8-gdh-1.0")
+
+    def test_falls_back_to_vcpkg_when_there_is_no_version_file(self):
+        root = self.make_tarball()
+        self.assertEqual(resolve_with_cmake(root), "3.2.8")
+
+    def test_a_stale_version_file_is_ignored(self):
+        """A file naming a different upstream base is stale, exactly as a
+        stale tag is: upstream moved and the GDH counters reset."""
+        root = self.make_tarball(upstream="3.2.9", version="3.2.8-gdh-1.0")
+        self.assertEqual(resolve_with_cmake(root), "3.2.9")
+
+    def test_a_malformed_version_file_is_ignored(self):
+        root = self.make_tarball(version="not a version")
+        self.assertEqual(resolve_with_cmake(root), "3.2.8")
+
+    def test_an_empty_version_file_is_ignored(self):
+        root = self.make_tarball(version="")
+        self.assertEqual(resolve_with_cmake(root), "3.2.8")
+
+    def test_git_wins_over_the_version_file(self):
+        """In a git checkout the tag is authoritative; the file is a cache of
+        it and must never override the live describe (which carries distance
+        and dirty state the file cannot)."""
+        repo = FakeRepo(self)
+        repo.tag("v3.2.8-gdh-2.0")
+        repo.write_version_file("3.2.8-gdh-1.0")
+        repo.git("add", "-A")
+        repo.git("commit", "-q", "-m", "chore: stale version file")
+        self.assertRegex(
+            resolve_with_cmake(repo.root), r"^3\.2\.8-gdh-2\.0\+1\.g[0-9a-f]{8}$"
+        )
+
+
+class TestBumpWritesTheVersionFile(unittest.TestCase):
+    def test_bump_commits_the_file_and_tags_that_commit(self):
+        repo = FakeRepo(self)
+        repo.commit("feat: something worth releasing")
+        result = repo.bump()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertEqual(repo.read_version_file(), "3.2.8-gdh-1.0")
+        # The tag must land on the commit that carries the file, so a build
+        # from the tag sees the file and `git describe` reports distance 0.
+        self.assertEqual(repo.show(), "3.2.8-gdh-1.0")
+        self.assertEqual(
+            repo.git("rev-parse", "v3.2.8-gdh-1.0^{commit}"),
+            repo.git("rev-parse", "HEAD"),
+        )
+        self.assertEqual(repo.git("status", "--porcelain"), "")
+
+    def test_bump_refuses_a_dirty_tree_before_writing_anything(self):
+        repo = FakeRepo(self)
+        repo.commit("feat: something")
+        (repo.root / "untracked.txt").write_text("scratch\n")
+        result = repo.bump()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((repo.root / VERSION_FILE_NAME).exists())
+
+    def test_bump_from_a_detached_head_pushes_the_commit_then_the_tag(self):
+        """The CI path. actions/checkout leaves HEAD detached, so --branch is
+        what says where the version commit belongs; without the commit reaching
+        the branch first, the tag would name a commit that is on no branch."""
+        repo = FakeRepo(self)
+        repo.commit("feat: something worth releasing")
+
+        remote = Path(tempfile.mkdtemp(prefix="gdh-origin-"))
+        self.addCleanup(shutil.rmtree, remote, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        repo.git("remote", "add", "origin", str(remote))
+        repo.git("push", "-q", "origin", "main")
+        repo.git("checkout", "-q", "--detach", "HEAD")
+
+        result = repo.bump("--push", "--branch", "main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        def at_remote(ref: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(remote), "rev-parse", ref],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+
+        self.assertEqual(at_remote("refs/heads/main"), repo.git("rev-parse", "HEAD"))
+        self.assertEqual(at_remote("refs/tags/v3.2.8-gdh-1.0^{commit}"),
+                         at_remote("refs/heads/main"))
+
+    def test_bump_refuses_to_push_from_a_detached_head_without_a_branch(self):
+        repo = FakeRepo(self)
+        repo.commit("feat: something")
+        repo.git("checkout", "-q", "--detach", "HEAD")
+        result = repo.bump("--push")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("detached", result.stderr)
+
+    def test_a_second_bump_updates_the_file(self):
+        repo = FakeRepo(self)
+        repo.commit("feat: first")
+        self.assertEqual(repo.bump().returncode, 0)
+        repo.commit("feat: second")
+        self.assertEqual(repo.bump().returncode, 0)
+        self.assertEqual(repo.read_version_file(), "3.2.8-gdh-1.1")
+        self.assertEqual(repo.show(), "3.2.8-gdh-1.1")
 
 
 if __name__ == "__main__":

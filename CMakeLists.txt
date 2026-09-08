@@ -344,12 +344,20 @@ endfunction()
 # Build metadata (set by Nix or other build systems)
 set(APP_BRANCH "nix" CACHE STRING "Build source identifier")
 set(APP_COMMIT "0.0.0" CACHE STRING "Build version identifier")
-# Release version. The GDH fork carries its version entirely in a git tag of the
-# form v<upstream>-gdh-<major>.<minor>; nothing here is committed or bumped.
+# Release version. The GDH fork carries its version in a git tag of the form
+# v<upstream>-gdh-<major>.<minor>; the tag is the only input, and .gdh-version
+# is a cache of it for consumers that cannot see tags.
 # Resolution order:
-#   1. an explicit -DAPP_VERSION=            (CI, packagers)
+#   1. an explicit -DAPP_VERSION=            (CI, packagers, the Nix flake)
 #   2. the nearest gdh tag, via git describe (any git checkout)
-#   3. the "version" field of vcpkg.json     (source tarball with no .git)
+#   3. the .gdh-version file                 (no .git: tarball, Nix sandbox)
+#   4. the "version" field of vcpkg.json     (upstream's own, pre-first-bump)
+#
+# Tier 3 exists because a Nix build gets only the tracked tree -- flakes expose
+# rev/revCount but never tags, and .git is filtered out of the flake source --
+# so without it a Nix build silently reports upstream's version. The file is
+# written and committed by scripts/gdh_version.py at bump time, and the tag is
+# placed on that commit, so the two agree by construction.
 #
 # scripts/gdh_version.py implements this same rule for the tooling side, and
 # ci/tests/test_gdh_version.py holds the two in agreement. Change one, change both.
@@ -369,8 +377,25 @@ if(NOT APP_VERSION)
         unset(_VCPKG_VERSION_MATCH)
     endif()
 
-    # Upstream's own declared version, and the no-git fallback.
+    # Upstream's own declared version, and the last-resort fallback.
     set(_GDH_UPSTREAM "${_APP_VERSION_DEFAULT}")
+
+    # The committed cache of the tag, for builds with no .git to describe. A
+    # file naming a different upstream base is stale for the same reason a
+    # stale tag is -- upstream moved and the GDH counters reset -- so it is
+    # ignored rather than trusted. The git block below overwrites this whenever
+    # it can resolve, because only describe carries distance and dirty state.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/.gdh-version")
+        file(READ "${CMAKE_SOURCE_DIR}/.gdh-version" _GDH_VERSION_FILE)
+        string(STRIP "${_GDH_VERSION_FILE}" _GDH_VERSION_FILE)
+        string(REGEX MATCH "^([0-9]+(\\.[0-9]+)*)-gdh-[0-9]+\\.[0-9]+$"
+            _GDH_VERSION_FILE_MATCH "${_GDH_VERSION_FILE}")
+        if(_GDH_VERSION_FILE_MATCH AND CMAKE_MATCH_1 STREQUAL "${_GDH_UPSTREAM}")
+            set(_APP_VERSION_DEFAULT "${_GDH_VERSION_FILE}")
+        endif()
+        unset(_GDH_VERSION_FILE)
+        unset(_GDH_VERSION_FILE_MATCH)
+    endif()
 
     find_package(Git QUIET)
     if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")

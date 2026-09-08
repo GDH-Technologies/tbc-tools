@@ -15,23 +15,29 @@
 # bumps it and we merge that in, while the GDH path never writes it (GDH tags
 # are excluded from release.yml's trigger, so its version stamper never runs).
 #
-# The git tag is the only source of truth. Nothing here edits or commits a
-# version file.
+# The git tag is the only INPUT: nothing here decides a version from a file.
+# `bump` does write one -- .gdh-version, holding the exact version the new tag
+# names -- and commits it before tagging that same commit, so the file and the
+# tag agree by construction. The file exists for consumers that cannot see
+# tags: a Nix build gets only the tracked tree (flakes expose rev/revCount but
+# never tags, and .git is filtered out of the flake source), so without it such
+# a build silently reports upstream's version instead of the fork's.
 #
 # Usage:
 #   scripts/gdh_version.py show                 # resolved version string
 #   scripts/gdh_version.py show --json          # the full resolution, as JSON
 #   scripts/gdh_version.py propose              # scan commits, print next bump
 #   scripts/gdh_version.py propose --level minor
-#   scripts/gdh_version.py bump --level auto --push
+#   scripts/gdh_version.py bump --level auto --push --branch main
 #
 # Exit codes: 0 on success; 2 when `propose --level auto` finds nothing that
 # warrants a release; other non-zero on error.
 #
 # NOTE for CMake consumers: CMakeLists.txt derives APP_VERSION with the same
-# rule at configure time. Creating a tag after configuring leaves the built
-# binary reporting the older version until you re-configure. CI configures
-# fresh, so this only bites local incremental builds.
+# rule at configure time, and reads .gdh-version when there is no .git.
+# Creating a tag after configuring leaves the built binary reporting the older
+# version until you re-configure. CI configures fresh, so this only bites local
+# incremental builds.
 
 from __future__ import annotations
 
@@ -43,6 +49,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The committed cache of the tag, read by CMakeLists.txt when there is no .git.
+VERSION_FILE = REPO_ROOT / ".gdh-version"
 
 # v3.2.8-gdh-1.0-38-g70803adc  ->  upstream / major / minor / distance / node
 DESCRIBE_RE = re.compile(
@@ -294,14 +303,35 @@ def do_bump(args: argparse.Namespace) -> int:
     if git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}", check=False):
         raise VersionError(f"tag {tag} already exists")
 
-    git("tag", "-a", tag, "-m", f"GDH release {tag.lstrip('v')}")
+    # Commit the cache of the tag BEFORE tagging, so the tag lands on the commit
+    # that carries the file: `git describe` still reports distance 0, and a
+    # build from the tag with no .git reads the same version from the file.
+    version = tag.lstrip("v")
+    VERSION_FILE.write_text(version + "\n", encoding="utf-8")
+    if git("status", "--porcelain", "--", str(VERSION_FILE)):
+        git("add", "--", str(VERSION_FILE))
+        git("commit", "-q", "-m", f"chore(version): {version}")
+        print(f"committed {VERSION_FILE.name} = {version}")
+
+    git("tag", "-a", tag, "-m", f"GDH release {version}")
     print(f"created {tag}")
 
     if args.push:
+        # The version commit has to reach the branch before the tag does, or the
+        # tag names a commit that is on no branch.
+        branch = args.branch or git("symbolic-ref", "--short", "HEAD", check=False)
+        if not branch:
+            raise VersionError(
+                "HEAD is detached; pass --branch to say where the version commit goes"
+            )
+        git("push", "origin", f"HEAD:refs/heads/{branch}")
         git("push", "origin", tag)
-        print(f"pushed {tag} to origin")
+        print(f"pushed {branch} and {tag} to origin")
     else:
-        print(f"not pushed; run: git push origin {tag}")
+        print(
+            "not pushed; run: git push origin HEAD:refs/heads/<branch> "
+            f"&& git push origin {tag}"
+        )
     return 0
 
 
@@ -319,7 +349,11 @@ def main(argv: list[str] | None = None) -> int:
 
     bump = sub.add_parser("bump", help="create the next gdh tag")
     bump.add_argument("--level", choices=("auto", "major", "minor"), default="auto")
-    bump.add_argument("--push", action="store_true", help="push the tag to origin")
+    bump.add_argument("--push", action="store_true",
+                      help="push the version commit and the tag to origin")
+    bump.add_argument("--branch", default=None,
+                      help="branch the version commit belongs on "
+                           "(required with --push when HEAD is detached, as in CI)")
     bump.set_defaults(func=do_bump)
 
     args = parser.parse_args(argv)
