@@ -344,6 +344,19 @@ endfunction()
 # Build metadata (set by Nix or other build systems)
 set(APP_BRANCH "nix" CACHE STRING "Build source identifier")
 set(APP_COMMIT "0.0.0" CACHE STRING "Build version identifier")
+# Release version. The GDH fork carries its version entirely in a git tag of the
+# form v<upstream>-gdh-<major>.<minor>; nothing here is committed or bumped.
+# Resolution order:
+#   1. an explicit -DAPP_VERSION=            (CI, packagers)
+#   2. the nearest gdh tag, via git describe (any git checkout)
+#   3. the "version" field of vcpkg.json     (source tarball with no .git)
+#
+# scripts/gdh_version.py implements this same rule for the tooling side, and
+# ci/tests/test_gdh_version.py holds the two in agreement. Change one, change both.
+#
+# This resolves at CONFIGURE time: creating a tag after configuring leaves the
+# built binary reporting the older version until you re-configure.
+# --- gdh-version block: begin (extracted verbatim by ci/tests/test_gdh_version.py) ---
 if(NOT APP_VERSION)
     set(_APP_VERSION_DEFAULT "0.0.0")
     if(EXISTS "${CMAKE_SOURCE_DIR}/vcpkg.json")
@@ -355,9 +368,115 @@ if(NOT APP_VERSION)
         unset(_VCPKG_JSON_CONTENT)
         unset(_VCPKG_VERSION_MATCH)
     endif()
+
+    # Upstream's own declared version, and the no-git fallback.
+    set(_GDH_UPSTREAM "${_APP_VERSION_DEFAULT}")
+
+    find_package(Git QUIET)
+    if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+        # No commit-ish here: git refuses to combine one with --dirty, and the
+        # dirty state is read separately below anyway.
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" describe --tags --long --abbrev=8 --match "v*-gdh-*"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE _GDH_DESCRIBE
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _GDH_DESCRIBE_RESULT
+            ERROR_QUIET
+        )
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" status --porcelain
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE _GDH_STATUS
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        set(_GDH_DIRTY FALSE)
+        if(NOT _GDH_STATUS STREQUAL "")
+            set(_GDH_DIRTY TRUE)
+        endif()
+
+        set(_GDH_MATCHED FALSE)
+        set(_GDH_MAJOR 0)
+        set(_GDH_MINOR 0)
+        if(_GDH_DESCRIBE_RESULT EQUAL 0)
+            string(REGEX MATCH
+                "^v([0-9]+(\\.[0-9]+)*)-gdh-([0-9]+)\\.([0-9]+)-([0-9]+)-g([0-9a-f]+)$"
+                _GDH_DESCRIBE_MATCH "${_GDH_DESCRIBE}")
+            # A gdh tag naming a different upstream base means upstream moved:
+            # the counters reset, so report gdh-0.0 until the next bump.
+            if(_GDH_DESCRIBE_MATCH AND CMAKE_MATCH_1 STREQUAL "${_GDH_UPSTREAM}")
+                set(_GDH_MAJOR "${CMAKE_MATCH_3}")
+                set(_GDH_MINOR "${CMAKE_MATCH_4}")
+                set(_GDH_DISTANCE "${CMAKE_MATCH_5}")
+                set(_GDH_NODE "g${CMAKE_MATCH_6}")
+                set(_GDH_MATCHED TRUE)
+            endif()
+            unset(_GDH_DESCRIBE_MATCH)
+        endif()
+
+        if(NOT _GDH_MATCHED)
+            # `git describe --match v*-gdh-*` cannot supply a distance before the
+            # first gdh tag exists, so count from the tag naming the upstream
+            # base. Counting from the repo root would be wrong -- ~1800 here.
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" rev-parse "--short=8" HEAD
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                OUTPUT_VARIABLE _GDH_HEAD
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            set(_GDH_NODE "g${_GDH_HEAD}")
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" rev-parse --verify --quiet "refs/tags/v${_GDH_UPSTREAM}"
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                RESULT_VARIABLE _GDH_ANCHOR_RESULT
+                OUTPUT_QUIET
+                ERROR_QUIET
+            )
+            set(_GDH_COUNT_RANGE "HEAD")
+            if(_GDH_ANCHOR_RESULT EQUAL 0)
+                set(_GDH_COUNT_RANGE "v${_GDH_UPSTREAM}..HEAD")
+            endif()
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" rev-list --count "${_GDH_COUNT_RANGE}"
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                OUTPUT_VARIABLE _GDH_DISTANCE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            unset(_GDH_HEAD)
+            unset(_GDH_ANCHOR_RESULT)
+            unset(_GDH_COUNT_RANGE)
+        endif()
+
+        if(_GDH_NODE AND NOT _GDH_DISTANCE STREQUAL "")
+            # gdh-0.0 is a sentinel, never a release, so it always shows its distance.
+            set(_APP_VERSION_DEFAULT "${_GDH_UPSTREAM}-gdh-${_GDH_MAJOR}.${_GDH_MINOR}")
+            if(NOT (_GDH_MATCHED AND _GDH_DISTANCE EQUAL 0 AND NOT _GDH_DIRTY))
+                string(APPEND _APP_VERSION_DEFAULT "+${_GDH_DISTANCE}.${_GDH_NODE}")
+                if(_GDH_DIRTY)
+                    string(APPEND _APP_VERSION_DEFAULT ".dirty")
+                endif()
+            endif()
+        endif()
+
+        unset(_GDH_DESCRIBE)
+        unset(_GDH_DESCRIBE_RESULT)
+        unset(_GDH_STATUS)
+        unset(_GDH_DIRTY)
+        unset(_GDH_MATCHED)
+        unset(_GDH_MAJOR)
+        unset(_GDH_MINOR)
+        unset(_GDH_DISTANCE)
+        unset(_GDH_NODE)
+    endif()
+
     set(APP_VERSION "${_APP_VERSION_DEFAULT}")
     unset(_APP_VERSION_DEFAULT)
+    unset(_GDH_UPSTREAM)
 endif()
+# --- gdh-version block: end ---
 set(APP_VERSION "${APP_VERSION}" CACHE STRING "Release version identifier")
 
 add_compile_definitions(APP_BRANCH=\"${APP_BRANCH}\")

@@ -18,6 +18,11 @@ jobs:
           fetch-depth: 0
       - name: Run CI contract unit tests
         run: python3 -m unittest -v ci.tests.test_check_ci_contracts
+      - name: Run GDH version scheme unit tests
+        # Includes the parity check between the CMake APP_VERSION block and
+        # scripts/gdh_version.py; needs full history and tags, which the
+        # checkout above already provides.
+        run: python3 -m unittest -v ci.tests.test_gdh_version
       - name: Run CI guardrails
         run: bash ci/run_local_ci_parity.sh --guardrails-only
   full-build-test:
