@@ -19,9 +19,9 @@ name: "Self-hosted Linux build (wm)"
 #     nixpkgs instead of dnf.
 #   * every /nix/store lookup is scoped to the closure of ./result. On a hosted
 #     runner the store holds only this build's closure; wm's store is the
-#     user's shared multi-project store, where a store-wide `find | sort |
-#     head -n 1` is both slow and liable to select a different Qt6 than the one
-#     the binaries were actually linked against.
+#     user's shared multi-project store, where a store-wide search piped
+#     through `sort | head -n 1` is both slow and liable to select a different
+#     Qt6 than the one the binaries were actually linked against.
 
 on:
   pull_request:
@@ -356,8 +356,8 @@ jobs:
           PATCH_ELF_BIN="$(command -v patchelf)"
 
           # Scope every store lookup below to the closure of the build we just
-          # made. The hosted job can `find /nix/store` because its store holds
-          # nothing else; wm's store is the user's shared multi-project store,
+          # made. The hosted job can scan the whole store because its store
+          # holds nothing else; wm's is the user's shared multi-project store,
           # where that scan is slow AND `sort | head -n 1` can hand back a
           # different Qt6 than the one these binaries were linked against.
           mapfile -t CLOSURE < <(nix-store -qR "$(readlink -f result)")

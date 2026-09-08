@@ -1,0 +1,554 @@
+name: "Self-hosted Windows build (win0)"
+
+# Fork-exclusive. Native x86_64 build, test and packaging on the GDH WIN-NODE-0
+# box.
+#
+# Not a copy of build_windows_tools.yml: that file is shared with
+# harrypm/tbc-tools and must stay byte-identical so upstream merges never
+# conflict. The packaging steps below are ported from it; everything else is
+# dictated by what win0 actually is:
+#
+#   * win0 is BARE. It has the runner agent and git, and nothing else that
+#     matters: no Visual Studio at all (no vswhere, no cl), `cmake` and `ninja`
+#     resolve to msys64/mingw64 builds, and `python` is the Microsoft Store
+#     redirector stub. So this workflow installs and shadows its own MSVC
+#     toolset, CMake and Python rather than assuming a hosted image's.
+#   * Everything it bootstraps lives in C:\ci-tools, OUTSIDE the workspace.
+#     actions/checkout runs `git clean -ffdx`, which is exactly why the hosted
+#     job's `.\vcpkg` clone location cannot be reused here.
+#   * No actions/cache. The disk persists, so the vcpkg binary cache is just a
+#     directory on the box. No harrypm/tbc-tools-ci-cache, no chunked archive
+#     reassembly, no cache-repo token -- this fork does not own that repo, and
+#     this workflow needs no secret beyond the default token.
+#   * x86_64 only: win0 is x64, so the hosted arm64 matrix leg goes away, and
+#     with it the gas-preprocessor.pl pre-fetch that only arm64 ffmpeg needs.
+#   * -DBUILD_TESTING=ON (hosted uses OFF) so ctest runs here. The two POSIX
+#     shell tests are excluded, and the test binaries are filtered out of the
+#     release copy.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: "Git ref to checkout when invoked as a reusable workflow"
+        required: false
+        type: string
+      from_deploy:
+        description: "Set by self-hosted-deploy.yml so the standalone push run stands down"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Machine-scoped: there is exactly one win0 box. github.workflow resolves to
+  # the CALLER's name under workflow_call, so a deploy-driven build lands in
+  # its own group and can never be cancelled by a PR run.
+  group: tbc-tools-win0-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  TOOLS_ROOT: 'C:\ci-tools'
+  VCPKG_ROOT: 'C:\ci-tools\vcpkg'
+  VCPKG_BINARY_CACHE_DIR: 'C:\ci-tools\vcpkg-binary-cache\x64-windows'
+  VCPKG_COMMIT: "d30fdf55cfca16e12bc3ad99cbc615997014b61b"
+  VCPKG_TRIPLET: "x64-windows"
+  # Pinned to CMake 3.x: fftw3 does not yet support CMake 4.x. Same pin the
+  # hosted job gets from jwlawson/actions-setup-cmake.
+  CMAKE_VERSION: "3.31.6"
+  PYTHON_VERSION: "3.11.9"
+  ONNXRUNTIME_VERSION: "1.18.1"
+  FFMPEG_PATH: "ffmpeg-8.0.1-full_build"
+  FFMPEG_URL: "https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-full_build.zip"
+  FLAC_PATH: "flac-1.5.0-win"
+  FLAC_URL: "https://ftp.osuosl.org/pub/xiph/releases/flac/flac-1.5.0-win.zip"
+
+jobs:
+  build:
+    name: Build, test and package tbc-tools (x86_64, win0)
+    runs-on: [self-hosted, Windows, X64, win0]
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: pwsh
+    # A merge to main is owned by self-hosted-deploy.yml (from_deploy), and a
+    # forked PR must never execute on a workstation -- this repository is
+    # public.
+    if: >-
+      ${{ (github.event_name != 'push' || inputs.from_deploy)
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository) }}
+
+    steps:
+      - name: Prepare persistent tool root
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($d in @($env:TOOLS_ROOT,
+                           "$env:TOOLS_ROOT\downloads",
+                           "$env:TOOLS_ROOT\external",
+                           $env:VCPKG_BINARY_CACHE_DIR)) {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+          }
+          Get-PSDrive C | Format-List Name,Used,Free
+
+      - name: Ensure MSVC build tools
+        # win0 has no Visual Studio and no vswhere. Install the VS 2022 Build
+        # Tools once (the runner service is elevated); every later run finds
+        # the toolset through vswhere and this is a no-op. No developer command
+        # prompt shim is needed: CMakePresets.json sets architecture x64 with
+        # no generator, so CMake selects "Visual Studio 17 2022" and locates
+        # the toolset itself.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = $null
+          if (Test-Path $vswhere) {
+            $vs = & $vswhere -latest -products * `
+              -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+              -property installationPath
+          }
+          if (-not $vs) {
+            Write-Host "No MSVC x64 toolset found; installing VS 2022 Build Tools."
+            $bootstrap = "$env:TOOLS_ROOT\downloads\vs_BuildTools.exe"
+            if (-not (Test-Path $bootstrap)) {
+              Invoke-WebRequest "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $bootstrap
+            }
+            $p = Start-Process -FilePath $bootstrap -Wait -PassThru -ArgumentList @(
+              "--quiet", "--wait", "--norestart", "--nocache",
+              "--add", "Microsoft.VisualStudio.Workload.VCTools",
+              "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+              "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
+              # Needed by "Copy MSVC runtime DLLs" below, which pulls the VC143
+              # CRT out of the redist tree rather than assuming the end user has
+              # the VC++ redistributable installed.
+              "--add", "Microsoft.VisualStudio.Component.VC.Redist.14.Latest"
+            )
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              throw "VS Build Tools install failed with exit code $($p.ExitCode)"
+            }
+            if (-not (Test-Path $vswhere)) { throw "vswhere.exe still missing after install" }
+            $vs = & $vswhere -latest -products * `
+              -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+              -property installationPath
+          }
+          if (-not $vs) {
+            throw "MSVC x64 toolset unavailable on win0. Install VS 2022 Build Tools manually and re-run."
+          }
+          Write-Host "Using Visual Studio at: $vs"
+
+      - name: Ensure pinned CMake
+        # win0's `cmake` on PATH is msys64/mingw64's. Prepend our own pinned
+        # build so the MSVC generator is driven by the same CMake the hosted
+        # job uses.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:TOOLS_ROOT\cmake-$env:CMAKE_VERSION-windows-x86_64"
+          if (-not (Test-Path "$dir\bin\cmake.exe")) {
+            $zip = "$env:TOOLS_ROOT\downloads\cmake-$env:CMAKE_VERSION-windows-x86_64.zip"
+            if (-not (Test-Path $zip)) {
+              Invoke-WebRequest "https://github.com/Kitware/CMake/releases/download/v$env:CMAKE_VERSION/cmake-$env:CMAKE_VERSION-windows-x86_64.zip" -OutFile $zip
+            }
+            Expand-Archive -Path $zip -DestinationPath $env:TOOLS_ROOT -Force
+          }
+          if (-not (Test-Path "$dir\bin\cmake.exe")) {
+            throw "CMake bootstrap did not produce $dir\bin\cmake.exe"
+          }
+          "$dir\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Ensure pinned Python
+        # win0's `python` is the Microsoft Store redirector stub, which opens
+        # the Store instead of running. Per-user install, no admin needed.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $py = "$env:TOOLS_ROOT\python311"
+          if (-not (Test-Path "$py\python.exe")) {
+            $exe = "$env:TOOLS_ROOT\downloads\python-$env:PYTHON_VERSION-amd64.exe"
+            if (-not (Test-Path $exe)) {
+              Invoke-WebRequest "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-amd64.exe" -OutFile $exe
+            }
+            $p = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @(
+              "/quiet", "InstallAllUsers=0", "PrependPath=0", "Include_test=0",
+              "Include_launcher=0", "TargetDir=$py")
+            if ($p.ExitCode -ne 0) { throw "Python install failed with exit code $($p.ExitCode)" }
+          }
+          if (-not (Test-Path "$py\python.exe")) {
+            throw "Python bootstrap did not produce $py\python.exe"
+          }
+          $py           | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$py\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Reset stale build output
+        run: |
+          Remove-Item -Recurse -Force build, release -ErrorAction SilentlyContinue
+          Remove-Item -Force ffmpeg.zip, flac.zip -ErrorAction SilentlyContinue
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: true
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: Refresh tags
+        # If the workspace persisted, a tag deleted or moved on the remote can
+        # linger locally and poison `git describe`. That matters more here than
+        # anywhere else: Windows is the only platform whose build sees .git, so
+        # it is the only one where CMakeLists.txt resolves the real
+        # <upstream>-gdh-<major>.<minor> APP_VERSION rather than falling back to
+        # vcpkg.json. (flake.nix strips .git, so the Nix-built Linux and macOS
+        # artifacts report the plain upstream version -- same as hosted.)
+        run: git fetch --tags --prune --prune-tags --force origin
+
+      - name: Report toolchain and version
+        run: |
+          cmake --version
+          python --version
+          git describe --tags --long --abbrev=8 --match "v*-gdh-*" 2>$null
+          if ($LASTEXITCODE -ne 0) { Write-Host "no gdh tag in range yet" }
+          $global:LASTEXITCODE = 0
+
+      - name: Install Python build requirements
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install -r "$env:GITHUB_WORKSPACE\src\tbc-video-export\pyinstaller\requirements-build-windows.txt"
+          python -c "import pywintypes, win32file, win32pipe"
+
+      - name: Ensure vcpkg at the pinned commit
+        # Cloned into C:\ci-tools, not the workspace: checkout's git clean would
+        # otherwise delete the whole tree (and its downloads/installed caches)
+        # on every run. The -e exclusions keep those caches across a
+        # VCPKG_COMMIT bump.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path "$env:VCPKG_ROOT\.git")) {
+            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          }
+          git -C $env:VCPKG_ROOT fetch --tags --force origin
+          git -C $env:VCPKG_ROOT checkout --force $env:VCPKG_COMMIT
+          git -C $env:VCPKG_ROOT clean -ffdx -e downloads -e installed -e packages -e buildtrees
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          }
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            throw "vcpkg bootstrap did not produce vcpkg.exe"
+          }
+          "RUNVCPKG_VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # A plain directory on the persistent disk replaces both the hosted
+          # job's actions/cache and its cross-repo cache checkout.
+          "VCPKG_BINARY_SOURCES=clear;files,$env:VCPKG_BINARY_CACHE_DIR,readwrite" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Ensure ONNX Runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $onnxFile = "onnxruntime-win-x64-gpu-$env:ONNXRUNTIME_VERSION.zip"
+          $extractRoot = "$env:TOOLS_ROOT\external\onnxruntime"
+          $onnxRoot = Join-Path $extractRoot ($onnxFile -replace '\.zip$','')
+          if (-not (Test-Path "$onnxRoot\include\onnxruntime_cxx_api.h")) {
+            New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+            $archivePath = Join-Path $extractRoot $onnxFile
+            if (-not (Test-Path $archivePath)) {
+              Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ONNXRUNTIME_VERSION/$onnxFile" -OutFile $archivePath
+            }
+            Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force
+          }
+          if (-not (Test-Path "$onnxRoot\lib\onnxruntime.lib")) {
+            throw "ONNX Runtime import library not found in $onnxRoot\lib"
+          }
+          "ONNXRUNTIME_ROOT=$onnxRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Ensure FFmpeg and FLAC payloads
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ext = "$env:TOOLS_ROOT\external"
+          $ffmpegDir = Join-Path $ext $env:FFMPEG_PATH
+          if (-not (Test-Path "$ffmpegDir\bin\ffmpeg.exe")) {
+            $zip = "$env:TOOLS_ROOT\downloads\ffmpeg.zip"
+            if (-not (Test-Path $zip)) { Invoke-WebRequest $env:FFMPEG_URL -OutFile $zip }
+            Expand-Archive -Path $zip -DestinationPath $ext -Force
+          }
+          if (-not (Test-Path "$ffmpegDir\bin\ffmpeg.exe")) { throw "FFmpeg payload missing at $ffmpegDir" }
+          $flacDir = Join-Path $ext $env:FLAC_PATH
+          if (-not (Test-Path "$flacDir\Win64")) {
+            $zip = "$env:TOOLS_ROOT\downloads\flac.zip"
+            if (-not (Test-Path $zip)) { Invoke-WebRequest $env:FLAC_URL -OutFile $zip }
+            Expand-Archive -Path $zip -DestinationPath $ext -Force
+          }
+          if (-not (Test-Path "$flacDir\Win64")) { throw "FLAC payload missing at $flacDir" }
+          "FFMPEG_DIR=$ffmpegDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FLAC_DIR=$flacDir"     | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure
+        # The hosted job wraps this in lukka/run-cmake@v10; calling CMake
+        # directly keeps the arguments visible in the log and drops an action
+        # dependency. BUILD_TESTING is ON here (hosted uses OFF) so ctest can
+        # run; the test binaries are filtered back out of the release copy.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --preset vcpkg `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DUSE_QT_VERSION=6 `
+            -DBUILD_PYTHON=false `
+            -DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET `
+            -DVCPKG_APPLOCAL_DEPS=ON `
+            -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+
+      - name: Build
+        run: |
+          cmake --build --preset vcpkg --config Release
+          if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
+
+      - name: Run ctest
+        # chroma-* and decode-pretbc-* are the POSIX-shell integration tests
+        # registered by CMakeLists.txt; they cannot run on Windows. Every
+        # remaining test is a C++ binary linking only Qt::Core + tbc-library.
+        run: |
+          ctest --test-dir build -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"
+          if ($LASTEXITCODE -ne 0) { throw "ctest failed" }
+
+      - name: Create release directory
+        run: New-Item -ItemType Directory -Path release | Out-Null
+
+      - name: Copy binaries to release directory
+        # BUILD_TESTING=ON puts the ctest binaries in build\bin alongside the
+        # tools; they must not ship. The hosted job needs no such filter because
+        # it builds with BUILD_TESTING=OFF.
+        run: |
+          Get-ChildItem -Recurse -Path build\bin\* -Include *.exe, *.dll |
+            Where-Object { $_.Name -notmatch '^test' } |
+            Copy-Item -Destination release\
+
+      - name: Copy AAA (Auto Audio Align) vendor payload to release directory
+        # The "Copy binaries" step flattens *.exe/*.dll to the release root, which
+        # breaks the AAA resolver path (<appDir>\vendor\vhs_decode_auto_audio_align\)
+        # that audioalignmentutil.cpp expects for ld-analyse/tbc-audio-align.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vendorSrc = "build\bin\vendor\vhs_decode_auto_audio_align"
+          $vendorDst = "release\vendor\vhs_decode_auto_audio_align"
+          if (-not (Test-Path "$vendorSrc\VhsDecodeAutoAudioAlign.exe") -or -not (Test-Path "$vendorSrc\Binah.dll")) {
+            throw "AAA vendor payload missing under $vendorSrc"
+          }
+          New-Item -ItemType Directory -Force -Path $vendorDst | Out-Null
+          Copy-Item -Path "$vendorSrc\*" -Destination $vendorDst -Recurse -Force
+          Write-Host "Bundled AAA vendor payload to $vendorDst"
+
+      - name: Copy vhs-teletext vendor payload to release directory
+        # Same reason as AAA: the flattening copy drops the vendored Python tree
+        # that teletextintegration.cpp resolves at <appDir>\vendor\vhs-teletext
+        # (validated by the presence of teletext\__main__.py). Without it,
+        # ld-process-vbi's --teletext-html-dir export fails with "Could not
+        # locate vendored vhs-teletext runtime directory."
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vendorSrc = "build\bin\vendor\vhs-teletext"
+          $vendorDst = "release\vendor\vhs-teletext"
+          if (-not (Test-Path "$vendorSrc\teletext\__main__.py")) {
+            throw "vhs-teletext vendor payload missing under $vendorSrc"
+          }
+          New-Item -ItemType Directory -Force -Path $vendorDst | Out-Null
+          Copy-Item -Path "$vendorSrc\*" -Destination $vendorDst -Recurse -Force
+          Write-Host "Bundled vhs-teletext vendor payload to $vendorDst"
+
+      - name: Copy ONNX Runtime DLLs to release directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $onnxLibDir = "$env:ONNXRUNTIME_ROOT\lib"
+          if (-not (Test-Path "$onnxLibDir\onnxruntime.dll")) {
+            throw "onnxruntime.dll not found at $onnxLibDir\onnxruntime.dll"
+          }
+          Copy-Item -Path "$onnxLibDir\onnxruntime.dll" -Destination release\
+          # x86_64 ships the CUDA EP provider DLL but not the CUDA runtime it
+          # imports: LoadLibrary fails and ORT falls back to the CPU EP, which is
+          # the intended default-release behaviour. GPU acceleration is the
+          # opt-in CUDA plugin.
+          Get-ChildItem -Path $onnxLibDir -Filter "onnxruntime_providers_*.dll" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination release\
+
+      - name: Copy Qt plugins to release directory
+        run: Copy-Item -Recurse -Exclude *.pdb -Path build\vcpkg_installed\x64-windows\Qt6\plugins\* -Destination release\
+
+      - name: Write qt.conf for Qt plugin discovery
+        run: |
+          # The Windows release lays Qt plugins out flat (release\<category>\*.dll,
+          # e.g. release\platforms\qwindows.dll). Without a qt.conf Qt falls back
+          # to its compiled-in vcpkg prefix, which does not exist on end-user
+          # machines, and the platform plugin is not found -> "no Qt platform
+          # plugin could be initialized" (the classic Windows startup failure).
+          Set-Content -Path release\qt.conf -Encoding ASCII -Value "[Paths]"
+          Add-Content -Path release\qt.conf -Encoding ASCII -Value "Prefix = ."
+          Add-Content -Path release\qt.conf -Encoding ASCII -Value "Plugins = ."
+
+      - name: Copy MSVC runtime DLLs to release directory
+        # The executables dynamically import VCRUNTIME140.dll / VCRUNTIME140_1.dll
+        # (and MSVCP140.dll), but vcpkg does not redistribute the CRT next to the
+        # binaries, so a clean Windows machine without the VC++ redistributable
+        # gets "VCRUNTIME140.dll was not found". Prefer the desktop (non-onecore)
+        # VC143 CRT with the highest version: bundling a VC142 CRT with
+        # VC143-built binaries is an ABI mismatch that crashes the GUI at startup
+        # (STATUS_DLL_INIT_FAILED 0xC0000142 inside MSVCP140.dll).
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $redistRoots = @("C:\Program Files\Microsoft Visual Studio\2022",
+                           "C:\Program Files (x86)\Microsoft Visual Studio\2022")
+          $candidates = @()
+          foreach ($root in $redistRoots) {
+            if (-not (Test-Path $root)) { continue }
+            $candidates += Get-ChildItem -Path $root -Recurse -ErrorAction SilentlyContinue -Filter "vcruntime140.dll" |
+              Where-Object { $_.FullName -match "\\x64\\Microsoft\.VC[0-9]+\.CRT\\" }
+          }
+          if ($candidates.Count -eq 0) { throw "MSVC CRT directory not found under VS 2022 redist for arch x64" }
+          $hit = $candidates | Where-Object { $_.FullName -match 'Microsoft\.VC143\.CRT' -and $_.FullName -notmatch '\\onecore\\' } | Sort-Object -Descending { [version]$_.VersionInfo.FileVersion } | Select-Object -First 1
+          if (-not $hit) {
+            $hit = $candidates | Where-Object { $_.FullName -match 'Microsoft\.VC143\.CRT' } | Sort-Object -Descending { [version]$_.VersionInfo.FileVersion } | Select-Object -First 1
+          }
+          if (-not $hit) {
+            $hit = $candidates | Sort-Object -Descending { [version]$_.VersionInfo.FileVersion } | Select-Object -First 1
+            Write-Warning "VS 2022 (VC143) MSVC CRT not found for arch x64; using newest available: $($hit.FullName)"
+          }
+          $crtDir = Split-Path $hit.FullName
+          Write-Host "Using MSVC CRT from: $crtDir (vcruntime140.dll $((Get-Item (Join-Path $crtDir 'vcruntime140.dll')).VersionInfo.FileVersion))"
+          foreach ($dll in @("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")) {
+            $src = Join-Path $crtDir $dll
+            if (Test-Path $src) { Copy-Item -Path $src -Destination release\ }
+            else { Write-Warning "MSVC CRT $dll not found in $crtDir" }
+          }
+
+      - name: Copy license files to release directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release\LICENSES | Out-Null
+          "brotli", `
+          "bzip2", `
+          "double-conversion", `
+          "fftw3", `
+          "flac", `
+          "freetype", `
+          "getopt-win32", `
+          "harfbuzz", `
+          "icu", `
+          "libpng", `
+          "openssl", `
+          "pcre2", `
+          "qtbase", `
+          "sqlite3", `
+          "zlib", `
+          "zstd" | ForEach-Object {
+            $copyright = "build\vcpkg_installed\x64-windows\share\$($_)\copyright"
+            if (Test-Path $copyright) {
+              Copy-Item -Path $copyright -Destination release\LICENSES\copyright-$($_)
+            }
+          }
+          if (Test-Path release\LICENSES\copyright-qtbase) {
+            Rename-Item -Path release\LICENSES\copyright-qtbase -NewName copyright-qt6
+          }
+          if (Test-Path "$env:ONNXRUNTIME_ROOT\LICENSE") {
+            Copy-Item -Path "$env:ONNXRUNTIME_ROOT\LICENSE" -Destination release\LICENSES\copyright-onnxruntime
+          }
+
+      - name: Copy scripts to release directory (if they exist)
+        run: |
+          if (Test-Path ".\scripts\Windows\*.bat") {
+            Copy-Item .\scripts\Windows\*.bat -Destination release\
+          }
+
+      - name: Copy FFmpeg to release directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item -Path "$env:FFMPEG_DIR\bin\ffmpeg.exe" -Destination release\
+          if (Test-Path "$env:FFMPEG_DIR\bin\ffprobe.exe") {
+            Copy-Item -Path "$env:FFMPEG_DIR\bin\ffprobe.exe" -Destination release\
+          }
+          Copy-Item -Path "$env:FFMPEG_DIR\bin\*.dll" -Destination release\
+          Copy-Item -Path "$env:FFMPEG_DIR\LICENSE" -Destination release\LICENSES\copyright-ffmpeg
+
+      - name: Copy FLAC to release directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item -Path "$env:FLAC_DIR\Win64\*" -Destination release\
+          Copy-Item -Path "$env:FLAC_DIR\COPYING.GPL" -Destination release\LICENSES\copyright-flac
+
+      - name: Build and copy vendored tbc-video-export to release directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exporterRoot = "$env:GITHUB_WORKSPACE\src\tbc-video-export"
+          $env:PYTHONPATH = "$exporterRoot\src"
+          Push-Location $exporterRoot
+          New-Item -ItemType Directory -Force -Path .\build | Out-Null
+          python .\pyinstaller\build_windows.py
+          Pop-Location
+          $builtExporter = "$exporterRoot\dist\tbc-video-export.exe"
+          if (-not (Test-Path $builtExporter)) {
+            throw "Vendored tbc-video-export build did not produce $builtExporter"
+          }
+          Copy-Item -Path $builtExporter -Destination release\
+          Copy-Item -Path "$exporterRoot\LICENSE" -Destination release\LICENSES\copyright-tbc-video-export
+          Push-Location release
+          .\tbc-video-export.exe --dump-default-config
+          Pop-Location
+
+      - name: Copy sqlite runtime to release directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sqliteDll = "build\vcpkg_installed\x64-windows\bin\sqlite3.dll"
+          if (-not (Test-Path $sqliteDll)) { throw "sqlite3.dll not found at $sqliteDll" }
+          Copy-Item -Path $sqliteDll -Destination release\
+
+      - name: Copy project license
+        run: Copy-Item -Path .\LICENSE -Destination release\LICENSES\copyright-tbc-tools
+
+      - name: Verify required Windows runtime files are present
+        # Mirror the macOS enforcement: fail the build if any runtime file the
+        # GUI tools need to start on a clean machine is absent.
+        run: |
+          $required = @(
+            "release\qt.conf",
+            "release\platforms\qwindows.dll",
+            "release\Qt6Core.dll",
+            "release\Qt6Gui.dll",
+            "release\Qt6Widgets.dll",
+            "release\FLAC.dll",
+            "release\ld-lds-converter.exe",
+            "release\ld-analyse.exe",
+            "release\tbc-video-export.exe",
+            "release\vcruntime140.dll",
+            "release\vcruntime140_1.dll",
+            "release\vendor\vhs_decode_auto_audio_align\VhsDecodeAutoAudioAlign.exe",
+            "release\vendor\vhs_decode_auto_audio_align\Binah.dll",
+            "release\vendor\vhs-teletext\teletext\__main__.py",
+            "release\vendor\vhs-teletext\misc\teletext-noscanlines.css",
+            "release\vendor\vhs-teletext\misc\teletext2.ttf",
+            "release\vendor\vhs-teletext\misc\teletext4.ttf"
+          )
+          $missing = @()
+          foreach ($f in $required) { if (-not (Test-Path $f)) { $missing += $f } }
+          if ($missing.Count -gt 0) {
+            throw ("Missing required Windows runtime files (packaging incomplete):`n" + ($missing -join "`n"))
+          }
+          Write-Host "All required Windows runtime files present."
+
+      - name: Stamp the build commit
+        # self-hosted-deploy.yml's win0 job installs straight out of this
+        # workspace rather than round-tripping a few hundred MB through the
+        # artifact store. This stamp is how it proves the tree it found belongs
+        # to the commit being deployed; when it does not match, that job falls
+        # back to the uploaded artifact below.
+        run: |
+          $env:GITHUB_SHA | Out-File -FilePath release\.build-sha -Encoding ascii -NoNewline
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: selfhosted_tbc-tools_windows_x86_64
+          path: release
+          if-no-files-found: error
+          retention-days: 7
