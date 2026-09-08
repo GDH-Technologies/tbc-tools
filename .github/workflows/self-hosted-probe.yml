@@ -1,0 +1,158 @@
+name: "Self-hosted runner probe (throwaway)"
+
+# TEMPORARY. Settles the facts the self-hosted CI/CD design depends on and
+# that cannot be read from the repository:
+#   * does a runner workspace survive BETWEEN runs, and BETWEEN jobs of one
+#     run on the same box (the Windows deploy handoff hinges on the latter)
+#   * win0: which %LOCALAPPDATA% the runner service account actually has, and
+#     whether the service is elevated enough to install VS Build Tools
+#   * air0: macOS version (the hosted job pins macos-15 because the pinned
+#     nixpkgs Qt uic SIGTRAPs on macOS 26), plus whether Nix and the Xcode
+#     command line tools are on the service PATH
+#   * wm: which of patchelf / msbuild / xbuild / mono are actually present
+# Delete this file once self-hosted-{linux,macos,windows,deploy}.yml are green.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/self-hosted-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-a:
+    name: "wm: write marker and report"
+    runs-on: [self-hosted, Linux, X64, wm]
+    steps:
+      - name: Look for a marker left by a PREVIOUS run (before checkout)
+        run: |
+          echo "RUNNER_WORKSPACE=$RUNNER_WORKSPACE"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          if [ -f "$GITHUB_WORKSPACE/probe-marker.txt" ]; then
+            echo "ACROSS-RUNS: PERSISTENT -- found $(cat "$GITHUB_WORKSPACE/probe-marker.txt")"
+          else
+            echo "ACROSS-RUNS: fresh (no marker from a previous run)"
+          fi
+      - uses: actions/checkout@v5
+      - name: Report host facts
+        run: |
+          echo "whoami=$(whoami) HOME=$HOME"
+          nix --version || echo "NO NIX"
+          cmake --version | head -1 || true
+          python3 --version || true
+          for t in patchelf msbuild xbuild mono mcs ninja curl unzip zip jq rsync file fusermount; do
+            printf '%-12s %s\n' "$t" "$(command -v "$t" || echo MISSING)"
+          done
+          df -h "$GITHUB_WORKSPACE" /nix | cat
+      - name: Write this run's marker
+        run: echo "run=${{ github.run_id }} sha=${{ github.sha }}" > "$GITHUB_WORKSPACE/probe-marker.txt"
+
+  linux-b:
+    name: "wm: does the marker survive into the next job?"
+    needs: linux-a
+    runs-on: [self-hosted, Linux, X64, wm]
+    steps:
+      - name: Check the marker (no checkout, deliberately)
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/probe-marker.txt" ]; then
+            echo "ACROSS-JOBS: PERSISTENT -- $(cat "$GITHUB_WORKSPACE/probe-marker.txt")"
+          else
+            echo "ACROSS-JOBS: NOT persistent -- $GITHUB_WORKSPACE/probe-marker.txt is gone"
+          fi
+
+  macos-a:
+    name: "air0: write marker and report"
+    runs-on: [self-hosted, macOS, ARM64, air0]
+    steps:
+      - name: Look for a marker left by a PREVIOUS run (before checkout)
+        run: |
+          echo "RUNNER_WORKSPACE=$RUNNER_WORKSPACE"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          if [ -f "$GITHUB_WORKSPACE/probe-marker.txt" ]; then
+            echo "ACROSS-RUNS: PERSISTENT -- $(cat "$GITHUB_WORKSPACE/probe-marker.txt")"
+          else
+            echo "ACROSS-RUNS: fresh (no marker from a previous run)"
+          fi
+      - uses: actions/checkout@v5
+      - name: Report host facts
+        run: |
+          sw_vers
+          uname -m
+          echo "whoami=$(whoami) HOME=$HOME"
+          nix --version || echo "NO NIX ON PATH"
+          nix profile list || echo "nix profile list failed"
+          xcode-select -p || echo "NO XCODE CLT"
+          for t in lipo otool install_name_tool codesign iconutil sips strings rsync create-dmg brew cmake ninja python3; do
+            printf '%-18s %s\n' "$t" "$(command -v "$t" || echo MISSING)"
+          done
+          df -h "$GITHUB_WORKSPACE" | cat
+      - name: Write this run's marker
+        run: echo "run=${{ github.run_id }} sha=${{ github.sha }}" > "$GITHUB_WORKSPACE/probe-marker.txt"
+
+  macos-b:
+    name: "air0: does the marker survive into the next job?"
+    needs: macos-a
+    runs-on: [self-hosted, macOS, ARM64, air0]
+    steps:
+      - name: Check the marker (no checkout, deliberately)
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/probe-marker.txt" ]; then
+            echo "ACROSS-JOBS: PERSISTENT -- $(cat "$GITHUB_WORKSPACE/probe-marker.txt")"
+          else
+            echo "ACROSS-JOBS: NOT persistent -- $GITHUB_WORKSPACE/probe-marker.txt is gone"
+          fi
+
+  windows-a:
+    name: "win0: write marker and report"
+    runs-on: [self-hosted, Windows, X64, win0]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Look for a marker left by a PREVIOUS run (before checkout)
+        run: |
+          Write-Host "RUNNER_WORKSPACE=$env:RUNNER_WORKSPACE"
+          Write-Host "GITHUB_WORKSPACE=$env:GITHUB_WORKSPACE"
+          $m = Join-Path $env:GITHUB_WORKSPACE 'probe-marker.txt'
+          if (Test-Path $m) { Write-Host "ACROSS-RUNS: PERSISTENT -- $(Get-Content $m)" }
+          else { Write-Host "ACROSS-RUNS: fresh (no marker from a previous run)" }
+      - uses: actions/checkout@v5
+      - name: Report host facts
+        run: |
+          Write-Host "whoami            = $(whoami)"
+          Write-Host "USERPROFILE       = $env:USERPROFILE"
+          Write-Host "LOCALAPPDATA env  = $env:LOCALAPPDATA"
+          Write-Host "LocalAppData API  = $([Environment]::GetFolderPath('LocalApplicationData'))"
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+          Write-Host "elevated          = $elevated"
+          Write-Host "OS                = $((Get-CimInstance Win32_OperatingSystem).Caption)"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) { & $vswhere -latest -products * -property installationPath }
+          else { Write-Host "vswhere           = MISSING (no Visual Studio installer present)" }
+          foreach ($t in 'git','cmake','ninja','python','py','cl','msbuild','7z') {
+            $c = Get-Command $t -ErrorAction SilentlyContinue
+            Write-Host ("{0,-10} {1}" -f $t, $(if ($c) { $c.Source } else { 'MISSING' }))
+          }
+          Get-PSDrive C | Format-List Name,Used,Free
+      - name: Write this run's marker
+        run: |
+          "run=${{ github.run_id }} sha=${{ github.sha }}" |
+            Out-File -FilePath (Join-Path $env:GITHUB_WORKSPACE 'probe-marker.txt') -Encoding utf8
+
+  windows-b:
+    name: "win0: does the marker survive into the next job?"
+    needs: windows-a
+    runs-on: [self-hosted, Windows, X64, win0]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check the marker (no checkout, deliberately)
+        run: |
+          $m = Join-Path $env:GITHUB_WORKSPACE 'probe-marker.txt'
+          if (Test-Path $m) { Write-Host "ACROSS-JOBS: PERSISTENT -- $(Get-Content $m)" }
+          else { Write-Host "ACROSS-JOBS: NOT persistent -- $m is gone" }

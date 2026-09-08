@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
   release:
+  workflow_dispatch:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
@@ -51,12 +52,27 @@ jobs:
         run: bash ci/run_local_ci_parity.sh --build-test-only
   # Call the Release workflow in build-only mode (create_release=false) so
   # the full release pipeline — Linux + Windows + macOS packaging builds —
-  # is tested on every push/PR without publishing to GitHub Releases.
-  # This is a project hard rule: build tests must use the release workflow
-  # to test all platforms but must not publish.
+  # is exercised without publishing to GitHub Releases. This is a project hard
+  # rule: build tests must use the release workflow to test all platforms but
+  # must not publish. Do not replace it with per-platform build workflow calls.
+  #
+  # It is workflow_dispatch-only on this fork. Hosted runner minutes are
+  # billable and the GDH fleet covers every push and PR through
+  # self-hosted-linux.yml / self-hosted-macos.yml / self-hosted-windows.yml;
+  # tag pushes still reach this same pipeline directly through release.yml.
+  #
+  # The explicit permissions block is load-bearing, not decoration. release.yml
+  # declares `contents: write` + `actions: write`, a caller job may not grant a
+  # callee more than it holds, and this repository's default workflow
+  # permission is read-only -- without this the whole run is rejected before
+  # any job starts ("This run likely failed because of a workflow file issue").
   release-style-build-all-platforms:
     name: Release-style build (all platforms, no publish)
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: ci-guardrails
+    permissions:
+      contents: write
+      actions: write
     uses: ./.github/workflows/release.yml
     with:
       create_release: false

@@ -1,0 +1,14 @@
+# actionlint knows the GitHub-hosted runner labels and the generic self-hosted
+# ones (self-hosted / linux / macos / windows / x64 / arm64), but not the
+# fleet-specific labels the GDH self-hosted runners carry. Without this file
+# every `runs-on: [self-hosted, ..., wm]` is a runner-label error.
+#
+# These map to the org runners registered for GDH-Technologies:
+#   wm    -> workflow-master (Fedora, x86_64)
+#   air0  -> air-0 (Apple Silicon macOS)
+#   win0  -> WIN-NODE-0 (Windows x86_64)
+self-hosted-runner:
+  labels:
+    - wm
+    - air0
+    - win0
