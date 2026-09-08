@@ -11,6 +11,7 @@
 
 #include "teletextviewerdialog.h"
 #include "teletextnativeviewwidget.h"
+#include "configuration.h"
 #ifdef emit
 #undef emit
 #endif
@@ -1470,6 +1471,11 @@ QSize nabtsImageSizeForPage(const QString &imageSource, const QString &pagePath)
 }
 } // namespace
 
+void TeletextViewerDialog::setConfiguration(Configuration *newConfiguration)
+{
+    configuration = newConfiguration;
+}
+
 TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -1728,7 +1734,9 @@ void TeletextViewerDialog::dropEvent(QDropEvent *event)
 
 void TeletextViewerDialog::browseForDirectory()
 {
-    const QString startPath = currentDirectoryPath.isEmpty() ? QDir::homePath() : currentDirectoryPath;
+    const QString startPath = configuration
+        ? configuration->getLastDirectory(DirectoryPurpose::Teletext, currentDirectoryPath)
+        : (currentDirectoryPath.isEmpty() ? QDir::homePath() : currentDirectoryPath);
     const QString selectedDirectory = QFileDialog::getExistingDirectory(
         this,
         tr("Select teletext HTML directory"),
@@ -1738,12 +1746,18 @@ void TeletextViewerDialog::browseForDirectory()
     if (selectedDirectory.isEmpty()) {
         return;
     }
+    if (configuration) {
+        configuration->setLastDirectory(DirectoryPurpose::Teletext, selectedDirectory);
+        configuration->writeConfiguration();
+    }
 
     setDirectory(selectedDirectory);
 }
 void TeletextViewerDialog::browseForTeletextStream()
 {
-    const QString startPath = currentDirectoryPath.isEmpty() ? QDir::homePath() : currentDirectoryPath;
+    const QString startPath = configuration
+        ? configuration->getLastDirectory(DirectoryPurpose::Teletext, currentDirectoryPath)
+        : (currentDirectoryPath.isEmpty() ? QDir::homePath() : currentDirectoryPath);
     const QString selectedStreamFile = QFileDialog::getOpenFileName(
         this,
         tr("Select teletext stream file"),
@@ -1752,6 +1766,11 @@ void TeletextViewerDialog::browseForTeletextStream()
     );
     if (selectedStreamFile.isEmpty()) {
         return;
+    }
+    if (configuration) {
+        configuration->setLastDirectory(DirectoryPurpose::Teletext,
+                                        QFileInfo(selectedStreamFile).absolutePath());
+        configuration->writeConfiguration();
     }
 
     QString errorMessage;

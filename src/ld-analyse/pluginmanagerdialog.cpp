@@ -27,6 +27,7 @@
 #include <QMessageBox>
 #include <QVersionNumber>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QDir>
 #include <QShowEvent>
 
@@ -200,6 +201,11 @@ PluginManagerDialog::PluginManagerDialog(QWidget *parent)
 }
 
 PluginManagerDialog::~PluginManagerDialog() = default;
+
+void PluginManagerDialog::setConfiguration(Configuration *configuration)
+{
+    m_configuration = configuration;
+}
 
 void PluginManagerDialog::populatePluginList()
 {
@@ -461,13 +467,21 @@ void PluginManagerDialog::onInstallFromLocalArchive()
         return;
     }
 
+    const QString startPath = m_configuration
+        ? m_configuration->getLastDirectory(DirectoryPurpose::Plugin)
+        : QDir::homePath();
     const QString archivePath = QFileDialog::getOpenFileName(
         this,
         tr("Select local CUDA plugin archive"),
-        QDir::homePath(),
+        startPath,
         tr("Plugin archives (*.zip *.tar.gz *.tgz);;All files (*)"));
     if (archivePath.isEmpty()) {
         return;
+    }
+    if (m_configuration) {
+        m_configuration->setLastDirectory(DirectoryPurpose::Plugin,
+                                          QFileInfo(archivePath).absolutePath());
+        m_configuration->writeConfiguration();
     }
 
     auto confirm = QMessageBox::question(

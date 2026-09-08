@@ -14,6 +14,7 @@
 #include <QDialog>
 #include <QStringList>
 
+class Configuration;
 class QCheckBox;
 class QComboBox;
 class QGroupBox;
@@ -33,6 +34,10 @@ public:
     ~EfmHandlerDialog() override = default;
 
     void setSourceDirectory(const QString &directory);
+
+    // Supplies the shared configuration so the EFM pickers open where EFM files
+    // were last used. Not owned; may be left unset.
+    void setConfiguration(Configuration *configuration);
     void setDefaultEfmInput(const QString &efmFilename);
     void setDefaultAc3Input(const QString &ac3Filename);
     void setSuggestedOutputBase(const QString &outputBasePath);
@@ -75,6 +80,12 @@ private:
                         QString *errorMessage);
     bool runSelectedWorkflows(QString *errorMessage, QStringList *generatedAudioTracks);
 
+    // Where an EFM picker should open, and how a chosen path is remembered.
+    // Both fall back to the seeded source directory when no configuration is set.
+    QString efmStartDirectory() const;
+    void rememberEfmDirectory(const QString &chosenPath);
+
+    Configuration *configuration = nullptr;  // shared settings; not owned, may be null
     QString sourceDirectory;
     bool runInProgress = false;
     bool cancelRequested = false;

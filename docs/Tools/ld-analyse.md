@@ -151,6 +151,17 @@ Clicking again on the same button will revert back to normal field order.  Note 
 
 The file menu contains options for handling the loading and saving of various files.
 
+Every file dialog in ld-analyse is your operating system's own file browser, and each
+*kind* of file remembers the directory it was last used in, separately: opening a TBC,
+saving a PNG, choosing an export output directory, picking audio tracks, loading a
+tbc-video-export profile set, converting metadata, the EFM handler's inputs and outputs,
+the teletext directory and stream file, and a downloaded plugin archive each keep their
+own last-used location. The directory is remembered as soon as you pick a file - even if
+that file then fails to load - and it survives restarting ld-analyse. If a remembered
+directory no longer exists (an unplugged drive, say) the dialog falls back to something
+sensible: the current file's directory, then the last TBC directory, then your home
+directory.
+
 ## Open TBC file
 
 This option opens a new TBC file as described above.
@@ -252,6 +263,29 @@ This option zooms the frame viewer to 2 times the original size.
 ## Zoom to 3x size
 
 This option zooms the frame viewer to 3 times the original size.
+
+## UI Scale
+
+The zoom options above change the size of the *picture*. UI Scale changes the size of the
+*application itself* - menus, buttons, labels, the scopes and the analysis windows - which
+is what you want when ld-analyse is uncomfortably small on a high-resolution display, or
+larger than you need on a modest one.
+
+**Auto** (the default) follows the scale factor your desktop already reports, so on a
+display configured at 150% ld-analyse renders at 150%. The remaining options - 100%, 125%,
+150%, 175% and 200% - override that with a fixed factor.
+
+The scale is applied while the application starts up, so changing it takes effect when
+ld-analyse restarts. Choosing a new scale offers to restart immediately and reopen the
+file you have loaded; if there are unsaved metadata changes it will not restart from under
+you, and the new scale is applied the next time you start ld-analyse yourself.
+
+Setting the `QT_SCALE_FACTOR` environment variable yourself takes precedence over this
+menu, and while it is set the UI Scale submenu is disabled so it cannot misreport the scale
+that is actually in effect.
+
+Independently of this setting, the frame viewer renders the picture at your display's true
+pixel density, so it stays sharp rather than being upscaled twice.
 
 # The Window Menu
 

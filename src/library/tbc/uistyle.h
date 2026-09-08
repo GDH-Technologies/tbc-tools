@@ -13,11 +13,16 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QDialog>
+#include <QDir>
+#include <QFileDialog>
 #include <QGuiApplication>
 #include <QMargins>
 #include <QPalette>
 #include <QRect>
 #include <QScreen>
+#include <QString>
+#include <QStringList>
 #include <QStyleFactory>
 #include <QStyle>
 #include <QStyleHints>
@@ -373,6 +378,102 @@ inline void centerDialogOverParent(QWidget *dialog)
     }
 
     dialog->move(x, y);
+}
+
+// ---------------------------------------------------------------------------
+// File dialogs
+//
+// One implementation for every GUI tool. This block previously existed as three
+// byte-identical copies (ld-analyse's exportdialog.cpp and
+// metadataconversiondialog.cpp, plus tbc-export-metadata's
+// metadataexportdialog.cpp), which meant three places to keep in step and three
+// places deciding whether the dialog is native.
+//
+// Every platform gets its OS-native file browser except macOS, where the Qt
+// dialog is used deliberately - keep that carve-out.
+// ---------------------------------------------------------------------------
+
+inline QWidget *dialogParentWidget(QWidget *widget)
+{
+    if (!widget) {
+        return nullptr;
+    }
+
+    QWidget *window = widget->window();
+    return window ? window : widget;
+}
+
+inline QStringList dialogNameFilters(const QString &filters)
+{
+    return filters.split(QStringLiteral(";;"), Qt::SkipEmptyParts);
+}
+
+inline void applyCommonFileDialogOptions(QFileDialog *dialog)
+{
+    if (!dialog) {
+        return;
+    }
+
+    dialog->setOption(QFileDialog::DontResolveSymlinks, true);
+#if defined(Q_OS_MACOS)
+    dialog->setOption(QFileDialog::DontUseNativeDialog, true);
+#endif
+}
+
+inline QString runOpenFileDialog(QWidget *parent,
+                                 const QString &title,
+                                 const QString &startPath,
+                                 const QString &filters)
+{
+    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setNameFilters(dialogNameFilters(filters));
+    applyCommonFileDialogOptions(&dialog);
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+        return QString();
+    }
+    return dialog.selectedFiles().constFirst();
+}
+
+// startPath may be either a directory to open in or a full suggested filename;
+// when it names a file, the dialog pre-selects it. defaultSuffix is appended
+// when the user types a name with no extension (empty = no default).
+inline QString runSaveFileDialog(QWidget *parent,
+                                 const QString &title,
+                                 const QString &startPath,
+                                 const QString &filters,
+                                 const QString &defaultSuffix = QString())
+{
+    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    dialog.setNameFilters(dialogNameFilters(filters));
+    if (!defaultSuffix.isEmpty()) {
+        dialog.setDefaultSuffix(defaultSuffix);
+    }
+    if (!startPath.isEmpty() && !QDir(startPath).exists()) {
+        dialog.selectFile(startPath);
+    }
+    applyCommonFileDialogOptions(&dialog);
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+        return QString();
+    }
+    return dialog.selectedFiles().constFirst();
+}
+
+inline QString runDirectoryDialog(QWidget *parent,
+                                  const QString &title,
+                                  const QString &startPath)
+{
+    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
+    dialog.setFileMode(QFileDialog::Directory);
+    dialog.setOption(QFileDialog::ShowDirsOnly, true);
+    applyCommonFileDialogOptions(&dialog);
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+        return QString();
+    }
+    return dialog.selectedFiles().constFirst();
 }
 } // namespace tbc::ui
 

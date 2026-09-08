@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QVector>
 
+class Configuration;
 class TbcSource;
 class QResizeEvent;
 class QSplitter;
@@ -46,6 +47,10 @@ public:
         QString label;
     };
     explicit ExportDialog(QWidget *parent = nullptr);
+
+    // Supplies the shared configuration so the output, audio-track and profile
+    // pickers open where each was last used. Not owned; may be left unset.
+    void setConfiguration(Configuration *configuration);
     ~ExportDialog();
     // Re-read the recording segments from the source (after an edit in the main window)
     void refreshSegmentsFromSource();
@@ -186,6 +191,12 @@ private:
     TbcSource *tbcSource = nullptr;
     QProcess *exportProcess = nullptr;
     QProcess *parallelProxyProcess = nullptr;
+    // Where an audio-track picker should open, and how any export picker's
+    // chosen path is remembered. Both no-op without a configuration.
+    QString audioTrackStartDirectory() const;
+    void rememberExportDirectory(const char *purpose, const QString &chosenPath);
+
+    Configuration *configuration = nullptr;  // shared settings; not owned, may be null
     QString currentInputFile;
     QString processStdout;
     QString processStderr;

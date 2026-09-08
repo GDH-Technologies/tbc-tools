@@ -9,6 +9,7 @@
  ******************************************************************************/
 
 #include "efmhandlerdialog.h"
+#include "configuration.h"
 
 #include <QApplication>
 #include <QAbstractItemView>
@@ -98,6 +99,28 @@ void EfmHandlerDialog::setSourceDirectory(const QString &directory)
         return;
     }
     sourceDirectory = normalizedDirectory;
+}
+
+void EfmHandlerDialog::setConfiguration(Configuration *newConfiguration)
+{
+    configuration = newConfiguration;
+}
+
+QString EfmHandlerDialog::efmStartDirectory() const
+{
+    if (configuration) {
+        return configuration->getLastDirectory(DirectoryPurpose::Efm, sourceDirectory);
+    }
+    return chooseStartDirectory(sourceDirectory);
+}
+
+void EfmHandlerDialog::rememberEfmDirectory(const QString &chosenPath)
+{
+    if (!configuration || chosenPath.isEmpty()) {
+        return;
+    }
+    configuration->setLastDirectory(DirectoryPurpose::Efm, QFileInfo(chosenPath).absolutePath());
+    configuration->writeConfiguration();
 }
 
 void EfmHandlerDialog::setDefaultEfmInput(const QString &efmFilename)
@@ -1010,7 +1033,7 @@ bool EfmHandlerDialog::runSelectedWorkflows(QString *errorMessage, QStringList *
 
 void EfmHandlerDialog::onAddEfmInputClicked()
 {
-    const QString startDirectory = chooseStartDirectory(sourceDirectory);
+    const QString startDirectory = efmStartDirectory();
     const QStringList selectedFiles = QFileDialog::getOpenFileNames(
         this,
         tr("Select EFM input files"),
@@ -1019,6 +1042,7 @@ void EfmHandlerDialog::onAddEfmInputClicked()
     if (selectedFiles.isEmpty()) {
         return;
     }
+    rememberEfmDirectory(selectedFiles.constFirst());
 
     bool addedAny = false;
     for (const QString &selectedFile : selectedFiles) {
@@ -1079,7 +1103,7 @@ void EfmHandlerDialog::onBrowseOutputBaseClicked()
         suggestedPath = defaultOutputBaseFromInputs();
     }
     if (suggestedPath.isEmpty()) {
-        suggestedPath = chooseStartDirectory(sourceDirectory);
+        suggestedPath = efmStartDirectory();
     }
 
     const QString selectedPath = QFileDialog::getSaveFileName(
@@ -1090,6 +1114,7 @@ void EfmHandlerDialog::onBrowseOutputBaseClicked()
     if (selectedPath.isEmpty()) {
         return;
     }
+    rememberEfmDirectory(selectedPath);
 
     userEditedOutputBase = true;
     outputBaseLineEdit->setText(normalizePath(selectedPath));
@@ -1103,7 +1128,7 @@ void EfmHandlerDialog::onBrowseAudioOutputClicked()
         suggestedPath = normalizePath(outputBaseLineEdit->text()) + QStringLiteral(".wav");
     }
     if (suggestedPath.isEmpty()) {
-        suggestedPath = chooseStartDirectory(sourceDirectory);
+        suggestedPath = efmStartDirectory();
     }
 
     const QString selectedPath = QFileDialog::getSaveFileName(
@@ -1114,6 +1139,7 @@ void EfmHandlerDialog::onBrowseAudioOutputClicked()
     if (selectedPath.isEmpty()) {
         return;
     }
+    rememberEfmDirectory(selectedPath);
 
     userEditedAudioOutput = true;
     audioOutputLineEdit->setText(normalizePath(selectedPath));
@@ -1126,7 +1152,7 @@ void EfmHandlerDialog::onBrowseDataOutputClicked()
         suggestedPath = normalizePath(outputBaseLineEdit->text()) + QStringLiteral(".bin");
     }
     if (suggestedPath.isEmpty()) {
-        suggestedPath = chooseStartDirectory(sourceDirectory);
+        suggestedPath = efmStartDirectory();
     }
 
     const QString selectedPath = QFileDialog::getSaveFileName(
@@ -1137,6 +1163,7 @@ void EfmHandlerDialog::onBrowseDataOutputClicked()
     if (selectedPath.isEmpty()) {
         return;
     }
+    rememberEfmDirectory(selectedPath);
 
     userEditedDataOutput = true;
     dataOutputLineEdit->setText(normalizePath(selectedPath));
@@ -1144,7 +1171,7 @@ void EfmHandlerDialog::onBrowseDataOutputClicked()
 
 void EfmHandlerDialog::onBrowseAc3InputClicked()
 {
-    const QString startDirectory = chooseStartDirectory(sourceDirectory);
+    const QString startDirectory = efmStartDirectory();
     const QString selectedPath = QFileDialog::getOpenFileName(
         this,
         tr("Select AC3 symbols input"),
@@ -1153,6 +1180,7 @@ void EfmHandlerDialog::onBrowseAc3InputClicked()
     if (selectedPath.isEmpty()) {
         return;
     }
+    rememberEfmDirectory(selectedPath);
 
     const QString normalizedInputPath = normalizePath(selectedPath);
     ac3InputLineEdit->setText(normalizedInputPath);
@@ -1174,7 +1202,7 @@ void EfmHandlerDialog::onBrowseAc3OutputClicked()
         }
     }
     if (suggestedPath.isEmpty()) {
-        suggestedPath = chooseStartDirectory(sourceDirectory);
+        suggestedPath = efmStartDirectory();
     }
 
     const QString selectedPath = QFileDialog::getSaveFileName(
@@ -1185,6 +1213,7 @@ void EfmHandlerDialog::onBrowseAc3OutputClicked()
     if (selectedPath.isEmpty()) {
         return;
     }
+    rememberEfmDirectory(selectedPath);
 
     userEditedAc3Output = true;
     ac3OutputLineEdit->setText(normalizePath(selectedPath));

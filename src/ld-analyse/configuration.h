@@ -13,11 +13,25 @@
 
 #include <QObject>
 #include <QCoreApplication>
+#include <QMap>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QApplication>
 #include <QDir>
 #include <QDebug>
+
+// Names of the per-purpose "last used directory" slots kept in the
+// [directories] group. Each kind of file remembers its own directory, so the
+// export output picker does not follow the audio-track picker around.
+namespace DirectoryPurpose {
+constexpr const char *Export = "exportDirectory";
+constexpr const char *AudioTrack = "audioTrackDirectory";
+constexpr const char *Metadata = "metadataDirectory";
+constexpr const char *Profile = "profileDirectory";
+constexpr const char *Efm = "efmDirectory";
+constexpr const char *Teletext = "teletextDirectory";
+constexpr const char *Plugin = "pluginDirectory";
+} // namespace DirectoryPurpose
 
 class Configuration : public QObject
 {
@@ -34,6 +48,13 @@ public:
     QString getSourceDirectory(void);
     void setPngDirectory(QString pngDirectory);
     QString getPngDirectory(void);
+
+    // Per-purpose last-used directory memory. purpose is one of the
+    // DirectoryPurpose names. getLastDirectory() returns the remembered
+    // directory when it still exists, otherwise the caller's contextual
+    // fallback, otherwise the source directory, otherwise the home directory.
+    QString getLastDirectory(const QString &purpose, const QString &fallback = QString());
+    void setLastDirectory(const QString &purpose, const QString &path);
 
     // Get and set methods - windows
     void setMainWindowGeometry(QByteArray mainWindowGeometry);
@@ -80,6 +101,8 @@ public:
     bool getShowExportBoundary(void);
     void setExportBoundaryThickness(qint32 exportBoundaryThickness);
     qint32 getExportBoundaryThickness(void);
+    void setUiScaleFactor(double uiScaleFactor);
+    double getUiScaleFactor(void);
 
     // Get and set methods - update checker
     void setUpdateCheckEnabled(bool updateCheckEnabled);
@@ -114,6 +137,7 @@ private:
     struct Directories {
         QString sourceDirectory; // Last used directory for .tbc files
         QString pngDirectory; // Last used directory for .png files
+        QMap<QString, QString> lastUsed; // Last used directory per DirectoryPurpose
     };
 
     // Window geometry and settings
@@ -143,6 +167,7 @@ private:
         bool resizeFrameWithWindow;
         bool showExportBoundary;
         qint32 exportBoundaryThickness;
+        double uiScaleFactor; // Qt scale factor for the whole UI; 0 = follow the OS
     };
 
     // Update checker options

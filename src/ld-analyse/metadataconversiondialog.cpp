@@ -12,6 +12,9 @@
 #include "ui_metadataconversiondialog.h"
 
 #include "metadataconverterutil.h"
+#include "configuration.h"
+
+#include "tbc/uistyle.h"
 
 #include <QFileDialog>
 #include <QFileInfo>
@@ -19,67 +22,10 @@
 #include <QMessageBox>
 #include <QSignalBlocker>
 namespace {
-QWidget *dialogParentWidget(QWidget *widget)
-{
-    if (!widget) {
-        return nullptr;
-    }
-
-    QWidget *window = widget->window();
-    return window ? window : widget;
-}
-
-QStringList dialogNameFilters(const QString &filters)
-{
-    return filters.split(QStringLiteral(";;"), Qt::SkipEmptyParts);
-}
-
-void applyCommonFileDialogOptions(QFileDialog *dialog)
-{
-    if (!dialog) {
-        return;
-    }
-
-    dialog->setOption(QFileDialog::DontResolveSymlinks, true);
-#if defined(Q_OS_MACOS)
-    dialog->setOption(QFileDialog::DontUseNativeDialog, true);
-#endif
-}
-
-QString runOpenFileDialog(QWidget *parent,
-                          const QString &title,
-                          const QString &startPath,
-                          const QString &filters)
-{
-    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setNameFilters(dialogNameFilters(filters));
-    applyCommonFileDialogOptions(&dialog);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-        return QString();
-    }
-    return dialog.selectedFiles().constFirst();
-}
-
-QString runSaveFileDialog(QWidget *parent,
-                          const QString &title,
-                          const QString &startPath,
-                          const QString &filters)
-{
-    QFileDialog dialog(dialogParentWidget(parent), title, startPath);
-    dialog.setAcceptMode(QFileDialog::AcceptSave);
-    dialog.setFileMode(QFileDialog::AnyFile);
-    dialog.setNameFilters(dialogNameFilters(filters));
-    if (!startPath.isEmpty()) {
-        dialog.selectFile(startPath);
-    }
-    applyCommonFileDialogOptions(&dialog);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-        return QString();
-    }
-    return dialog.selectedFiles().constFirst();
-}
+// The file-dialog helpers these call sites use are shared by every GUI tool and
+// live in tbc/uistyle.h; this file used to carry its own copy.
+using tbc::ui::runOpenFileDialog;
+using tbc::ui::runSaveFileDialog;
 } // namespace
 
 MetadataConversionDialog::MetadataConversionDialog(QWidget *parent) :
@@ -108,6 +54,11 @@ void MetadataConversionDialog::setSourceDirectory(const QString &directory)
         sourceDirectory = directory;
     }
 }
+
+void MetadataConversionDialog::setConfiguration(Configuration *newConfiguration)
+{
+    configuration = newConfiguration;
+}
 void MetadataConversionDialog::setDefaultInput(const QString &inputFilename)
 {
     const QString normalizedInput = MetadataConverterUtil::normalizePathForCurrentPlatform(inputFilename);
@@ -127,9 +78,12 @@ void MetadataConversionDialog::setDefaultInput(const QString &inputFilename)
 void MetadataConversionDialog::on_inputBrowseButton_clicked()
 {
     const QString filter = tr("Metadata input (*.json *.db);;JSON metadata (*.json);;SQLite metadata (*.db);;All Files (*)");
+    const QString startPath = configuration
+        ? configuration->getLastDirectory(DirectoryPurpose::Metadata, sourceDirectory)
+        : sourceDirectory;
     const QString inputFileName = runOpenFileDialog(this,
                                                     tr("Select metadata input"),
-                                                    sourceDirectory,
+                                                    startPath,
                                                     filter);
     if (inputFileName.isEmpty()) {
         return;
@@ -143,6 +97,10 @@ void MetadataConversionDialog::on_inputBrowseButton_clicked()
     const QFileInfo selectedInfo(normalizedInput);
     if (selectedInfo.exists()) {
         sourceDirectory = selectedInfo.absolutePath();
+    }
+    if (configuration) {
+        configuration->setLastDirectory(DirectoryPurpose::Metadata, selectedInfo.absolutePath());
+        configuration->writeConfiguration();
     }
 }
 
@@ -174,6 +132,10 @@ void MetadataConversionDialog::on_outputBrowseButton_clicked()
     const QFileInfo selectedInfo(ui->outputLineEdit->text());
     if (!selectedInfo.absolutePath().isEmpty()) {
         sourceDirectory = selectedInfo.absolutePath();
+        if (configuration) {
+            configuration->setLastDirectory(DirectoryPurpose::Metadata, selectedInfo.absolutePath());
+            configuration->writeConfiguration();
+        }
     }
 }
 

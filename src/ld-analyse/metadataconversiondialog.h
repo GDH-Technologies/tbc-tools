@@ -17,6 +17,8 @@ namespace Ui {
 class MetadataConversionDialog;
 }
 
+class Configuration;
+
 class MetadataConversionDialog : public QDialog
 {
     Q_OBJECT
@@ -26,6 +28,10 @@ public:
     ~MetadataConversionDialog();
 
     void setSourceDirectory(const QString &directory);
+
+    // Supplies the shared configuration so the metadata pickers open where
+    // metadata was last converted. Not owned; may be left unset.
+    void setConfiguration(Configuration *configuration);
     void setDefaultInput(const QString &inputFilename);
 
 private slots:
@@ -36,6 +42,7 @@ private slots:
 private:
     void updateDirectionFromInput(bool forceOutputUpdate);
     Ui::MetadataConversionDialog *ui;
+    Configuration *configuration = nullptr;  // shared settings; not owned, may be null
     QString sourceDirectory;
 };
 

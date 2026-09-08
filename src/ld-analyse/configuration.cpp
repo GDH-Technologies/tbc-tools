@@ -11,8 +11,22 @@
 #include "configuration.h"
 #include "tbc/logging.h"
 
-// This define should be incremented if the settings file format changes
+// This define should be incremented if the settings file format changes.
+// Purely additive keys must NOT bump it: a bump runs setDefault() and discards
+// every existing user setting. New keys are read with a default instead.
 static const qint32 SETTINGSVERSION = 5;
+
+// Every per-purpose last-used-directory slot, so the read, write and default
+// paths iterate one list instead of repeating each key three times.
+static const char *DIRECTORY_PURPOSES[] = {
+    DirectoryPurpose::Export,   DirectoryPurpose::AudioTrack, DirectoryPurpose::Metadata,
+    DirectoryPurpose::Profile,  DirectoryPurpose::Efm,        DirectoryPurpose::Teletext,
+    DirectoryPurpose::Plugin,
+};
+
+// Bounds for the manual UI scale factor. 0 means "follow the OS scale".
+static const double UI_SCALE_MINIMUM = 0.5;
+static const double UI_SCALE_MAXIMUM = 3.0;
 
 Configuration::Configuration(QObject *parent) : QObject(parent)
 {
@@ -51,6 +65,9 @@ void Configuration::writeConfiguration(void)
     configuration->beginGroup("directories");
     configuration->setValue("sourceDirectory", settings.directories.sourceDirectory);
     configuration->setValue("pngDirectory", settings.directories.pngDirectory);
+    for (const char *purpose : DIRECTORY_PURPOSES) {
+        configuration->setValue(purpose, settings.directories.lastUsed.value(QString::fromLatin1(purpose)));
+    }
     configuration->endGroup();
 
     // Windows
@@ -80,6 +97,7 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("resizeFrameWithWindow", settings.viewOptions.resizeFrameWithWindow);
     configuration->setValue("showExportBoundary", settings.viewOptions.showExportBoundary);
     configuration->setValue("exportBoundaryThickness", settings.viewOptions.exportBoundaryThickness);
+    configuration->setValue("uiScaleFactor", settings.viewOptions.uiScaleFactor);
     configuration->endGroup();
 
     // Update checker
@@ -115,6 +133,12 @@ void Configuration::readConfiguration(void)
     configuration->beginGroup("directories");
     settings.directories.sourceDirectory = configuration->value("sourceDirectory").toString();
     settings.directories.pngDirectory = configuration->value("pngDirectory").toString();
+    // Additive keys - older config files fall back to an empty (unremembered) slot
+    settings.directories.lastUsed.clear();
+    for (const char *purpose : DIRECTORY_PURPOSES) {
+        settings.directories.lastUsed.insert(QString::fromLatin1(purpose),
+                                             configuration->value(purpose, QString()).toString());
+    }
     configuration->endGroup();
 
     // Windows
@@ -146,6 +170,14 @@ void Configuration::readConfiguration(void)
     settings.viewOptions.exportBoundaryThickness = configuration->value("exportBoundaryThickness", 4).toInt();
     if (settings.viewOptions.exportBoundaryThickness < 1) settings.viewOptions.exportBoundaryThickness = 1;
     if (settings.viewOptions.exportBoundaryThickness > 8) settings.viewOptions.exportBoundaryThickness = 8;
+    // Additive key. 0 means "follow the OS scale"; anything outside the usable
+    // range is treated as 0 rather than launching the UI at an unusable size.
+    settings.viewOptions.uiScaleFactor = configuration->value("uiScaleFactor", 0.0).toDouble();
+    if (settings.viewOptions.uiScaleFactor != 0.0
+        && (settings.viewOptions.uiScaleFactor < UI_SCALE_MINIMUM
+            || settings.viewOptions.uiScaleFactor > UI_SCALE_MAXIMUM)) {
+        settings.viewOptions.uiScaleFactor = 0.0;
+    }
     configuration->endGroup();
 
     // Update checker (additive keys - older config files fall back to defaults)
@@ -174,6 +206,7 @@ void Configuration::setDefault(void)
     // Directories
     settings.directories.sourceDirectory = QDir::homePath();
     settings.directories.pngDirectory = QDir::homePath();
+    settings.directories.lastUsed.clear();
 
     // Windows
     settings.windows.mainWindowGeometry = QByteArray();
@@ -199,6 +232,7 @@ void Configuration::setDefault(void)
     settings.viewOptions.resizeFrameWithWindow = true;
     settings.viewOptions.showExportBoundary = true;
     settings.viewOptions.exportBoundaryThickness = 4;
+    settings.viewOptions.uiScaleFactor = 0.0;
 
     // Update checker
     settings.updateCheck.enabled = true;
@@ -238,6 +272,30 @@ void Configuration::setPngDirectory(QString pngDirectory)
 QString Configuration::getPngDirectory(void)
 {
     return settings.directories.pngDirectory;
+}
+
+QString Configuration::getLastDirectory(const QString &purpose, const QString &fallback)
+{
+    // A remembered directory wins, but only while it still exists - a path on
+    // a since-unmounted drive would otherwise open the dialog on nothing.
+    const QString remembered = settings.directories.lastUsed.value(purpose);
+    if (!remembered.isEmpty() && QDir(remembered).exists()) return remembered;
+
+    // Then the caller's own contextual default (the loaded file's directory,
+    // a suggested output path), which is the better guess on a fresh install.
+    if (!fallback.isEmpty() && QDir(fallback).exists()) return fallback;
+
+    if (!settings.directories.sourceDirectory.isEmpty()
+        && QDir(settings.directories.sourceDirectory).exists()) {
+        return settings.directories.sourceDirectory;
+    }
+    return QDir::homePath();
+}
+
+void Configuration::setLastDirectory(const QString &purpose, const QString &path)
+{
+    if (purpose.isEmpty() || path.isEmpty()) return;
+    settings.directories.lastUsed.insert(purpose, path);
 }
 
 // Windows
@@ -449,6 +507,19 @@ void Configuration::setExportBoundaryThickness(qint32 exportBoundaryThickness)
 qint32 Configuration::getExportBoundaryThickness(void)
 {
     return settings.viewOptions.exportBoundaryThickness;
+}
+
+void Configuration::setUiScaleFactor(double uiScaleFactor)
+{
+    if (uiScaleFactor != 0.0 && (uiScaleFactor < UI_SCALE_MINIMUM || uiScaleFactor > UI_SCALE_MAXIMUM)) {
+        uiScaleFactor = 0.0;
+    }
+    settings.viewOptions.uiScaleFactor = uiScaleFactor;
+}
+
+double Configuration::getUiScaleFactor(void)
+{
+    return settings.viewOptions.uiScaleFactor;
 }
 
 // Update checker

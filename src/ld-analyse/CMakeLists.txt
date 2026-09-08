@@ -85,6 +85,11 @@ add_executable(tbc-efm-handler
     efmhandler-main.cpp
     efmhandlerdialog.cpp
     efmhandlerdialog.h
+    # EfmHandlerDialog optionally remembers its last-used directory through
+    # Configuration. The standalone handler never sets one (the pointer stays
+    # null and no settings are touched), but the symbols must still link.
+    configuration.cpp
+    configuration.h
 )
 
 target_link_libraries(tbc-efm-handler PRIVATE

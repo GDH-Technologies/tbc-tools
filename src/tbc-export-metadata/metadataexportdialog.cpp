@@ -11,6 +11,8 @@
 #include "metadataexportdialog.h"
 #include "ui_metadataexportdialog.h"
 
+#include "tbc/uistyle.h"
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QCoreApplication>
@@ -30,30 +32,9 @@
 #include <QUrl>
 
 namespace {
-QWidget *dialogParentWidget(QWidget *widget)
-{
-    if (!widget) {
-        return nullptr;
-    }
-    QWidget *window = widget->window();
-    return window ? window : widget;
-}
-
-QStringList dialogNameFilters(const QString &filters)
-{
-    return filters.split(QStringLiteral(";;"), Qt::SkipEmptyParts);
-}
-
-void applyCommonFileDialogOptions(QFileDialog *dialog)
-{
-    if (!dialog) {
-        return;
-    }
-    dialog->setOption(QFileDialog::DontResolveSymlinks, true);
-#if defined(Q_OS_MACOS)
-    dialog->setOption(QFileDialog::DontUseNativeDialog, true);
-#endif
-}
+// The file-dialog helper this dialog uses is shared by every GUI tool and lives
+// in tbc/uistyle.h; this file used to carry its own copy.
+using tbc::ui::runOpenFileDialog;
 
 bool parsePositiveInteger(const QString &text, qint32 *value)
 {
@@ -318,16 +299,12 @@ void MetadataExportDialog::on_inputBrowseButton_clicked()
     const QString startPath = ui->inputLineEdit->text().trimmed().isEmpty()
                                   ? sourceDirectory
                                   : ui->inputLineEdit->text().trimmed();
-    QFileDialog dialog(dialogParentWidget(this), tr("Select metadata input"), startPath);
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setNameFilters(dialogNameFilters(filter));
-    applyCommonFileDialogOptions(&dialog);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+    const QString selected = runOpenFileDialog(this, tr("Select metadata input"), startPath, filter);
+    if (selected.isEmpty()) {
         return;
     }
 
-    const QString normalizedInput = normalizedPath(dialog.selectedFiles().constFirst());
+    const QString normalizedInput = normalizedPath(selected);
     ui->inputLineEdit->setText(normalizedInput);
     if (ui->statusLabel) {
         ui->statusLabel->clear();
