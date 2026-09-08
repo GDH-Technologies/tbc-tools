@@ -1,0 +1,351 @@
+name: "Self-hosted build and deploy"
+
+# Fork-exclusive. On a merge to main that touches build-relevant paths: rebuild
+# on each of the three GDH boxes and install the result locally on that same
+# box. This is the ONLY entry point in the repository that installs anything.
+#
+# The three platform workflows also trigger on `push: branches: [main]`, but
+# each of their jobs stands down unless called with from_deploy=true, so a
+# merge builds once per box rather than twice.
+
+on:
+  push:
+    branches: [main]
+    # First gate: GitHub skips the run entirely for a docs-only merge, so no
+    # runner is woken at all. The per-platform gate in `detect` is the second.
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "vcpkg.json"
+      - "flake.nix"
+      - "flake.lock"
+      # A version bump is a commit whose only changed file is this one. Without
+      # it here the deploy that matters most for a release is the one that gets
+      # skipped, and the fleet keeps reporting the previous version.
+      - ".gdh-version"
+      - ".github/workflows/self-hosted-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group for the whole fleet, and NEVER cancel. A cancelled run can
+  # interrupt `nix profile upgrade` or the Windows directory swap halfway
+  # through. Back-to-back merges queue and deploy in order.
+  group: tbc-tools-self-hosted-deploy
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  detect:
+    name: Detect changed areas
+    runs-on: [self-hosted, Linux, X64, wm]
+    outputs:
+      linux: ${{ steps.filter.outputs.linux == 'true' || github.event_name == 'workflow_dispatch' }}
+      macos: ${{ steps.filter.outputs.macos == 'true' || github.event_name == 'workflow_dispatch' }}
+      windows: ${{ steps.filter.outputs.windows == 'true' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # dorny/paths-filter diffs against github.event.before on a push, so
+          # it needs the history to reach it.
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            common: &common
+              - 'src/**'
+              - 'ci/**'
+              - 'scripts/**'
+              - 'CMakeLists.txt'
+              # In the shared anchor, so a version bump rebuilds and reinstalls
+              # on all three boxes rather than none of them.
+              - '.gdh-version'
+              - '.github/workflows/self-hosted-deploy.yml'
+            linux:
+              - *common
+              - 'flake.nix'
+              - 'flake.lock'
+              - '.github/workflows/self-hosted-linux.yml'
+            macos:
+              - *common
+              - 'flake.nix'
+              - 'flake.lock'
+              - '.github/workflows/self-hosted-macos.yml'
+            windows:
+              - *common
+              - 'vcpkg.json'
+              - 'CMakePresets.json'
+              - '.github/workflows/self-hosted-windows.yml'
+      - name: Summarise
+        run: |
+          {
+            echo "## Changed areas for ${GITHUB_SHA}"
+            echo ""
+            echo "| platform | rebuild |"
+            echo "| --- | --- |"
+            echo "| linux (wm)     | ${{ steps.filter.outputs.linux }} |"
+            echo "| macos (air0)   | ${{ steps.filter.outputs.macos }} |"
+            echo "| windows (win0) | ${{ steps.filter.outputs.windows }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-linux:
+    name: Build (wm)
+    needs: detect
+    if: ${{ needs.detect.outputs.linux == 'true' }}
+    uses: ./.github/workflows/self-hosted-linux.yml
+    with:
+      # Pin every box to the exact merged commit, so another merge landing
+      # mid-run cannot leave the three machines on different code.
+      checkout_ref: ${{ github.sha }}
+      from_deploy: true
+
+  build-macos:
+    name: Build (air0)
+    needs: detect
+    if: ${{ needs.detect.outputs.macos == 'true' }}
+    uses: ./.github/workflows/self-hosted-macos.yml
+    with:
+      checkout_ref: ${{ github.sha }}
+      from_deploy: true
+
+  build-windows:
+    name: Build (win0)
+    needs: detect
+    if: ${{ needs.detect.outputs.windows == 'true' }}
+    uses: ./.github/workflows/self-hosted-windows.yml
+    with:
+      checkout_ref: ${{ github.sha }}
+      from_deploy: true
+
+  deploy-linux:
+    name: Deploy to wm
+    needs: [detect, build-linux]
+    if: ${{ needs.detect.outputs.linux == 'true' }}
+    runs-on: [self-hosted, Linux, X64, wm]
+    env:
+      # wm installs from a local flake rather than from GitHub, so the deploy
+      # is: fast-forward the developer's real checkout, then upgrade. The
+      # runner's own CI workspace is a different checkout entirely.
+      CHECKOUT: /home/rdodge/Repos/tbc-tools
+    steps:
+      - name: Advance main in the working checkout and upgrade the profile
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$CHECKOUT/.git" ]; then
+            echo "Refusing to deploy: $CHECKOUT is not a git checkout." >&2
+            exit 1
+          fi
+
+          git -C "$CHECKOUT" fetch --tags --prune --prune-tags --force origin
+
+          # The profile entry's flake URL is git+file://$CHECKOUT?ref=refs/heads/main,
+          # so nix reads the main REF -- not the working tree. Only that ref has
+          # to advance, which means the developer's branch and uncommitted work
+          # are almost always none of this job's business.
+          BRANCH="$(git -C "$CHECKOUT" rev-parse --abbrev-ref HEAD)"
+          if [ "$BRANCH" = "main" ]; then
+            # main is the checked-out branch, so the only way to move the ref
+            # goes through the working tree -- which therefore has to be clean.
+            # --porcelain ignores gitignored paths, so build/, result and
+            # testout/ do not trip this; only real uncommitted work does.
+            if [ -n "$(git -C "$CHECKOUT" status --porcelain)" ]; then
+              echo "Refusing to deploy: $CHECKOUT is on main with uncommitted changes." >&2
+              git -C "$CHECKOUT" status --short >&2
+              exit 1
+            fi
+            git -C "$CHECKOUT" merge --ff-only "$GITHUB_SHA"
+          else
+            # main is not checked out: move the ref and leave the working tree
+            # completely alone, whatever branch and uncommitted work it holds.
+            # Without a leading '+' this refuses anything but a fast-forward,
+            # which is the same safety property `merge --ff-only` gives above.
+            echo "Checkout is on '$BRANCH'; advancing refs/heads/main without touching the working tree."
+            git -C "$CHECKOUT" fetch --no-tags origin main:main
+          fi
+
+          MAIN_SHA="$(git -C "$CHECKOUT" rev-parse refs/heads/main)"
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Refusing to deploy: $CHECKOUT main is at $MAIN_SHA, expected $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          nix profile upgrade tbc-tools
+
+          # The profile entry records `?ref=refs/heads/main&rev=<sha>`, so this
+          # proves the upgrade actually moved rather than silently no-opping.
+          nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' > "$RUNNER_TEMP/profile.txt"
+          cat "$RUNNER_TEMP/profile.txt"
+          if ! grep -q "rev=$GITHUB_SHA" "$RUNNER_TEMP/profile.txt"; then
+            echo "nix profile did not move to $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+      - name: Re-sync desktop integration
+        # A nix profile install registers nothing with XDG (no mime.cache, no
+        # mimeinfo.cache, no icon index), so INSTALL.md makes this a required
+        # step after every upgrade -- it also picks up new application artwork.
+        # It writes only under $XDG_DATA_HOME and is a no-op when current.
+        run: |
+          if command -v decode-desktop-sync >/dev/null 2>&1; then
+            decode-desktop-sync
+          else
+            echo "decode-desktop-sync not on PATH; skipping XDG re-sync." >&2
+          fi
+
+      - name: Smoke test and report
+        run: |
+          set -euo pipefail
+          command -v ld-analyse
+          tbc-video-export --version
+          {
+            echo "## wm deploy"
+            echo ""
+            echo "Installed \`$GITHUB_SHA\` via \`nix profile upgrade tbc-tools\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-macos:
+    name: Deploy to air0
+    needs: [detect, build-macos]
+    if: ${{ needs.detect.outputs.macos == 'true' }}
+    runs-on: [self-hosted, macOS, ARM64, air0]
+    env:
+      # air0 installs from the public fork rather than a local checkout.
+      FLAKE_URL: github:GDH-Technologies/tbc-tools
+    steps:
+      - name: Install or upgrade the tbc-tools profile entry
+        run: |
+          set -euo pipefail
+
+          # Nix renamed `profile install` to `profile add`; support both so a
+          # version skew between wm and air0 does not break the deploy.
+          if nix profile add --help >/dev/null 2>&1; then ADD=add; else ADD=install; fi
+
+          if nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' | grep -qE '^Name:[[:space:]]+tbc-tools$'; then
+            echo "Existing tbc-tools entry found; upgrading."
+            # --refresh: github: flake refs are served from the tarball cache
+            # (default TTL 1h) and would otherwise resolve to a stale commit.
+            nix profile upgrade --refresh tbc-tools
+          else
+            echo "No tbc-tools entry in the profile; performing first install."
+            nix profile "$ADD" --refresh "$FLAKE_URL"
+          fi
+
+          nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' > "$RUNNER_TEMP/profile.txt"
+          cat "$RUNNER_TEMP/profile.txt"
+          if ! grep -q "rev=$GITHUB_SHA" "$RUNNER_TEMP/profile.txt"; then
+            echo "air0 profile did not resolve to $GITHUB_SHA (GitHub flake cache lag?)." >&2
+            exit 1
+          fi
+
+      - name: Smoke test and report
+        run: |
+          set -euo pipefail
+          command -v ld-analyse
+          tbc-video-export --version
+          {
+            echo "## air0 deploy"
+            echo ""
+            echo "Installed \`$GITHUB_SHA\` from \`$FLAKE_URL\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-windows:
+    name: Deploy to win0
+    needs: [detect, build-windows]
+    if: ${{ needs.detect.outputs.windows == 'true' }}
+    runs-on: [self-hosted, Windows, X64, win0]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Locate the packaged tree
+        id: locate
+        # Prefer the build job's own output: it is on this machine already, and
+        # round-tripping a few hundred megabytes through the artifact store on
+        # every merge is pure waste. The .build-sha stamp is what makes that
+        # safe -- a workspace that was cleaned, or left over from a different
+        # commit, falls through to the artifact instead of installing the wrong
+        # binaries.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = Join-Path $env:GITHUB_WORKSPACE 'release'
+          $stamp = Join-Path $ws '.build-sha'
+          if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $env:GITHUB_SHA)) {
+            Write-Host "Using the build job's workspace tree at $ws"
+            "source=workspace" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "dir=$ws"          | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+            Write-Host "Workspace tree absent or stale; falling back to the uploaded artifact."
+            "source=artifact" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "dir=incoming"    | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+
+      - name: Download the packaged release (fallback)
+        if: steps.locate.outputs.source == 'artifact'
+        uses: actions/download-artifact@v8
+        with:
+          name: selfhosted_tbc-tools_windows_x86_64
+          path: incoming
+
+      - name: Swap the installed tree
+        env:
+          SRC_DIR: ${{ steps.locate.outputs.dir }}
+          SRC_KIND: ${{ steps.locate.outputs.source }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src     = $env:SRC_DIR
+          $dest    = Join-Path $env:LOCALAPPDATA 'Programs\tbc-tools'
+          $staging = "$dest.new"
+          $backup  = "$dest.prev"
+
+          if (-not (Test-Path (Join-Path $src 'ld-analyse.exe'))) {
+            throw "Source tree does not look like a tbc-tools release: $src"
+          }
+
+          # Clear debris from an interrupted previous deploy before staging.
+          Remove-Item -Recurse -Force $staging, $backup -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item -Recurse -Force -Path (Join-Path $src '*') -Destination $staging
+
+          # Fail cleanly if a tool is running out of the install directory. The
+          # rename below would otherwise die on a file lock with the old tree
+          # already moved aside.
+          $running = Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($dest, [StringComparison]::OrdinalIgnoreCase) }
+          if ($running) {
+            $names = ($running | ForEach-Object { "$($_.ProcessName) (PID $($_.Id))" }) -join ', '
+            Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+            throw "Refusing to deploy: tbc-tools is running from $dest -- $names. Close it and re-run."
+          }
+
+          if (Test-Path $dest) {
+            try {
+              Rename-Item -Path $dest -NewName (Split-Path $backup -Leaf) -ErrorAction Stop
+            } catch {
+              Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+              throw "Could not move the existing install aside (file lock?): $($_.Exception.Message)"
+            }
+          }
+          try {
+            Move-Item -Path $staging -Destination $dest -ErrorAction Stop
+          } catch {
+            if (Test-Path $backup) { Rename-Item -Path $backup -NewName (Split-Path $dest -Leaf) }
+            throw "Could not move the new tree into place; previous install restored. $($_.Exception.Message)"
+          }
+          Remove-Item -Recurse -Force $backup -ErrorAction SilentlyContinue
+
+          # tbc-video-export, not ld-analyse: the latter is a GUI app and can
+          # block or pop a window on an interactive session.
+          & (Join-Path $dest 'tbc-video-export.exe') --version
+
+          "## win0 deploy`n`nInstalled ``$env:GITHUB_SHA`` to ``$dest`` (source: $env:SRC_KIND)." |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

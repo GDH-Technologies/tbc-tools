@@ -14,6 +14,11 @@ TESTS_WORKFLOW = ROOT / ".github/workflows/tests.yml"
 CUDA_CLOSURE_CACHE_SCRIPT = ROOT / "scripts/cuda-closure-cache.sh"
 WIN_CUDA_RUNTIME_SCRIPT = ROOT / "scripts/windows-cuda-runtime.sh"
 CUDA_PLUGIN_PUBLISH_WORKFLOW = ROOT / ".github/workflows/publish_cuda_plugin.yml"
+SELF_HOSTED_LINUX_WORKFLOW = ROOT / ".github/workflows/self-hosted-linux.yml"
+SELF_HOSTED_MACOS_WORKFLOW = ROOT / ".github/workflows/self-hosted-macos.yml"
+SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml"
+SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
+ACTIONLINT_CONFIG = ROOT / ".github/actionlint.yaml"
 CUDA_PLUGIN_PACKAGE_SCRIPT = ROOT / "scripts/cuda-plugin-package.sh"
 WINDOWS_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-windows.txt"
 LINUX_BUILD_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-linux.txt"
@@ -204,10 +209,190 @@ LINUX_AAA_FORBIDDEN_SNIPPETS = (
     "apt-get install -y --no-install-recommends mono-devel msbuild unzip",
 )
 
+# The GDH fork's self-hosted pipeline. These four files are fork-exclusive and
+# carry their own native packaging steps; build_{linux,macos,windows}_tools.yml
+# are shared with harrypm and must stay byte-identical so upstream merges never
+# conflict (see HOSTED_WORKFLOW_FORBIDDEN_SNIPPETS below).
+SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
+    # Path-gated triggers: one box per OS, so a docs-only change must not
+    # occupy it. "src/**" appears only inside those paths: blocks.
+    '"src/**"',
+    # .gdh-version belongs in every platform gate too, not just the deploy's.
+    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
+    # so changing it changes the artifact; on Windows the version comes from the
+    # tag instead, but a bump commit still changes what that build stamps.
+    # Without this the "PR build set == redeploy set" claim in each file's own
+    # trigger comment is merely stated, not enforced.
+    '".gdh-version"',
+    "runs-on: [self-hosted, Linux, X64, wm]",
+    "workflow_call:",
+    "permissions:\n  contents: read",
+    # The workspace may not persist, and checkout runs `git clean -ffdx`, so a
+    # tag deleted or moved on the remote can linger and poison `git describe`.
+    "git fetch --tags --prune --prune-tags --force origin",
+    "bash ci/run_local_ci_parity.sh --build-test-only",
+    "bash ci/verify_linux_bundle.sh x86-appimage release/tbc-tools-x86_64.AppImage",
+    "bash scripts/build-aaa-linux.sh",
+    "bash scripts/package-aaa-appimage.sh",
+    "pyinstaller/build_linux.py",
+    # wm's Nix store is the user's shared multi-project store: every lookup must
+    # be scoped to the closure of the build, never a store-wide scan.
+    'nix-store -qR "$(readlink -f result)"',
+    # patchelfUnstable (0.18.0), never nixpkgs#patchelf (0.15.2). 0.15 predates
+    # DT_RELR and silently corrupts binaries that use it -- they segfault in
+    # call_init. Fedora 44 builds with DT_RELR, and package-aaa-appimage.sh
+    # bundles the HOST's mono and libs, so 0.15 produced an AAA AppImage whose
+    # mono died instantly.
+    "nixpkgs#$pkg",
+    "patchelfUnstable",
+)
+SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
+    # Path-gated triggers: one box per OS, so a docs-only change must not
+    # occupy it. "src/**" appears only inside those paths: blocks.
+    '"src/**"',
+    # .gdh-version belongs in every platform gate too, not just the deploy's.
+    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
+    # so changing it changes the artifact; on Windows the version comes from the
+    # tag instead, but a bump commit still changes what that build stamps.
+    # Without this the "PR build set == redeploy set" claim in each file's own
+    # trigger comment is merely stated, not enforced.
+    '".gdh-version"',
+    "runs-on: [self-hosted, macOS, ARM64, air0]",
+    "workflow_call:",
+    "permissions:\n  contents: read",
+    "git fetch --tags --prune --prune-tags --force origin",
+    "bash ci/run_local_ci_parity.sh --build-test-only",
+    # ffmpeg must come from the flake's pinned nixpkgs, not the live channel --
+    # same reasoning as the hosted job's MACOS_REQUIRED_SNIPPETS entry.
+    "nix build .#ffmpeg^bin",
+    "pyinstaller/build_macos.py",
+    'codesign --force --deep --sign - "dist/tbc-tools.app"',
+    "create-dmg",
+    # air0 runs macOS 26, the version the hosted job pins away from. Printing
+    # sw_vers first keeps a future Qt uic regression at the top of the log.
+    "sw_vers",
+)
+SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
+    # Path-gated triggers: one box per OS, so a docs-only change must not
+    # occupy it. "src/**" appears only inside those paths: blocks.
+    '"src/**"',
+    # .gdh-version belongs in every platform gate too, not just the deploy's.
+    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
+    # so changing it changes the artifact; on Windows the version comes from the
+    # tag instead, but a bump commit still changes what that build stamps.
+    # Without this the "PR build set == redeploy set" claim in each file's own
+    # trigger comment is merely stated, not enforced.
+    '".gdh-version"',
+    "runs-on: [self-hosted, Windows, X64, win0]",
+    "workflow_call:",
+    "permissions:\n  contents: read",
+    "git fetch --tags --prune --prune-tags --force origin",
+    'VCPKG_COMMIT: "d30fdf55cfca16e12bc3ad99cbc615997014b61b"',
+    # win0 is bare: no Visual Studio, msys64 cmake/ninja, and a Microsoft Store
+    # python stub. The workflow must bootstrap and shadow its own toolchain,
+    # into a root OUTSIDE the workspace (checkout runs `git clean -ffdx`).
+    "TOOLS_ROOT: 'C:\\ci-tools'",
+    "vswhere.exe",
+    "vs_BuildTools.exe",
+    "bootstrap-vcpkg.bat",
+    "VCPKG_BINARY_SOURCES=clear;files,",
+    "pyinstaller\\build_windows.py",
+    "import pywintypes, win32file, win32pipe",
+    # Qt does NOT come from vcpkg here. Compiling qtbase from source is the
+    # dominant cost of a cold Windows build (it drags in icu, harfbuzz,
+    # freetype, libpng, brotli, pcre2, zstd, double-conversion, openssl), so a
+    # prebuilt Qt is installed instead and vcpkg runs in classic mode over the
+    # remaining packages -- which is also what keeps the shared, Qt-bearing
+    # vcpkg.json untouched for the hosted job.
+    "-DVCPKG_MANIFEST_MODE=OFF",
+    "aqt install-qt",
+    # Pinned to the version vcpkg's own baseline was building (ports/qtbase
+    # 6.8.3) so swapping to prebuilt binaries is not also a silent Qt upgrade.
+    'QT_VERSION: "6.8.3"',
+    # windeployqt replaces the hosted job's hand-rolled Qt plugin copy: it reads
+    # each binary's imports and lays out exactly the DLLs and plugins it needs.
+    "windeployqt.exe",
+    # Qt's bin must go on PATH. With Qt out of vcpkg, VCPKG_APPLOCAL_DEPS no
+    # longer places Qt6Core.dll beside the binaries and CMakeLists.txt stages
+    # only plugins and qt.conf, so without this every ctest binary fails to
+    # start -- long before windeployqt is reached.
+    '"$qtDir\\bin"      | Out-File -FilePath $env:GITHUB_PATH',
+    # BUILD_TESTING is ON here (hosted uses OFF) so ctest runs; the POSIX shell
+    # tests are excluded and the test binaries are kept out of release\.
+    "-DBUILD_TESTING=ON",
+    'ctest --test-dir build -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"',
+    # The deploy job installs from this workspace and uses the stamp to prove
+    # the tree belongs to the commit being deployed.
+    "release\\.build-sha",
+)
+SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
+    "uses: ./.github/workflows/self-hosted-linux.yml",
+    "uses: ./.github/workflows/self-hosted-macos.yml",
+    "uses: ./.github/workflows/self-hosted-windows.yml",
+    "dorny/paths-filter@v3",
+    # A cancelled deploy can interrupt `nix profile upgrade` or the Windows
+    # directory swap halfway through, so back-to-back merges must queue.
+    "cancel-in-progress: false",
+    # wm's deploy advances refs/heads/main in the developer's real checkout.
+    # Both routes must be fast-forward-only, the working tree must be left
+    # alone unless main is the checked-out branch, and the profile must be
+    # proven to have actually moved rather than silently no-opped.
+    "Refusing to deploy:",
+    "fetch --no-tags origin main:main",
+    # Written as `git -C "$CHECKOUT" merge --ff-only`, so pin the operation
+    # rather than the whole invocation: a fast-forward can never rewrite or
+    # discard work in the developer's checkout.
+    "merge --ff-only",
+    "nix profile upgrade tbc-tools",
+    'grep -q "rev=$GITHUB_SHA"',
+    # INSTALL.md makes this required after an upgrade: a nix profile install
+    # registers nothing with XDG.
+    "decode-desktop-sync",
+    "github:GDH-Technologies/tbc-tools",
+    # A version bump touches only .gdh-version. If it falls out of the gates,
+    # the release deploy is the one deploy that silently does not happen.
+    '".gdh-version"',
+    "'.gdh-version'",
+    # The Windows swap must be atomic and must refuse a locked install dir.
+    "Programs\\tbc-tools",
+    "Refusing to deploy: tbc-tools is running from",
+)
+# The self-hosted boxes have persistent DISKS but must never be assumed to have
+# persistent WORKSPACES, and wm/air0 carry shared multi-project Nix stores.
+# The precise command-substitution form is forbidden rather than the bare words,
+# so explanatory comments can still name what they are avoiding (same idiom as
+# MACOS_FORBIDDEN_SNIPPETS' "runner: macos-latest").
+SELF_HOSTED_FORBIDDEN_SNIPPETS = (
+    "uses: actions/cache",
+    "nix-community/cache-nix-action",
+    "$(find /nix/store",
+    # This fork does not own the cache repository and needs no secret beyond
+    # the default token.
+    "harrypm/tbc-tools-ci-cache",
+    "CI_CACHE_REPO_TOKEN",
+)
+# build_{linux,macos,windows}_tools.yml are shared with harrypm/tbc-tools. The
+# GDH self-hosted pipeline lives in its own files so upstream merges stay clean.
+HOSTED_WORKFLOW_FORBIDDEN_SNIPPETS = (
+    "self-hosted",
+)
+# actionlint only knows the GitHub-hosted runner labels plus the generic
+# self-hosted ones; without this config every fleet `runs-on` is an error.
+ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
+    "self-hosted-runner:",
+    "- wm",
+    "- air0",
+    "- win0",
+)
+
+
 # Keep AGENTS hard rules aligned with CI-enforced guardrails.
 AGENTS_HARD_RULE_REQUIRED_SNIPPETS = (
     "Hard rule: Windows dedicated cache repo pushes must clear checkout-injected github.com auth headers before pull/push",
     "Hard rule: Linux AAA source builds must stay xbuild-compatible and must not require apt msbuild on arm64",
+    "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",
+    "Hard rule: the self-hosted deploy must never disturb the developer's working tree",
+    "Hard rule: self-hosted runners have persistent disks, not persistent workspaces",
 )
 
 # ld-analyse must route all deinterlace/proxy output through tbc-video-export web profiles
@@ -401,6 +586,11 @@ def main() -> int:
         WIN_CUDA_RUNTIME_SCRIPT,
         CUDA_PLUGIN_PUBLISH_WORKFLOW,
         CUDA_PLUGIN_PACKAGE_SCRIPT,
+        SELF_HOSTED_LINUX_WORKFLOW,
+        SELF_HOSTED_MACOS_WORKFLOW,
+        SELF_HOSTED_WINDOWS_WORKFLOW,
+        SELF_HOSTED_DEPLOY_WORKFLOW,
+        ACTIONLINT_CONFIG,
     ):
         if not required_file.exists():
             errors.append(f"missing required file: {required_file}")
@@ -427,6 +617,28 @@ def main() -> int:
 
     for snippet in RELEASE_REQUIRED_SNIPPETS:
         check_contains(RELEASE_WORKFLOW, snippet, errors)
+
+    for snippet in SELF_HOSTED_LINUX_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_LINUX_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_MACOS_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_WINDOWS_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for workflow in (
+        SELF_HOSTED_LINUX_WORKFLOW,
+        SELF_HOSTED_MACOS_WORKFLOW,
+        SELF_HOSTED_WINDOWS_WORKFLOW,
+        SELF_HOSTED_DEPLOY_WORKFLOW,
+    ):
+        for snippet in SELF_HOSTED_FORBIDDEN_SNIPPETS:
+            check_not_contains(workflow, snippet, errors)
+    for workflow in (LINUX_WORKFLOW, MACOS_WORKFLOW, WINDOWS_WORKFLOW):
+        for snippet in HOSTED_WORKFLOW_FORBIDDEN_SNIPPETS:
+            check_not_contains(workflow, snippet, errors)
+    for snippet in ACTIONLINT_CONFIG_REQUIRED_SNIPPETS:
+        check_contains(ACTIONLINT_CONFIG, snippet, errors)
 
     for snippet in BUNDLE_VERIFY_REQUIRED_SNIPPETS:
         check_contains(BUNDLE_VERIFY_SCRIPT, snippet, errors)

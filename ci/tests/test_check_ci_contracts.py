@@ -514,5 +514,145 @@ class ContractCoverageTests(unittest.TestCase):
         )
 
 
+    def test_self_hosted_workflows_are_required_files(self) -> None:
+        # The GDH fork's whole build/test/deploy path lives in these four files
+        # plus the actionlint label config, which every one of them needs to
+        # lint at all.
+        required_paths = {
+            check_ci_contracts.SELF_HOSTED_LINUX_WORKFLOW,
+            check_ci_contracts.SELF_HOSTED_MACOS_WORKFLOW,
+            check_ci_contracts.SELF_HOSTED_WINDOWS_WORKFLOW,
+            check_ci_contracts.SELF_HOSTED_DEPLOY_WORKFLOW,
+            check_ci_contracts.ACTIONLINT_CONFIG,
+        }
+        for path in required_paths:
+            self.assertTrue(path.exists(), f"required contract file missing: {path}")
+
+    def test_self_hosted_contracts_pin_fleet_runner_labels(self) -> None:
+        # A workflow that loses its hostname label falls back to any runner
+        # carrying the generic labels, which is the wrong machine.
+        self.assertIn(
+            "runs-on: [self-hosted, Linux, X64, wm]",
+            check_ci_contracts.SELF_HOSTED_LINUX_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
+            "runs-on: [self-hosted, macOS, ARM64, air0]",
+            check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
+            "runs-on: [self-hosted, Windows, X64, win0]",
+            check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS,
+        )
+
+    def test_actionlint_config_declares_every_fleet_label(self) -> None:
+        # actionlint knows only the GitHub-hosted labels plus the generic
+        # self-hosted ones, so an undeclared fleet label fails the guardrails
+        # job for every workflow that uses it.
+        expected = {"self-hosted-runner:", "- wm", "- air0", "- win0"}
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.ACTIONLINT_CONFIG_REQUIRED_SNIPPETS))
+        )
+
+    def test_self_hosted_contracts_forbid_persistent_disk_antipatterns(self) -> None:
+        # The boxes have persistent disks but must never be assumed to have
+        # persistent workspaces (checkout runs `git clean -ffdx`), wm and air0
+        # carry shared multi-project Nix stores, and this fork owns neither the
+        # upstream cache repository nor a token for it.
+        expected = {
+            "uses: actions/cache",
+            "nix-community/cache-nix-action",
+            "$(find /nix/store",
+            "harrypm/tbc-tools-ci-cache",
+            "CI_CACHE_REPO_TOKEN",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_FORBIDDEN_SNIPPETS))
+        )
+
+    def test_hosted_build_workflows_stay_free_of_self_hosted_runners(self) -> None:
+        # build_{linux,macos,windows}_tools.yml are shared with harrypm and must
+        # stay byte-identical, so the fork's fleet must never leak into them.
+        self.assertIn("self-hosted", check_ci_contracts.HOSTED_WORKFLOW_FORBIDDEN_SNIPPETS)
+        for workflow in (
+            check_ci_contracts.LINUX_WORKFLOW,
+            check_ci_contracts.MACOS_WORKFLOW,
+            check_ci_contracts.WINDOWS_WORKFLOW,
+        ):
+            content = workflow.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "self-hosted",
+                content,
+                f"{workflow} names a self-hosted runner; it is shared with harrypm",
+            )
+
+    def test_self_hosted_linux_contract_scopes_nix_store_lookups_to_the_closure(self) -> None:
+        # wm's store is the user's daily-driver store: a store-wide scan is slow
+        # and `sort | head -n 1` can select a different Qt6 than the one the
+        # binaries were linked against.
+        self.assertIn(
+            'nix-store -qR "$(readlink -f result)"',
+            check_ci_contracts.SELF_HOSTED_LINUX_REQUIRED_SNIPPETS,
+        )
+        self.assertIn("$(find /nix/store", check_ci_contracts.SELF_HOSTED_FORBIDDEN_SNIPPETS)
+
+    def test_self_hosted_windows_contract_requires_self_bootstrap(self) -> None:
+        # win0 is bare: no Visual Studio, msys64 cmake/ninja on PATH, and a
+        # Microsoft Store python stub. The workflow must install and shadow its
+        # own toolchain, into a root outside the workspace.
+        expected = {
+            "TOOLS_ROOT: 'C:\\ci-tools'",
+            "vswhere.exe",
+            "vs_BuildTools.exe",
+            "bootstrap-vcpkg.bat",
+            "VCPKG_BINARY_SOURCES=clear;files,",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS))
+        )
+
+    def test_self_hosted_deploy_contract_wires_all_three_platform_workflows(self) -> None:
+        expected = {
+            "uses: ./.github/workflows/self-hosted-linux.yml",
+            "uses: ./.github/workflows/self-hosted-macos.yml",
+            "uses: ./.github/workflows/self-hosted-windows.yml",
+            "dorny/paths-filter@v3",
+            # A cancelled deploy can interrupt `nix profile upgrade` or the
+            # Windows directory swap halfway through.
+            "cancel-in-progress: false",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS))
+        )
+
+    def test_self_hosted_deploy_contract_requires_install_safety_guards(self) -> None:
+        # wm's deploy advances refs/heads/main in the developer's real checkout
+        # by whichever fast-forward-only route leaves the working tree alone,
+        # proves the profile actually moved rather than silently no-opping,
+        # re-registers XDG (INSTALL.md), and swaps the Windows install
+        # atomically without clobbering a running tool.
+        expected = {
+            "Refusing to deploy:",
+            "merge --ff-only",
+            "fetch --no-tags origin main:main",
+            "nix profile upgrade tbc-tools",
+            'grep -q "rev=$GITHUB_SHA"',
+            "decode-desktop-sync",
+            "Refusing to deploy: tbc-tools is running from",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS))
+        )
+
+    def test_agents_hard_rules_include_self_hosted_guards(self) -> None:
+        expected = {
+            "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",
+            "Hard rule: the self-hosted deploy must never disturb the developer's working tree",
+            "Hard rule: self-hosted runners have persistent disks, not persistent workspaces",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.AGENTS_HARD_RULE_REQUIRED_SNIPPETS))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

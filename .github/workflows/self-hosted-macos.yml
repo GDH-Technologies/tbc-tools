@@ -1,0 +1,794 @@
+name: "Self-hosted macOS build (air0)"
+
+# Fork-exclusive. Native arm64 build, test, .app assembly and DMG on the GDH
+# air-0 box.
+#
+# Not a copy of build_macos_tools.yml: that file is shared with
+# harrypm/tbc-tools and must stay byte-identical so upstream merges never
+# conflict. The packaging steps below are ported from it; the differences are
+# all forced by the machine:
+#
+#   * arm64 only. There is no self-hosted Intel Mac, so the hosted job's
+#     build-universal-macos lipo merge has no second half to merge and is
+#     dropped -- along with its internal_* transfer artifacts and the
+#     `actions: write` permission their REST deletion needed. This workflow
+#     runs with contents: read.
+#   * air0 is on macOS 26.6.2. The hosted job pins macos-15 because the
+#     flake.lock-pinned nixpkgs Qt uic SIGTRAPs on macOS 26 during CMake
+#     AUTOUIC -- that was measured on the GitHub image, and it does NOT
+#     reproduce here: `nix build .#` compiles tbc-tools from source on air0
+#     and succeeds. The step order still prints sw_vers first so a future
+#     regression is visible at the top of the log rather than buried.
+#   * Python 3.11 and create-dmg come from nixpkgs rather than
+#     actions/setup-python and Homebrew. setup-python's macOS package wants to
+#     write /usr/local/bin on a personal machine, and air0 having brew today
+#     is not a reason to depend on it.
+#   * No cache-nix-action. The disk persists; anything cached lives outside
+#     the workspace, because actions/checkout runs `git clean -ffdx`.
+
+on:
+  # Path-gated so a docs-only or tooling-only change does not occupy the single
+  # macos box for a full build. These mirror self-hosted-deploy.yml's
+  # per-platform filters, so what triggers a PR build is exactly what triggers
+  # a redeploy on merge. Note the consequence: a PR touching none of these
+  # produces no run at all, so none of these may be marked a required check.
+  pull_request:
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - ".gdh-version"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/self-hosted-macos.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - ".gdh-version"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/self-hosted-macos.yml"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: "Git ref to checkout when invoked as a reusable workflow"
+        required: false
+        type: string
+      release_tag:
+        description: "Release tag to use for bundle version metadata"
+        required: false
+        type: string
+      from_deploy:
+        description: "Set by self-hosted-deploy.yml so the standalone push run stands down"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Machine-scoped: there is exactly one air0 box. github.workflow resolves to
+  # the CALLER's name under workflow_call, so a deploy-driven build lands in
+  # its own group and can never be cancelled by a PR run.
+  group: tbc-tools-air0-macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: Build, test and package tbc-tools (arm64, air0)
+    runs-on: [self-hosted, macOS, ARM64, air0]
+    timeout-minutes: 180
+    # A merge to main is owned by self-hosted-deploy.yml (from_deploy), and a
+    # forked PR must never execute on a workstation -- this repository is
+    # public.
+    if: >-
+      ${{ (github.event_name != 'push' || inputs.from_deploy)
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository) }}
+
+    steps:
+      - name: Report host and toolchain
+        # First, deliberately. If a future macOS or nixpkgs bump reintroduces
+        # the Qt uic SIGTRAP that pins the hosted job to macos-15, the version
+        # that caused it is the first thing in the log.
+        run: |
+          sw_vers
+          uname -m
+          nix --version
+          xcode-select -p
+
+      - name: Reset stale build state
+        # Before checkout: parts of a previous run's dist/ were copied out of
+        # the Nix store read-only, which checkout's clean chokes on. Harmless
+        # when the workspace turns out to be fresh.
+        run: |
+          cd "$GITHUB_WORKSPACE" 2>/dev/null || exit 0
+          chmod -R u+w dist 2>/dev/null || true
+          rm -rf dist build result ffmpeg-result ffmpeg-result-* \
+                 tbc-tools_arm64.dmg tbc-tools_arm64.app.tgz
+
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: true
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: Refresh tags
+        # If the workspace persisted, a tag deleted or moved on the remote can
+        # linger locally and poison the `git describe` the version step below
+        # relies on. Same reasoning as gdh-version-bump.yml.
+        run: git fetch --tags --prune --prune-tags --force origin
+
+      - name: Provision build tools from nixpkgs
+        # Replaces actions/setup-python@v6 and `brew install create-dmg`.
+        # --out-link rather than --no-link keeps them as GC roots, so Nix's
+        # auto-GC cannot collect the interpreter out from under the venv
+        # mid-run.
+        run: |
+          set -euo pipefail
+          TOOLS="$HOME/Library/Caches/tbc-tools-selfhosted/tools"
+          mkdir -p "$TOOLS"
+          nix build nixpkgs#python311  --out-link "$TOOLS/python311"
+          nix build nixpkgs#create-dmg --out-link "$TOOLS/create-dmg"
+          echo "$TOOLS/create-dmg/bin" >> "$GITHUB_PATH"
+          echo "PYTHON311=$TOOLS/python311/bin/python3.11" >> "$GITHUB_ENV"
+
+      - name: Build and test (CMake + Ninja + ctest)
+        # The hosted macOS job does not run ctest at all; the fleet should.
+        run: bash ci/run_local_ci_parity.sh --build-test-only
+
+
+      - name: Build with Nix
+        run: |
+          nix build .#
+          mkdir -p dist/bin
+          if [ ! -f result/bin/ld-analyse.app/Contents/MacOS/.ld-analyse-wrapped ]; then
+            echo "Missing wrapped GUI binary: result/bin/ld-analyse.app/Contents/MacOS/.ld-analyse-wrapped"
+            exit 1
+          fi
+          
+          # Copy wrapped GUI binary (avoid Nix wrapper with hardcoded paths)
+          cp result/bin/ld-analyse.app/Contents/MacOS/.ld-analyse-wrapped dist/bin/ld-analyse
+          chmod +x dist/bin/ld-analyse
+          
+          # Copy wrapped CLI tools (strip leading dot and -wrapped suffix)
+          for wrapped in result/bin/.*-wrapped; do
+            [ -f "$wrapped" ] || continue
+            base="$(basename "$wrapped")"
+            base="${base#.}"
+            base="${base%-wrapped}"
+            cp "$wrapped" "dist/bin/$base"
+            chmod +x "dist/bin/$base"
+          done
+          # Copy additional non-wrapped tools (including tbc-video-export)
+          for item in result/bin/*; do
+            [ -f "$item" ] || continue
+            base="$(basename "$item")"
+            [ -e "dist/bin/$base" ] && continue
+            cp "$item" "dist/bin/$base"
+            chmod +x "dist/bin/$base" 2>/dev/null || true
+          done
+          # Bundle ffmpeg/ffprobe for self-contained exports. Use the flake's
+          # pinned ffmpeg (.#ffmpeg^bin, built from flake.lock-pinned nixpkgs)
+          # rather than the live nixos-unstable channel's ffmpeg.bin output:
+          # Nixpkgs 26.11 dropped x86_64-darwin, so the live channel throws
+          # "Nixpkgs 26.11 has dropped support for x86_64-darwin" on the
+          # macos-15-intel runner (the 2>/dev/null previously hid this). The
+          # flake's nixpkgs pin still supports both darwin arches -- `nix build .#`
+          # above already builds ffmpeg as a buildInput -- so .#ffmpeg^bin works
+          # on x86_64-darwin and insulates arm64 from future channel rolls.
+          FFMPEG_STORE="$(nix-store -q --references result 2>/dev/null | grep -E '/ffmpeg-[^/]+-bin$' | head -n 1 || true)"
+          if [ -z "$FFMPEG_STORE" ]; then
+            FFMPEG_ERR="$(mktemp)"
+            FFMPEG_STORE="$(nix build .#ffmpeg^bin --no-link --print-out-paths 2>"$FFMPEG_ERR" | tail -n 1 || true)"
+            if [ -z "$FFMPEG_STORE" ] || [ ! -x "$FFMPEG_STORE/bin/ffmpeg" ]; then
+              echo "nix build .#ffmpeg^bin did not produce a usable ffmpeg bin; stderr:" >&2
+              cat "$FFMPEG_ERR" >&2
+              rm -f "$FFMPEG_ERR"
+              echo "Missing ffmpeg from nixpkgs build"
+              exit 1
+            fi
+            rm -f "$FFMPEG_ERR"
+          fi
+          if [ -z "$FFMPEG_STORE" ] || [ ! -x "$FFMPEG_STORE/bin/ffmpeg" ]; then
+            echo "Missing ffmpeg from nixpkgs build"
+            exit 1
+          fi
+          cp "$FFMPEG_STORE/bin/ffmpeg" dist/bin/ffmpeg
+          chmod +x dist/bin/ffmpeg
+          if [ -x "$FFMPEG_STORE/bin/ffprobe" ]; then
+            cp "$FFMPEG_STORE/bin/ffprobe" dist/bin/ffprobe
+            chmod +x dist/bin/ffprobe
+          fi
+
+      - name: Get version info
+        id: version
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "version=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=$(git describe --tags --always --dirty)" >> $GITHUB_OUTPUT
+          fi
+
+
+      - name: Create app bundle structure
+        run: |
+          mkdir -p dist/tbc-tools.app/Contents/{Resources,MacOS,Frameworks,PlugIns,share}
+
+          # Create Info.plist with dynamic version
+          cat > dist/tbc-tools.app/Contents/Info.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDisplayName</key>
+              <string>TBC Tools</string>
+              <key>CFBundleExecutable</key>
+              <string>ld-analyse</string>
+              <key>CFBundleIconFile</key>
+              <string>tbc-tools.icns</string>
+              <key>CFBundleIdentifier</key>
+              <string>dev.domesday.tbc-tools</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>tbc-tools</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ steps.version.outputs.version }}</string>
+              <key>CFBundleVersion</key>
+              <string>${{ steps.version.outputs.version }}</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSRequiresAquaSystemAppearance</key>
+              <false/>
+          </dict>
+          </plist>
+          EOF
+
+          # Copy binaries to MacOS folder
+          cp -r dist/bin/* dist/tbc-tools.app/Contents/MacOS/
+          
+          # Copy scripts if they exist
+          if [ -d "scripts" ]; then
+            find scripts -maxdepth 1 -perm -111 -type f -exec cp {} dist/tbc-tools.app/Contents/MacOS/ \; 2>/dev/null || true
+          fi
+
+          # Copy AAA (Auto Audio Align) vendor payload. The "Build with Nix" loop
+          # above uses `[ -f "$item" ]` which skips the result/bin/vendor directory,
+          # so the vendored VhsDecodeAutoAudioAlign.exe + Binah.dll (Mono-runnable
+          # .NET assemblies) are missing from the .app. audioalignmentutil.cpp
+          # resolves them relative to the app dir (Contents/MacOS), so bundle them
+          # at Contents/MacOS/vendor/vhs_decode_auto_audio_align/. Host Mono is a
+          # documented end-user requirement on macOS.
+          AAA_VENDOR_SRC="result/bin/vendor/vhs_decode_auto_audio_align"
+          AAA_VENDOR_DST="dist/tbc-tools.app/Contents/MacOS/vendor/vhs_decode_auto_audio_align"
+          if [ ! -f "$AAA_VENDOR_SRC/VhsDecodeAutoAudioAlign.exe" ] || [ ! -f "$AAA_VENDOR_SRC/Binah.dll" ]; then
+            echo "Missing AAA vendor payload under $AAA_VENDOR_SRC"
+            exit 1
+          fi
+          mkdir -p "$AAA_VENDOR_DST"
+          cp -a "$AAA_VENDOR_SRC/." "$AAA_VENDOR_DST/"
+          echo "Bundled AAA vendor payload to $AAA_VENDOR_DST"
+          # Copy vhs-teletext vendor payload. Same reason as AAA above: the
+          # "Build with Nix" loop uses `[ -f "$item" ]` which skips the
+          # result/bin/vendor directory, so the vendored vhs-teletext Python
+          # tree is missing from the .app. teletextintegration.cpp resolves it
+          # relative to the app dir (Contents/MacOS) at vendor/vhs-teletext, so
+          # bundle it there or ld-process-vbi's --teletext-html-dir export fails
+          # with "Could not locate vendored vhs-teletext runtime directory."
+          TELETEXT_VENDOR_SRC="result/bin/vendor/vhs-teletext"
+          TELETEXT_VENDOR_DST="dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext"
+          if [ ! -f "$TELETEXT_VENDOR_SRC/teletext/__main__.py" ]; then
+            echo "Missing vhs-teletext vendor payload under $TELETEXT_VENDOR_SRC"
+            exit 1
+          fi
+          mkdir -p "$TELETEXT_VENDOR_DST"
+          cp -a "$TELETEXT_VENDOR_SRC/." "$TELETEXT_VENDOR_DST/"
+          echo "Bundled vhs-teletext vendor payload to $TELETEXT_VENDOR_DST"
+
+
+      - name: Build self-contained tbc-video-export (PyInstaller)
+        # Replace the CMake bash wrapper (which execs a *host* Python with host
+        # site-packages) with a PyInstaller --onefile Mach-O binary that bundles
+        # the interpreter and all deps.
+        #
+        # The hosted job uses whatever actions/setup-python put on PATH. Here
+        # the interpreter is the provisioned nixpkgs 3.11 in a venv under
+        # ~/Library/Caches -- outside the workspace, since checkout's
+        # `git clean -ffdx` would delete it in-tree. The venv is recreated
+        # whenever it fails to start: a Nix GC of the interpreter store path
+        # silently bricks a persistent venv. macOS system /usr/bin/python3 is
+        # Xcode's 3.9 and cannot parse the package's 3.10+ pattern matching.
+        run: |
+          set -euo pipefail
+          VENV="$HOME/Library/Caches/tbc-tools-selfhosted/venv-pyinstaller-macos"
+          if ! "$VENV/bin/python" -c 'import sys' >/dev/null 2>&1; then
+            echo "Creating a fresh PyInstaller venv at $VENV"
+            rm -rf "$VENV"
+            "$PYTHON311" -m venv "$VENV"
+          fi
+          "$VENV/bin/python" -m pip install --upgrade pip
+          "$VENV/bin/python" -m pip install pyinstaller dunamai
+          EXPORTER_ROOT="$GITHUB_WORKSPACE/src/tbc-video-export"
+          export PYTHONPATH="$EXPORTER_ROOT/src"
+          cd "$EXPORTER_ROOT"
+          mkdir -p build
+          "$VENV/bin/python" pyinstaller/build_macos.py
+          cd "$GITHUB_WORKSPACE"
+          BUILT="$EXPORTER_ROOT/dist/tbc-video-export"
+          if [ ! -f "$BUILT" ]; then
+            echo "PyInstaller did not produce $BUILT"
+            exit 1
+          fi
+          cp -f "$BUILT" dist/tbc-tools.app/Contents/MacOS/tbc-video-export
+          chmod +x dist/tbc-tools.app/Contents/MacOS/tbc-video-export
+          echo "Bundled self-contained tbc-video-export PyInstaller binary"
+
+      - name: Verify app executable architecture
+        # The hosted job branches on matrix.arch; air0 is Apple Silicon only.
+        run: |
+          BIN="dist/tbc-tools.app/Contents/MacOS/ld-analyse"
+          if [ ! -f "$BIN" ]; then
+            echo "Expected app executable missing: $BIN"
+            exit 1
+          fi
+          ARCHS="$(lipo -archs "$BIN" 2>/dev/null || true)"
+          if [ -z "$ARCHS" ]; then
+            echo "Unable to read binary architecture for $BIN"
+            file "$BIN" || true
+            exit 1
+          fi
+          echo "$ARCHS" | grep -qw arm64 || { echo "Expected arm64 binary, got: $ARCHS"; exit 1; }
+          echo "Verified architecture: $ARCHS"
+
+
+      - name: Bundle Python deps (numpy)
+        # The hosted job assumes `/usr/bin/python3 -m pip` works. On a personal
+        # Mac that pip can be absent or externally managed, so fall back to the
+        # PyInstaller venv. The bundled test-decode-pretbc shim still execs
+        # /usr/bin/python3 at runtime by design -- it runs on the end user's
+        # machine, not this one.
+        run: |
+          APP="dist/tbc-tools.app"
+          PY_DIR="$APP/Contents/Resources/python"
+          mkdir -p "$PY_DIR"
+          VENV="$HOME/Library/Caches/tbc-tools-selfhosted/venv-pyinstaller-macos"
+          PYTHON_BIN="/usr/bin/python3"
+          if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+            PYTHON_BIN="$VENV/bin/python"
+          fi
+          "$PYTHON_BIN" -m pip install --target "$PY_DIR" numpy
+
+          SCRIPT="$APP/Contents/MacOS/test-decode-pretbc"
+          if [ -f "$SCRIPT" ] && [ ! -f "$SCRIPT.py" ]; then
+            mv "$SCRIPT" "$SCRIPT.py"
+            cat > "$SCRIPT" << 'EOF'
+          #!/bin/sh
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          PY_DIR="$DIR/../Resources/python"
+          export PYTHONPATH="$PY_DIR${PYTHONPATH:+:$PYTHONPATH}"
+          if [ -x /usr/bin/python3 ]; then
+            PY="/usr/bin/python3"
+          else
+            PY="$(command -v python3)"
+          fi
+          exec "$PY" "$DIR/test-decode-pretbc.py" "$@"
+          EOF
+            chmod +x "$SCRIPT"
+          fi
+
+
+      - name: Create app icon
+        run: |
+          ICONSET_ROOT="$(mktemp -d)"
+          ICONSET="$ICONSET_ROOT/ld-analyse.iconset"
+          mkdir -p "$ICONSET"
+          cp src/ld-analyse/Graphics/16-analyse.png "$ICONSET/icon_16x16.png"
+          cp src/ld-analyse/Graphics/32-analyse.png "$ICONSET/icon_16x16@2x.png"
+          cp src/ld-analyse/Graphics/32-analyse.png "$ICONSET/icon_32x32.png"
+          cp src/ld-analyse/Graphics/64-analyse.png "$ICONSET/icon_32x32@2x.png"
+          cp src/ld-analyse/Graphics/128-analyse.png "$ICONSET/icon_128x128.png"
+          cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_128x128@2x.png"
+          cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_256x256.png"
+          if command -v sips >/dev/null 2>&1; then
+            sips -z 512 512 src/ld-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_256x256@2x.png"
+            sips -z 512 512 src/ld-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_512x512.png"
+            sips -z 1024 1024 src/ld-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_512x512@2x.png"
+          else
+            cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_256x256@2x.png"
+            cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_512x512.png"
+          fi
+          iconutil -c icns "$ICONSET" -o dist/tbc-tools.app/Contents/Resources/tbc-tools.icns
+
+      - name: Bundle Qt plugins and qt.conf
+        run: |
+          mkdir -p dist/tbc-tools.app/Contents/PlugIns
+          
+          # Extract plugin paths from Nix wrapper and copy plugins
+          PLUGIN_PATHS=$(strings -n 8 result/bin/ld-analyse.app/Contents/MacOS/ld-analyse | grep "/qt-6/plugins" | sort -u || true)
+          if [ -z "$PLUGIN_PATHS" ]; then
+            echo "No Qt plugin paths detected in Nix-built ld-analyse binary"
+            exit 1
+          fi
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            if [ -d "$p" ]; then
+              rsync -a "$p/" dist/tbc-tools.app/Contents/PlugIns/
+            fi
+          done <<< "$PLUGIN_PATHS"
+          if [ ! -f dist/tbc-tools.app/Contents/PlugIns/platforms/libqcocoa.dylib ]; then
+            echo "Missing required Qt platform plugin: dist/tbc-tools.app/Contents/PlugIns/platforms/libqcocoa.dylib"
+            exit 1
+          fi
+          
+          cat > dist/tbc-tools.app/Contents/Resources/qt.conf << 'EOF'
+          [Paths]
+          Plugins = PlugIns
+          EOF
+
+
+      - name: Bundle dependencies
+        shell: bash
+        run: |
+          APP="dist/tbc-tools.app"
+          FW_DIR="$APP/Contents/Frameworks"
+          PLUGINS_DIR="$APP/Contents/PlugIns"
+
+          mkdir -p "$FW_DIR" "$PLUGINS_DIR"
+          chmod -R u+w "$APP/Contents" 2>/dev/null || true
+
+          is_macho() {
+            file "$1" 2>/dev/null | grep -q "Mach-O"
+          }
+
+          dep_unique_name() {
+            local dep="$1"
+            if [[ "$dep" == /nix/store/* ]]; then
+              local store_entry
+              store_entry=$(echo "$dep" | sed -E 's|^/nix/store/([^/]+)/.*$|\1|')
+              local store_hash
+              store_hash=$(echo "$store_entry" | sed -E 's|^([^-]+)-.*$|\1|')
+              echo "${store_hash}_$(basename "$dep")"
+            else
+              echo "$(basename "$dep")"
+            fi
+          }
+
+          newref_for_dep() {
+            local dep="$1"
+            if [[ "$dep" == *".framework/"* ]]; then
+              local framework_root
+              framework_root=$(echo "$dep" | sed -E "s|(.*\\.framework)/.*|\\1|")
+              local framework_name
+              framework_name=$(basename "$framework_root")
+              local version
+              version=$(echo "$dep" | sed -E "s|.*\\.framework/Versions/([^/]+)/.*|\\1|")
+              local bin_name
+              bin_name=$(basename "$dep")
+              echo "@rpath/$framework_name/Versions/$version/$bin_name"
+            else
+              local unique_name
+              unique_name=$(dep_unique_name "$dep")
+              echo "@rpath/$unique_name"
+            fi
+          }
+
+          copy_dep() {
+            local dep="$1"
+            if [[ "$dep" == *".framework/"* ]]; then
+              local framework_root
+              framework_root=$(echo "$dep" | sed -E "s|(.*\\.framework)/.*|\\1|")
+              local framework_name
+              framework_name=$(basename "$framework_root")
+              local version
+              version=$(echo "$dep" | sed -E "s|.*\\.framework/Versions/([^/]+)/.*|\\1|")
+              local bin_name
+              bin_name=$(basename "$dep")
+              local target="$FW_DIR/$framework_name/Versions/$version/$bin_name"
+
+              if [ ! -f "$target" ]; then
+                rsync -a "$framework_root" "$FW_DIR/"
+                chmod -R u+w "$FW_DIR/$framework_name" || true
+              fi
+
+              install_name_tool -id "@rpath/$framework_name/Versions/$version/$bin_name" "$target" 2>/dev/null || true
+              echo "$target"
+            else
+              local unique_name
+              unique_name=$(dep_unique_name "$dep")
+              local target="$FW_DIR/$unique_name"
+              if [ ! -f "$target" ]; then
+                cp "$dep" "$target" 2>/dev/null || true
+                chmod u+w "$target" 2>/dev/null || true
+              fi
+              install_name_tool -id "@rpath/$unique_name" "$target" 2>/dev/null || true
+              echo "$target"
+            fi
+          }
+
+          add_rpaths() {
+            local file="$1"
+            install_name_tool -add_rpath "@executable_path/../Frameworks" "$file" 2>/dev/null || true
+            install_name_tool -add_rpath "@loader_path/../Frameworks" "$file" 2>/dev/null || true
+            install_name_tool -add_rpath "@loader_path/../../Frameworks" "$file" 2>/dev/null || true
+          }
+
+          delete_nix_rpaths() {
+            local file="$1"
+            local rpaths
+            rpaths=$(otool -l "$file" 2>/dev/null | awk '/LC_RPATH/{getline;getline;print $2}' || true)
+            for rp in $rpaths; do
+              if [[ "$rp" == /nix/store/* ]]; then
+                install_name_tool -delete_rpath "$rp" "$file" 2>/dev/null || true
+              fi
+            done
+          }
+
+          process_file() {
+            local file="$1"
+            is_macho "$file" || return 0
+
+            chmod u+w "$file" 2>/dev/null || true
+            add_rpaths "$file"
+            delete_nix_rpaths "$file"
+
+            local deps
+            deps=$(otool -L "$file" 2>/dev/null | tail -n +2 | awk "{print \$1}" || true)
+            for dep in $deps; do
+              local store_dep=""
+              case "$dep" in
+                # Keep runtime dependency capture strictly in Nix store paths.
+                # Mixing host Homebrew dylibs with Nix dylibs can cause ABI
+                # mismatches (for example libidn2 expecting GNU libiconv symbols
+                # while a different host libiconv is bundled first).
+                /nix/store/*)
+                  store_dep="$dep"
+                  ;;
+              esac
+              if [ -n "$store_dep" ]; then
+                local target
+                target=$(copy_dep "$store_dep")
+                local newref
+                newref=$(newref_for_dep "$store_dep")
+                install_name_tool -change "$dep" "$newref" "$file" 2>/dev/null || true
+                [ -n "$target" ] && QUEUE+=("$target")
+              fi
+            done
+          }
+
+          QUEUE=()
+          while IFS= read -r -d '' f; do QUEUE+=("$f"); done < <(find "$APP/Contents/MacOS" -type f -print0)
+          while IFS= read -r -d '' f; do QUEUE+=("$f"); done < <(find "$FW_DIR" -type f -print0)
+          if [ -d "$PLUGINS_DIR" ]; then
+            while IFS= read -r -d '' f; do QUEUE+=("$f"); done < <(find "$PLUGINS_DIR" -type f -print0)
+          fi
+
+          SEEN_FILE=$(mktemp)
+          while [ ${#QUEUE[@]} -gt 0 ]; do
+            file="${QUEUE[0]}"
+            QUEUE=("${QUEUE[@]:1}")
+            if grep -Fxq "$file" "$SEEN_FILE"; then
+              continue
+            fi
+            echo "$file" >> "$SEEN_FILE"
+            process_file "$file"
+          done
+          rm -f "$SEEN_FILE"
+
+          if [ -d "$FW_DIR" ]; then
+            while IFS= read -r -d '' lib; do
+              is_macho "$lib" || continue
+              chmod u+w "$lib" 2>/dev/null || true
+              rel="${lib#$FW_DIR/}"
+              if [[ "$rel" == *.framework/* ]]; then
+                install_name_tool -id "@rpath/$rel" "$lib" 2>/dev/null || true
+              else
+                install_name_tool -id "@rpath/$(basename "$lib")" "$lib" 2>/dev/null || true
+              fi
+            done < <(find "$FW_DIR" -type f -print0)
+          fi
+
+
+      - name: Codesign app bundle (ad-hoc)
+        run: |
+          codesign --force --deep --sign - "dist/tbc-tools.app"
+
+      - name: Verify app bundle
+        run: |
+          echo "App bundle contents:"
+          find dist/tbc-tools.app -type f | head -20
+          if [ ! -d "dist/tbc-tools.app/Contents/_CodeSignature" ]; then
+            echo "Missing _CodeSignature after codesign"
+            exit 1
+          fi
+          if [ ! -f "dist/tbc-tools.app/Contents/MacOS/tbc-video-export" ]; then
+            echo "Missing vendored exporter tool: dist/tbc-tools.app/Contents/MacOS/tbc-video-export"
+            exit 1
+          fi
+          # tbc-video-export is now a self-contained PyInstaller Mach-O binary,
+          # not a bash wrapper + package source. Verify it is a Mach-O executable.
+          if ! file "dist/tbc-tools.app/Contents/MacOS/tbc-video-export" 2>/dev/null | grep -q "Mach-O"; then
+            echo "tbc-video-export is not a Mach-O binary (expected PyInstaller --onefile): dist/tbc-tools.app/Contents/MacOS/tbc-video-export"
+            exit 1
+          fi
+          # AAA (Auto Audio Align) vendor payload must be bundled at the resolver path.
+          if [ ! -f "dist/tbc-tools.app/Contents/MacOS/vendor/vhs_decode_auto_audio_align/VhsDecodeAutoAudioAlign.exe" ]; then
+            echo "Missing AAA vendor payload: dist/tbc-tools.app/Contents/MacOS/vendor/vhs_decode_auto_audio_align/VhsDecodeAutoAudioAlign.exe"
+            exit 1
+          fi
+          if [ ! -f "dist/tbc-tools.app/Contents/MacOS/vendor/vhs_decode_auto_audio_align/Binah.dll" ]; then
+            echo "Missing AAA vendor payload: dist/tbc-tools.app/Contents/MacOS/vendor/vhs_decode_auto_audio_align/Binah.dll"
+            exit 1
+          fi
+          # vhs-teletext vendor payload must be bundled at the resolver path so
+          # ld-process-vbi's teletext HTML export can find teletext/__main__.py.
+          if [ ! -f "dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext/teletext/__main__.py" ]; then
+            echo "Missing vhs-teletext vendor payload: dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext/teletext/__main__.py"
+            exit 1
+          fi
+          FW_DIR="dist/tbc-tools.app/Contents/Frameworks"
+          resolve_bundled_dep_path() {
+            local dep="$1"
+            case "$dep" in
+              /System/*|/usr/lib/*|dynamically\ looked\ up|flat\ namespace)
+                return 1
+                ;;
+            esac
+            if [[ "$dep" == @rpath/* ]]; then
+              local rel="${dep#@rpath/}"
+              if [ -f "$FW_DIR/$rel" ]; then
+                echo "$FW_DIR/$rel"
+                return 0
+              fi
+            fi
+            local base
+            base=$(basename "$dep")
+            local found
+            found=$(find "$FW_DIR" -type f -name "$base" -print -quit 2>/dev/null || true)
+            if [ -n "$found" ]; then
+              echo "$found"
+              return 0
+            fi
+            return 1
+          }
+          verify_bundled_dependencies() {
+            local failures=0
+            while IFS= read -r -d '' macho_file; do
+              if ! file "$macho_file" 2>/dev/null | grep -q "Mach-O"; then
+                continue
+              fi
+              while IFS= read -r dep; do
+                [ -n "$dep" ] || continue
+                case "$dep" in
+                  /System/*|/usr/lib/*|/Library/Frameworks/*)
+                    continue
+                    ;;
+                  @*|/*)
+                    ;;
+                  *)
+                    # otool prints "dynamically looked up" / "flat namespace"
+                    # entries that awk '{print $1}' truncates to single tokens.
+                    # Anything not starting with / or @ is one of those.
+                    continue
+                    ;;
+                esac
+                if ! resolve_bundled_dep_path "$dep" >/dev/null 2>&1; then
+                  echo "Unresolved bundled dependency:"
+                  echo "  Required by: $macho_file"
+                  echo "  Declared dependency: $dep"
+                  failures=1
+                fi
+              done < <(otool -L "$macho_file" 2>/dev/null | tail -n +2 | awk '{print $1}')
+            done < <(find dist/tbc-tools.app/Contents -type f -print0)
+            if [ "$failures" -ne 0 ]; then
+              echo "Bundled dependency verification failed."
+              return 1
+            fi
+            echo "Bundled dependency verification passed."
+            return 0
+          }
+          if ! verify_bundled_dependencies; then
+            exit 1
+          fi
+          for tool in ffmpeg ffprobe; do
+            tool_path="dist/tbc-tools.app/Contents/MacOS/$tool"
+            if [ ! -x "$tool_path" ]; then
+              echo "Missing bundled $tool binary: $tool_path"
+              exit 1
+            fi
+            tool_archs="$(lipo -archs "$tool_path" 2>/dev/null || true)"
+            if [ -z "$tool_archs" ]; then
+              echo "Unable to read architecture for bundled $tool"
+              file "$tool_path" || true
+              exit 1
+            fi
+            echo "Bundled $tool architecture: $tool_archs"
+            echo "$tool_archs" | grep -qw arm64 || {
+              echo "Expected $tool to include architecture arm64, got: $tool_archs"
+              exit 1
+            }
+            if ! "$tool_path" -hide_banner -version >"/tmp/$tool-version.log" 2>&1; then
+              echo "Bundled $tool failed launch smoke test."
+              sed -n '1,80p' "/tmp/$tool-version.log" || true
+              exit 1
+            fi
+          done
+          export PYTHONDONTWRITEBYTECODE=1
+          if ! dist/tbc-tools.app/Contents/MacOS/tbc-video-export --version >/tmp/tbc-video-export-version.log 2>&1; then
+            echo "Vendored exporter tool failed launch smoke test."
+            sed -n '1,80p' /tmp/tbc-video-export-version.log || true
+            exit 1
+          fi
+          if find dist/tbc-tools.app/Contents -type d -name "__pycache__" -not -path "*/Resources/python/*" | grep -q .; then
+            echo "Bytecode caches were generated inside signed app payload."
+            find dist/tbc-tools.app/Contents -type d -name "__pycache__" -not -path "*/Resources/python/*"
+            exit 1
+          fi
+          if ! codesign --verify --deep --strict --verbose=2 "dist/tbc-tools.app"; then
+            echo "Codesign verification failed after vendored exporter smoke test."
+            exit 1
+          fi
+          echo "\nMain executable dependencies:"
+          otool -L dist/tbc-tools.app/Contents/MacOS/ld-analyse 2>/dev/null | head -10 || echo "Could not check dependencies"
+          echo "\nMain executable rpaths:"
+          otool -l dist/tbc-tools.app/Contents/MacOS/ld-analyse | grep -A2 LC_RPATH || true
+          if ! otool -l dist/tbc-tools.app/Contents/MacOS/ld-analyse | grep -q LC_RPATH; then
+            echo "No LC_RPATH entries found in ld-analyse"
+            exit 1
+          fi
+          echo "\nScanning for /nix/store references:"
+          FOUND=0
+          while IFS= read -r -d '' f; do
+            if file "$f" 2>/dev/null | grep -q "Mach-O"; then
+              if otool -L "$f" 2>/dev/null | grep -q "/nix/store"; then
+                echo "Nix load refs in: $f"
+                FOUND=1
+              fi
+              if otool -l "$f" 2>/dev/null | grep -q "/nix/store"; then
+                echo "Nix rpath refs in: $f"
+                FOUND=1
+              fi
+            fi
+          done < <(find dist/tbc-tools.app -type f -print0)
+          if [ "$FOUND" -ne 0 ]; then
+            echo "Found /nix/store references in app bundle"
+            exit 1
+          fi
+
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "TBC Tools ${{ steps.version.outputs.version }}" \
+            --volicon "dist/tbc-tools.app/Contents/Resources/tbc-tools.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "tbc-tools.app" 200 190 \
+            --hide-extension "tbc-tools.app" \
+            --app-drop-link 600 190 \
+            --skip-jenkins \
+            --format UDBZ \
+            "tbc-tools_arm64.dmg" \
+            "dist/tbc-tools.app"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: selfhosted_tbc-tools_macos_arm64
+          path: tbc-tools_arm64.dmg
+          if-no-files-found: error
+          retention-days: 7

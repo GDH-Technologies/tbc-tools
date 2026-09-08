@@ -1,0 +1,727 @@
+name: "Self-hosted Linux build (wm)"
+
+# Fork-exclusive. Native x86_64 build, test and AppImage packaging on the GDH
+# workflow-master box.
+#
+# This is deliberately NOT a copy of build_linux_tools.yml. That file is shared
+# with harrypm/tbc-tools and must stay byte-identical so upstream merges never
+# conflict, so the packaging steps are re-implemented here natively. The
+# differences from the hosted job are all intentional:
+#
+#   * no Oracle Linux 8 container and no glibc-2.28 baseline -- the AppImage
+#     built here links against the host glibc (2.43 on Fedora 44) and is a
+#     LOCAL artifact. Release artifacts still come from the hosted job.
+#   * no actions/cache and no cache-nix-action. The box has a persistent disk;
+#     anything cached goes to a fixed path OUTSIDE the workspace, because
+#     actions/checkout runs `git clean -ffdx`.
+#   * wm has no patchelf and no msbuild/xbuild, and its system python3 is 3.14
+#     under a PEP 668 externally-managed install, so those three come from
+#     nixpkgs instead of dnf.
+#   * every /nix/store lookup is scoped to the closure of ./result. On a hosted
+#     runner the store holds only this build's closure; wm's store is the
+#     user's shared multi-project store, where a store-wide search piped
+#     through `sort | head -n 1` is both slow and liable to select a different
+#     Qt6 than the one the binaries were actually linked against.
+
+on:
+  # Path-gated so a docs-only or tooling-only change does not occupy the single
+  # linux box for a full build. These mirror self-hosted-deploy.yml's
+  # per-platform filters, so what triggers a PR build is exactly what triggers
+  # a redeploy on merge. Note the consequence: a PR touching none of these
+  # produces no run at all, so none of these may be marked a required check.
+  pull_request:
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - ".gdh-version"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/self-hosted-linux.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - ".gdh-version"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/self-hosted-linux.yml"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: "Git ref to checkout when invoked as a reusable workflow"
+        required: false
+        type: string
+      from_deploy:
+        description: "Set by self-hosted-deploy.yml so the standalone push run stands down"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Machine-scoped: there is exactly one wm box. github.workflow resolves to
+  # the CALLER's name under workflow_call, so a deploy-driven build lands in
+  # its own group and can never be cancelled by a PR run. Only PR runs cancel;
+  # a superseded PR build is pure waste, a superseded deploy build is a hazard.
+  group: tbc-tools-wm-linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  APPIMAGE_FILE: "linuxdeploy-x86_64.AppImage"
+  APPIMAGE_URL: "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+  APPIMAGE_PLUGIN_FILE: "linuxdeploy-plugin-appimage-x86_64.AppImage"
+  APPIMAGE_PLUGIN_URL: "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage"
+  APPIMAGE_QT_FILE: "linuxdeploy-plugin-qt-x86_64.AppImage"
+  APPIMAGE_QT_URL: "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+  APPIMAGETOOL_FILE: "appimagetool-x86_64.AppImage"
+  APPIMAGETOOL_URL: "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+
+jobs:
+  build:
+    name: Build, test and package tbc-tools (x86_64, wm)
+    runs-on: [self-hosted, Linux, X64, wm]
+    timeout-minutes: 180
+    # Two guards:
+    #  1. A merge to main is owned by self-hosted-deploy.yml, which calls this
+    #     workflow with from_deploy=true. Without this the single wm box would
+    #     build the same commit twice.
+    #  2. A self-hosted runner must never execute code from a forked PR: this
+    #     repository is public, and the runner is a workstation.
+    if: >-
+      ${{ (github.event_name != 'push' || inputs.from_deploy)
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository) }}
+
+    steps:
+      - name: Reset stale build state
+        # Before checkout: some of what a previous run left behind was copied
+        # out of the Nix store and is read-only, which checkout's clean chokes
+        # on. Harmless when the workspace turns out to be fresh.
+        run: |
+          cd "$GITHUB_WORKSPACE" 2>/dev/null || exit 0
+          chmod -R u+w AppDir release build build-aaa 2>/dev/null || true
+          rm -rf AppDir release build build-aaa squashfs-root \
+                 result ffmpeg-result ffmpeg-result-* patchelf-result \
+                 linuxdeploy-x86_64.AppImage \
+                 linuxdeploy-plugin-appimage-x86_64.AppImage \
+                 linuxdeploy-plugin-qt-x86_64.AppImage \
+                 appimagetool-x86_64.AppImage \
+                 tbc-tools_linux_x86_64.tar.xz
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: true
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: Refresh tags
+        # If the workspace persisted, a tag deleted or moved on the remote can
+        # linger locally and poison `git describe`. Same reasoning as
+        # gdh-version-bump.yml.
+        #
+        # Which build that matters to is worth being precise about: the
+        # in-tree configure below (ci/run_local_ci_parity.sh runs
+        # `cmake -S . -B build`, so .git is present) does reach CMakeLists.txt's
+        # git-describe tier, and that is the binary ctest exercises. The shipped
+        # AppImage does not -- it comes from `nix build .#`, whose sandbox has
+        # no .git at all, which is why Nix-built artifacts fall through to the
+        # version in vcpkg.json.
+        run: git fetch --tags --prune --prune-tags --force origin
+
+      - name: Report toolchain and version
+        run: |
+          nix --version
+          git --version
+          git describe --tags --long --abbrev=8 --match "v*-gdh-*" \
+            || echo "no gdh tag in range yet"
+          df -h "$GITHUB_WORKSPACE" /nix | cat
+
+      - name: Provision packaging tools from nixpkgs
+        # wm has mono but no patchelf, no msbuild and no xbuild, and its
+        # system python3 is 3.14 under PEP 668. --out-link rather than
+        # --no-link is load-bearing: /etc/nix/nix.conf has min-free/max-free
+        # auto-GC, and without a GC root these can be collected mid-run.
+        #
+        # patchelfUnstable, not patchelf: nixpkgs#patchelf is 0.15.2, which
+        # predates support for packed relative relocations (DT_RELR) and
+        # silently corrupts any binary that uses them -- the rewritten file
+        # segfaults in call_init at load time. Fedora 44 builds with DT_RELR,
+        # so scripts/package-aaa-appimage.sh (which bundles the HOST's mono
+        # and its libs, unlike everything else here, which comes from the Nix
+        # store) produced an AAA AppImage whose mono died instantly. 0.18.0
+        # handles DT_RELR. Verified on the box: patched with 0.15.2 the
+        # bundled mono is rc=139, with 0.18.0 it reports its version.
+        run: |
+          set -euo pipefail
+          TOOLS="$HOME/.cache/tbc-tools-selfhosted/tools"
+          mkdir -p "$TOOLS"
+          for pkg in patchelfUnstable msbuild python311; do
+            nix build "nixpkgs#$pkg" --out-link "$TOOLS/$pkg"
+          done
+          echo "$TOOLS/patchelfUnstable/bin" >> "$GITHUB_PATH"
+          echo "PYTHON311=$TOOLS/python311/bin/python3.11" >> "$GITHUB_ENV"
+          # msbuild is deliberately NOT put on $GITHUB_PATH. It is prepended
+          # for the AAA source build only: package-aaa-appimage.sh resolves
+          # `command -v mono` to derive MONO_PREFIX and must land on Fedora's
+          # /usr/bin/mono, whose lib/mono tree it copies into the AppImage.
+          echo "MSBUILD_BIN=$TOOLS/msbuild/bin" >> "$GITHUB_ENV"
+
+      - name: Build and test (CMake + Ninja + ctest)
+        run: bash ci/run_local_ci_parity.sh --build-test-only
+
+      - name: Create release directory
+        run: mkdir -p release
+
+      - name: Build with Nix
+        run: |
+          nix build .#
+          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share
+          SKIP_LIB_REGEX='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libresolv\.so\.2|ld-linux-.*\.so\..*|libnss_.*|libutil\.so\..*|libanl\.so\..*)$'
+          for wrapped in result/bin/.*-wrapped; do
+            [ -f "$wrapped" ] || continue
+            base="$(basename "$wrapped")"
+            base="${base#.}"
+            base="${base%-wrapped}"
+            cp -a "$wrapped" "AppDir/usr/bin/$base"
+          done
+          for item in result/bin/*; do
+            [ -e "$item" ] || continue
+            base="$(basename "$item")"
+            [ -e "AppDir/usr/bin/$base" ] && continue
+            cp -a "$item" "AppDir/usr/bin/$base"
+          done
+          nix build .#ffmpeg --out-link ffmpeg-result
+          FFMPEG_BIN=""
+          FFPROBE_BIN=""
+          for ffout in ffmpeg-result ffmpeg-result-*; do
+            [ -d "$ffout/bin" ] || continue
+            [ -z "$FFMPEG_BIN" ] && [ -f "$ffout/bin/ffmpeg" ] && FFMPEG_BIN="$ffout/bin/ffmpeg"
+            [ -z "$FFPROBE_BIN" ] && [ -f "$ffout/bin/ffprobe" ] && FFPROBE_BIN="$ffout/bin/ffprobe"
+          done
+          if [ -z "$FFMPEG_BIN" ] || [ -z "$FFPROBE_BIN" ]; then
+            echo "Failed to locate ffmpeg/ffprobe under ffmpeg-result outputs"
+            ls -la ffmpeg-result* || true
+            exit 1
+          fi
+          cp -a "$FFMPEG_BIN" AppDir/usr/bin/ffmpeg
+          cp -a "$FFPROBE_BIN" AppDir/usr/bin/ffprobe
+          chmod -R u+w AppDir/usr/bin
+          normalize_bin_script_shebangs() {
+            local bin_dir="$1"
+            for candidate in "$bin_dir"/*; do
+              [ -f "$candidate" ] || continue
+              [ -x "$candidate" ] || continue
+              local first_line
+              first_line="$(head -n 1 "$candidate" 2>/dev/null || true)"
+              case "$first_line" in
+                '#!/nix/store/'*'/bin/bash'*)
+                  sed -i '1s@^#!.*@#!/usr/bin/env bash@' "$candidate"
+                  ;;
+                '#!/nix/store/'*'/bin/sh'*)
+                  sed -i '1s@^#!.*@#!/usr/bin/env sh@' "$candidate"
+                  ;;
+                '#!/nix/store/'*'/bin/env bash'*)
+                  sed -i '1s@^#!.*@#!/usr/bin/env bash@' "$candidate"
+                  ;;
+                '#!/nix/store/'*'/bin/env sh'*)
+                  sed -i '1s@^#!.*@#!/usr/bin/env sh@' "$candidate"
+                  ;;
+                '#!/nix/store/'*'/bin/python'*|'#!/nix/store/'*'/bin/env python'*)
+                  sed -i '1s@^#!.*@#!/usr/bin/env python3@' "$candidate"
+                  ;;
+              esac
+            done
+          }
+          normalize_bin_script_shebangs AppDir/usr/bin
+          PATCH_ELF_BIN="$(command -v patchelf)"
+          if [ -d result/lib ]; then
+            cp -a result/lib/. AppDir/usr/lib/
+          fi
+          if [ -d result/share ]; then
+            cp -a result/share/. AppDir/usr/share/
+          fi
+          # usr/share too, not just usr/lib: `cp -a` preserves the store's 555
+          # directory modes, and the AppImage assembly later writes the desktop
+          # entry and icon into usr/share/applications and usr/share/icons. The
+          # hosted job never notices because its container runs as root.
+          chmod -R u+w AppDir/usr/lib AppDir/usr/share
+          LIBSTDCPP_PATH="$(ldd result/bin/.ld-analyse-wrapped | awk '$1 == "libstdc++.so.6" { print $3; exit }')"
+          LIBGCC_PATH="$(ldd result/bin/.ld-analyse-wrapped | awk '$1 == "libgcc_s.so.1" { print $3; exit }')"
+          [ -n "$LIBSTDCPP_PATH" ] && cp -L "$LIBSTDCPP_PATH" AppDir/usr/lib/libstdc++.so.6
+          [ -n "$LIBGCC_PATH" ] && cp -L "$LIBGCC_PATH" AppDir/usr/lib/libgcc_s.so.1
+          gather_loader_and_glibc_deps() {
+            local source_elf="$1"
+            [ -f "$source_elf" ] || return 0
+            local interp
+            interp="$("$PATCH_ELF_BIN" --print-interpreter "$source_elf" 2>/dev/null || true)"
+            if [ -n "$interp" ] && [ -f "$interp" ]; then
+              cp -Lf "$interp" "AppDir/usr/lib/$(basename "$interp")"
+            fi
+            for glibc_dep in $(ldd "$source_elf" 2>/dev/null | awk '/=> \/nix\/store/ { print $3 }' | grep -E '/(glibc|glibc-multi|gcc[^/]*)/' || true); do
+              [ -f "$glibc_dep" ] || continue
+              base="$(basename "$glibc_dep")"
+              cp -Lf "$glibc_dep" "AppDir/usr/lib/$base"
+            done
+          }
+          copy_glibc_runtime_from_interpreter() {
+            local source_elf="$1"
+            local interp
+            local interp_dir
+            interp="$("$PATCH_ELF_BIN" --print-interpreter "$source_elf" 2>/dev/null || true)"
+            [ -n "$interp" ] || return 0
+            interp_dir="$(dirname "$interp")"
+            for glibc_name in libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libutil.so.1 libanl.so.1 libresolv.so.2; do
+              [ -f "$interp_dir/$glibc_name" ] && cp -Lf "$interp_dir/$glibc_name" "AppDir/usr/lib/$glibc_name"
+            done
+          }
+          gather_loader_and_glibc_deps result/bin/.ld-analyse-wrapped
+          gather_loader_and_glibc_deps AppDir/usr/bin/ld-analyse
+          copy_glibc_runtime_from_interpreter result/bin/.ld-analyse-wrapped
+          pending=1
+          while [ "$pending" -eq 1 ]; do
+            pending=0
+            for elf in AppDir/usr/bin/* AppDir/usr/lib/*; do
+              [ -f "$elf" ] || continue
+              for dep in $(ldd "$elf" 2>/dev/null | awk '/=> \/nix\/store/ { print $3 }'); do
+                [ -f "$dep" ] || continue
+                base="$(basename "$dep")"
+                if echo "$base" | grep -Eq "$SKIP_LIB_REGEX"; then
+                  continue
+                fi
+                dest="AppDir/usr/lib/$base"
+                if [ ! -e "$dest" ]; then
+                  cp -L "$dep" "$dest"
+                  pending=1
+                fi
+              done
+            done
+          done
+          # Everything the dependency loops above copied out of the Nix store
+          # is mode 444, and patchelf needs to write to it. The hosted job gets
+          # away without this because its container runs as root (--user 0),
+          # which ignores file permissions; as an ordinary user the rpath pass
+          # dies with "patchelf: open: Permission denied".
+          chmod -R u+w AppDir/usr/bin AppDir/usr/lib
+          for elf in AppDir/usr/bin/* AppDir/usr/lib/*.so* AppDir/usr/plugins/*/*.so; do
+            [ -f "$elf" ] || continue
+            base="$(basename "$elf")"
+            if echo "$base" | grep -Eq "$SKIP_LIB_REGEX"; then
+              continue
+            fi
+            if ! "$PATCH_ELF_BIN" --print-rpath "$elf" >/dev/null 2>&1; then
+              continue
+            fi
+            "$PATCH_ELF_BIN" --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../../lib' "$elf"
+          done
+
+      - name: Build self-contained tbc-video-export (PyInstaller)
+        # Replace the CMake bash wrapper (which execs a *host* Python with host
+        # site-packages) with a PyInstaller --onefile ELF that bundles the
+        # interpreter and all deps. The hosted job uses the container's system
+        # python3.11; wm's system python3 is 3.14 and PEP 668 externally
+        # managed, so build inside a venv on the nixpkgs 3.11. The venv is
+        # recreated whenever it fails to start -- a Nix GC of the interpreter
+        # store path silently bricks a persistent venv.
+        run: |
+          set -euo pipefail
+          VENV="$HOME/.cache/tbc-tools-selfhosted/venv-pyinstaller-linux"
+          if ! "$VENV/bin/python" -c 'import sys' >/dev/null 2>&1; then
+            echo "Creating a fresh PyInstaller venv at $VENV"
+            rm -rf "$VENV"
+            "$PYTHON311" -m venv "$VENV"
+          fi
+          "$VENV/bin/python" -m pip install --upgrade pip
+          "$VENV/bin/python" -m pip install -r src/tbc-video-export/pyinstaller/requirements-build-linux.txt
+          cd src/tbc-video-export
+          export PYTHONPATH="$PWD/src"
+          mkdir -p build
+          "$VENV/bin/python" pyinstaller/build_linux.py
+          cd ../..
+          if [ ! -f src/tbc-video-export/dist/tbc-video-export ]; then
+            echo "PyInstaller did not produce src/tbc-video-export/dist/tbc-video-export"
+            exit 1
+          fi
+          cp -f src/tbc-video-export/dist/tbc-video-export AppDir/usr/bin/tbc-video-export
+          chmod +x AppDir/usr/bin/tbc-video-export
+          echo "Bundled self-contained tbc-video-export PyInstaller binary"
+
+      - name: Build and package native AAA AppImage from vendored source
+        # Compile VhsDecodeAutoAudioAlign from the vendored C# source with
+        # msbuild, then package it plus a bundled Mono runtime into a
+        # self-contained AppImage, so the bundle needs no host Mono at runtime.
+        # msbuild is prepended for the build only: package-aaa-appimage.sh
+        # copies MONO_PREFIX/lib/mono out of whatever `command -v mono`
+        # resolves to, and that must be Fedora's /usr/bin/mono.
+        run: |
+          set -euo pipefail
+          PATH="$MSBUILD_BIN:$PATH" bash scripts/build-aaa-linux.sh --out-dir build-aaa
+          mkdir -p AppDir/usr/bin/vendor/vhs_decode_auto_audio_align
+          bash scripts/package-aaa-appimage.sh \
+            --built-dir build-aaa \
+            --output AppDir/usr/bin/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage
+          chmod +x AppDir/usr/bin/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage
+          # Drop the prebuilt Windows .exe + Binah.dll the CMake install step
+          # placed here; the self-contained AppImage replaces them.
+          rm -f AppDir/usr/bin/vendor/vhs_decode_auto_audio_align/VhsDecodeAutoAudioAlign.exe \
+                AppDir/usr/bin/vendor/vhs_decode_auto_audio_align/Binah.dll
+          echo "Bundled self-contained native AAA AppImage (built from source)"
+
+      - name: Fetch AppImage tooling
+        # Cached outside the workspace so checkout's `git clean -ffdx` cannot
+        # delete it, then copied in -- the invocations below are AppImage
+        # relative and the hosted job's form is kept unchanged.
+        run: |
+          set -euo pipefail
+          TOOLDIR="$HOME/.cache/tbc-tools-selfhosted/appimage-tools"
+          mkdir -p "$TOOLDIR"
+          fetch() {
+            local dst="$TOOLDIR/$1"
+            local url="$2"
+            if [ ! -s "$dst" ]; then
+              curl -fL --retry 3 --retry-delay 2 -o "$dst" "$url"
+              chmod +x "$dst"
+            fi
+            cp -f "$dst" "./$1"
+            chmod +x "./$1"
+          }
+          fetch "${APPIMAGE_FILE}" "${APPIMAGE_URL}"
+          fetch "${APPIMAGE_PLUGIN_FILE}" "${APPIMAGE_PLUGIN_URL}"
+          fetch "${APPIMAGE_QT_FILE}" "${APPIMAGE_QT_URL}"
+          fetch "${APPIMAGETOOL_FILE}" "${APPIMAGETOOL_URL}"
+
+      - name: Assemble and build AppImage
+        run: |
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          SKIP_LIB_REGEX='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libresolv\.so\.2|ld-linux-.*\.so\..*|libnss_.*|libutil\.so\..*|libanl\.so\..*)$'
+          PATCH_ELF_BIN="$(command -v patchelf)"
+
+          # Scope every store lookup below to the closure of the build we just
+          # made. The hosted job can scan the whole store because its store
+          # holds nothing else; wm's is the user's shared multi-project store,
+          # where that scan is slow AND `sort | head -n 1` can hand back a
+          # different Qt6 than the one these binaries were linked against.
+          mapfile -t CLOSURE < <(nix-store -qR "$(readlink -f result)")
+          echo "Scoping Nix store lookups to ${#CLOSURE[@]} closure paths"
+          closure_find() {
+            find "${CLOSURE[@]}" "$@" -print -quit 2>/dev/null | head -n 1
+          }
+
+          QMAKE="$(closure_find -type f -path '*/bin/qmake')"
+          if [ -z "$QMAKE" ]; then
+            QMAKE="$(closure_find -type f -path '*/bin/qmake6')"
+          fi
+          if [ -n "$QMAKE" ]; then
+            export QMAKE
+            export PATH="$(dirname "$QMAKE"):$PATH"
+          else
+            echo "No qmake in the result closure; skipping linuxdeploy-plugin-qt."
+            echo "The explicit plugin/runtime-lib bundling below covers what the verifier checks."
+          fi
+
+          if [ -n "$QMAKE" ]; then
+            if ! EXTRA_QT_MODULES="core;gui;opengl;widgets;sql" "./${APPIMAGE_QT_FILE}" --appdir AppDir; then
+              echo "linuxdeploy-plugin-qt failed; using manual Qt plugin fallback."
+            fi
+          fi
+
+          # Bundle required Qt runtime plugins explicitly (Nix Qt layouts defeat
+          # linuxdeploy-plugin-qt for some plugins, e.g. qtsvg split packages).
+          copy_qt_plugin() {
+            plugin_rel="$1"
+            plugin_src="$(closure_find -path "*/plugins/${plugin_rel}")"
+            if [ -z "$plugin_src" ]; then
+              echo "Required Qt plugin missing from the result closure: ${plugin_rel}"
+              exit 1
+            fi
+            mkdir -p "AppDir/usr/plugins/$(dirname "$plugin_rel")"
+            cp -L "$plugin_src" "AppDir/usr/plugins/${plugin_rel}"
+            echo "Bundled Qt plugin: ${plugin_rel} <- ${plugin_src}"
+          }
+          copy_qt_plugin "platforms/libqxcb.so"
+          copy_qt_plugin "platforminputcontexts/libcomposeplatforminputcontextplugin.so"
+          copy_qt_plugin "xcbglintegrations/libqxcb-glx-integration.so"
+          copy_qt_plugin "sqldrivers/libqsqlite.so"
+          copy_qt_plugin "iconengines/libqsvgicon.so"
+          copy_qt_plugin "imageformats/libqsvg.so"
+
+          copy_runtime_lib() {
+            local lib_name="$1"
+            local lib_src
+            lib_src="$(closure_find -name "$lib_name")"
+            if [ -z "$lib_src" ]; then
+              echo "Required runtime lib missing from the result closure: $lib_name"
+              exit 1
+            fi
+            cp -Lf "$lib_src" "AppDir/usr/lib/$lib_name"
+            echo "Bundled runtime lib: $lib_name <- $lib_src"
+          }
+          for runtime_lib in \
+            libQt6XcbQpa.so.6 \
+            libxcb-util.so.1 \
+            libxcb-cursor.so.0 \
+            libxcb-icccm.so.4 \
+            libxcb-image.so.0 \
+            libxcb-keysyms.so.1 \
+            libxcb-render-util.so.0 \
+            libxkbcommon.so.0 \
+            libxkbcommon-x11.so.0; do
+            copy_runtime_lib "$runtime_lib"
+          done
+
+          ensure_needed_runtime_libs() {
+            local elf="$1"
+            [ -f "$elf" ] || return 0
+            readelf -d "$elf" 2>/dev/null | awk -F'[][]' '/NEEDED/ { print $2 }' | while IFS= read -r needed; do
+              [ -n "$needed" ] || continue
+              [ -e "AppDir/usr/lib/$needed" ] && continue
+              case "$needed" in
+                linux-vdso.so*|ld-linux-*.so*|libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libresolv.so.*|libstdc++.so.*|libgcc_s.so.*)
+                  continue
+                  ;;
+              esac
+              local src
+              src="$(closure_find -name "$needed")"
+              if [ -n "$src" ]; then
+                cp -Lf "$src" "AppDir/usr/lib/$needed"
+                echo "Bundled transitive runtime lib: $needed <- $src"
+              fi
+            done
+          }
+          for elf in AppDir/usr/plugins/*/*.so AppDir/usr/lib/*.so*; do
+            [ -f "$elf" ] || continue
+            ensure_needed_runtime_libs "$elf"
+          done
+
+          cat > AppDir/usr/bin/qt.conf <<'EOF'
+          [Paths]
+          Plugins = ../plugins
+          EOF
+
+          pending=1
+          while [ "$pending" -eq 1 ]; do
+            pending=0
+            for elf in AppDir/usr/plugins/*/*.so AppDir/usr/lib/*.so*; do
+              [ -f "$elf" ] || continue
+              for dep in $(ldd "$elf" 2>/dev/null | awk '/=> \// { print $3 }'); do
+                [ -f "$dep" ] || continue
+                base="$(basename "$dep")"
+                if echo "$base" | grep -Eq "$SKIP_LIB_REGEX"; then
+                  continue
+                fi
+                dest="AppDir/usr/lib/$base"
+                if [ ! -e "$dest" ]; then
+                  cp -L "$dep" "$dest"
+                  pending=1
+                fi
+              done
+            done
+          done
+          chmod -R u+w AppDir/usr/bin AppDir/usr/lib AppDir/usr/plugins
+
+          for elf in AppDir/usr/bin/* AppDir/usr/lib/*.so* AppDir/usr/plugins/*/*.so; do
+            [ -f "$elf" ] || continue
+            base="$(basename "$elf")"
+            if echo "$base" | grep -Eq "$SKIP_LIB_REGEX"; then
+              continue
+            fi
+            # PyInstaller --onefile binaries self-extract their own libs; do not
+            # rewrite their rpath (would corrupt the bootloader archive).
+            if [ "$base" = "tbc-video-export" ]; then
+              continue
+            fi
+            if ! "$PATCH_ELF_BIN" --print-rpath "$elf" >/dev/null 2>&1; then
+              continue
+            fi
+            "$PATCH_ELF_BIN" --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../../lib' "$elf"
+          done
+
+          wrap_elf_tools_with_loader() {
+            local bin_dir="$1"
+            local loader_name="$2"
+            for exe in "$bin_dir"/*; do
+              [ -f "$exe" ] || continue
+              [ -x "$exe" ] || continue
+              if ! head -c 4 "$exe" 2>/dev/null | grep -q $'\177ELF'; then
+                continue
+              fi
+              # PyInstaller --onefile binaries must use the host loader, not the
+              # AppImage's bundled glibc loader (they self-extract their own libs).
+              if [ "$(basename "$exe")" = "tbc-video-export" ]; then
+                continue
+              fi
+              local name
+              local real
+              name="$(basename "$exe")"
+              real="$bin_dir/.${name}.real"
+              mv "$exe" "$real"
+              cat > "$exe" <<EOF
+          #!/usr/bin/env bash
+          set -e
+          SELF_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+          ROOT_DIR="\$(cd "\${SELF_DIR}/.." && pwd)"
+          LOADER="\${ROOT_DIR}/lib/${loader_name}"
+          TARGET="\${SELF_DIR}/.${name}.real"
+          exec "\$LOADER" --library-path "\${ROOT_DIR}/lib" "\$TARGET" "\$@"
+          EOF
+              chmod +x "$exe"
+            done
+          }
+          wrap_elf_tools_with_loader AppDir/usr/bin ld-linux-x86-64.so.2
+
+          # Some copied Nix store files are read-only; make the bundle writable
+          # so linuxdeploy can strip binaries/libs in non-root environments.
+          chmod -R u+w AppDir/usr/bin AppDir/usr/lib AppDir/usr/plugins
+          # Keep loader/glibc binaries intact; stripping these can break startup.
+          export NO_STRIP=1
+
+          cat > AppDir/AppRun <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          LOADER=""
+          case "$(uname -m)" in
+            x86_64) LOADER="$APPDIR/usr/lib/ld-linux-x86-64.so.2" ;;
+            aarch64|arm64) LOADER="$APPDIR/usr/lib/ld-linux-aarch64.so.1" ;;
+          esac
+          if [ ! -x "$LOADER" ]; then
+            echo "Missing bundled dynamic loader: $LOADER"
+            exit 1
+          fi
+          export PATH="$APPDIR/usr/bin:${PATH}"
+          export QT_PLUGIN_PATH="$APPDIR/usr/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$APPDIR/usr/plugins/platforms"
+          export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+          unset LD_LIBRARY_PATH
+          run_nix_store_script_with_host_interpreter() {
+            local target="$1"
+            shift
+            local first_line
+            local interpreter
+            local env_args
+            local -a env_tokens
+            local requested
+            first_line="$(head -n 1 "$target" 2>/dev/null || true)"
+            interpreter="${first_line#\#!}"
+            interpreter="${interpreter%% *}"
+            case "$interpreter" in
+              /nix/store/*/bin/bash)
+                exec /usr/bin/env bash "$target" "$@"
+                ;;
+              /nix/store/*/bin/sh)
+                exec /usr/bin/env sh "$target" "$@"
+                ;;
+              /nix/store/*/bin/python*)
+                if command -v python3 >/dev/null 2>&1; then
+                  exec "$(command -v python3)" "$target" "$@"
+                fi
+                if command -v python >/dev/null 2>&1; then
+                  exec "$(command -v python)" "$target" "$@"
+                fi
+                ;;
+              /nix/store/*/bin/env)
+                env_args="${first_line#"$interpreter"}"
+                env_args="${env_args# }"
+                read -r -a env_tokens <<< "$env_args"
+                [ "${#env_tokens[@]}" -gt 0 ] || return 1
+                requested="${env_tokens[0]}"
+                if [ "$requested" = "-S" ]; then
+                  [ "${#env_tokens[@]}" -gt 1 ] || return 1
+                  requested="${env_tokens[1]}"
+                fi
+                case "$requested" in
+                  bash|sh)
+                    exec /usr/bin/env "$requested" "$target" "$@"
+                    ;;
+                  python|python3)
+                    if command -v python3 >/dev/null 2>&1; then
+                      exec "$(command -v python3)" "$target" "$@"
+                    fi
+                    if [ "$requested" = "python" ] && command -v python >/dev/null 2>&1; then
+                      exec "$(command -v python)" "$target" "$@"
+                    fi
+                    ;;
+                esac
+                ;;
+            esac
+            return 1
+          }
+          run_target() {
+            local target="$1"
+            shift
+            # PyInstaller --onefile binaries self-extract and must run with the
+            # host loader, not the AppImage's bundled glibc loader/library-path.
+            if [ "$(basename "$target")" = "tbc-video-export" ]; then
+              exec "$target" "$@"
+            fi
+            if head -c 4 "$target" 2>/dev/null | grep -q $'\177ELF'; then
+              exec "$LOADER" --library-path "$APPDIR/usr/lib" "$target" "$@"
+            fi
+            local first_line
+            first_line="$(head -n 1 "$target" 2>/dev/null || true)"
+            if [[ "$first_line" == '#!/nix/store/'* ]]; then
+              run_nix_store_script_with_host_interpreter "$target" "$@" || {
+                echo "Unable to resolve Nix-store shebang for $target: $first_line" >&2
+                exit 127
+              }
+            fi
+            exec "$target" "$@"
+          }
+          if [ "$#" -gt 0 ] && [ -x "$APPDIR/usr/bin/$1" ]; then
+            cmd="$1"
+            shift
+            if [ "$cmd" = "ld-analyse" ]; then
+              run_target "$APPDIR/usr/bin/$cmd" --force-dark-theme "$@"
+            fi
+            run_target "$APPDIR/usr/bin/$cmd" "$@"
+          fi
+          run_target "$APPDIR/usr/bin/ld-analyse" --force-dark-theme "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          mkdir -p AppDir/usr/share/applications
+          cat > AppDir/usr/share/applications/tbc-tools.desktop << EOF
+          [Desktop Entry]
+          Type=Application
+          Name=TBC Tools
+          Comment=Time Base Corrected video analysis tools
+          Exec=ld-analyse
+          Icon=tbc-tools
+          Categories=AudioVideo;Video;
+          EOF
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp src/ld-analyse/Graphics/256-analyse.png AppDir/usr/share/icons/hicolor/256x256/apps/tbc-tools.png
+          ln -sf usr/share/applications/tbc-tools.desktop AppDir/tbc-tools.desktop
+          ln -sf usr/share/icons/hicolor/256x256/apps/tbc-tools.png AppDir/tbc-tools.png
+          ln -sf tbc-tools.png AppDir/.DirIcon
+
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "./${APPIMAGETOOL_FILE}" AppDir release/tbc-tools-x86_64.AppImage
+
+      - name: Validate x86_64 AppImage bundle
+        run: |
+          PYTHON_RUNTIME="$(nix build nixpkgs#python311 --no-link --print-out-paths | tail -n 1)"
+          export PATH="$PYTHON_RUNTIME/bin:$PATH"
+          bash ci/verify_linux_bundle.sh x86-appimage release/tbc-tools-x86_64.AppImage
+
+      - name: Copy scripts
+        run: find scripts -maxdepth 1 -type f -executable -exec cp {} release/ \; || true
+
+      - name: Create release archive
+        run: tar -cvJSf tbc-tools_linux_x86_64.tar.xz --transform s/release/tbc-tools/ release/
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: selfhosted_tbc-tools_linux_x86_64
+          path: tbc-tools_linux_x86_64.tar.xz
+          if-no-files-found: error
+          retention-days: 7
