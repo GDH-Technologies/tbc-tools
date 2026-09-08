@@ -77,6 +77,14 @@ bool UpdateChecker::isNewerThan(const QString &latestTag, const QString &current
         return false;
     }
 
+    // A GDH fork build (<upstream>-gdh-<major>.<minor>) is not on the release
+    // feed this checker polls, and QVersionNumber would silently truncate it to
+    // its upstream part -- so "3.2.8-gdh-4.0" would read as older than upstream
+    // "3.2.9" and send our users to somebody else's binaries. Never newer.
+    if (current.contains(QStringLiteral("-gdh-"))) {
+        return false;
+    }
+
     const QVersionNumber latestVn = QVersionNumber::fromString(latest);
     const QVersionNumber currentVn = QVersionNumber::fromString(current);
 

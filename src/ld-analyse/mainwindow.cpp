@@ -5989,9 +5989,11 @@ void MainWindow::maybePerformWeeklyUpdateCheck()
         return;
     }
 
-    // Skip the automatic check for unversioned/dev builds to avoid noisy prompts.
+    // Skip the automatic check for unversioned/dev builds to avoid noisy prompts,
+    // and for GDH fork builds, whose releases are not on the feed this polls.
     const QString currentVersion = QString::fromUtf8(APP_VERSION);
-    if (currentVersion.isEmpty() || currentVersion == QStringLiteral("0.0.0")) {
+    if (currentVersion.isEmpty() || currentVersion == QStringLiteral("0.0.0")
+        || currentVersion.contains(QStringLiteral("-gdh-"))) {
         return;
     }
 
