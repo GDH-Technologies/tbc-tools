@@ -27,9 +27,30 @@ name: "Self-hosted macOS build (air0)"
 #     the workspace, because actions/checkout runs `git clean -ffdx`.
 
 on:
+  # Path-gated so a docs-only or tooling-only change does not occupy the single
+  # macos box for a full build. These mirror self-hosted-deploy.yml's
+  # per-platform filters, so what triggers a PR build is exactly what triggers
+  # a redeploy on merge. Note the consequence: a PR touching none of these
+  # produces no run at all, so none of these may be marked a required check.
   pull_request:
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/self-hosted-macos.yml"
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/self-hosted-macos.yml"
   workflow_dispatch:
   workflow_call:
     inputs:

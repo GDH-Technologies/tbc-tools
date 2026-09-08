@@ -214,6 +214,9 @@ LINUX_AAA_FORBIDDEN_SNIPPETS = (
 # are shared with harrypm and must stay byte-identical so upstream merges never
 # conflict (see HOSTED_WORKFLOW_FORBIDDEN_SNIPPETS below).
 SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
+    # Path-gated triggers: one box per OS, so a docs-only change must not
+    # occupy it. "src/**" appears only inside those paths: blocks.
+    '"src/**"',
     "runs-on: [self-hosted, Linux, X64, wm]",
     "workflow_call:",
     "permissions:\n  contents: read",
@@ -237,6 +240,9 @@ SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
     "patchelfUnstable",
 )
 SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
+    # Path-gated triggers: one box per OS, so a docs-only change must not
+    # occupy it. "src/**" appears only inside those paths: blocks.
+    '"src/**"',
     "runs-on: [self-hosted, macOS, ARM64, air0]",
     "workflow_call:",
     "permissions:\n  contents: read",
@@ -253,6 +259,9 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     "sw_vers",
 )
 SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
+    # Path-gated triggers: one box per OS, so a docs-only change must not
+    # occupy it. "src/**" appears only inside those paths: blocks.
+    '"src/**"',
     "runs-on: [self-hosted, Windows, X64, win0]",
     "workflow_call:",
     "permissions:\n  contents: read",

@@ -43,9 +43,30 @@ name: "Self-hosted Windows build (win0)"
 #     are excluded and the test binaries are filtered out of the release copy.
 
 on:
+  # Path-gated so a docs-only or tooling-only change does not occupy the single
+  # windows box for a full build. These mirror self-hosted-deploy.yml's
+  # per-platform filters, so what triggers a PR build is exactly what triggers
+  # a redeploy on merge. Note the consequence: a PR touching none of these
+  # produces no run at all, so none of these may be marked a required check.
   pull_request:
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "vcpkg.json"
+      - ".github/workflows/self-hosted-windows.yml"
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "ci/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "vcpkg.json"
+      - ".github/workflows/self-hosted-windows.yml"
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -242,7 +263,20 @@ jobs:
             Write-Host "No Qt $env:QT_VERSION found in: $($candidates -join '; ')"
             python -m pip install --upgrade aqtinstall
             if ($LASTEXITCODE -ne 0) { throw "aqtinstall install failed" }
-            python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -m qtsvg -O $qtRoot
+            # No `-m qtsvg`: in Qt 6.8 Svg is not an optional module, it is an
+            # archive inside the base package, and asking for it as a module
+            # fails with "The packages ['qtsvg'] were not found". Confirmed
+            # against `aqt list-qt windows desktop --archives 6.8.3
+            # win64_msvc2022_64`, which lists qtbase, qtsvg, qttools,
+            # qtdeclarative, qttranslations, d3dcompiler_47 and opengl32sw.
+            #
+            # Take only the three that are needed -- qtbase for Core/Gui/
+            # Widgets/Sql/Network, qtsvg for Svg, qttools for windeployqt --
+            # and skip the rest. Nothing here uses QML, and the deploy call
+            # passes --no-system-d3d-compiler --no-opengl-sw, so d3dcompiler_47
+            # and opengl32sw would never be shipped anyway.
+            python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH `
+              --archives qtbase qtsvg qttools -O $qtRoot
             if ($LASTEXITCODE -ne 0) { throw "aqt install-qt failed" }
             $qtDir = "$qtRoot\$env:QT_VERSION\$env:QT_DIR_NAME"
           }
