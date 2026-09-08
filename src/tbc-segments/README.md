@@ -61,6 +61,8 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
   --dropout-storm-threshold <f>  active-area dropout coverage (0.25)
   --tbc <luma.tbc>            walk the raw fields when the metadata holds no metrics
   --chroma-tbc <file>         burst source (default <luma>_chroma.tbc if present)
+  --no-burst                  do not measure burst amplitude, and do not read
+                              the chroma TBC for it (halves the walk's I/O)
   -t, --threads <n>           worker threads for the walk (logical CPUs)
   --scene-threshold-ire <x>   same-parity difference marking a scene change (12)
   --noise-threshold-ire <x>   back-porch noise marking snow (6)
@@ -88,6 +90,24 @@ metadata describes, stored metrics failing `--verify-stored`, an unwritable
 output). A TBC holding *more* fields than the metadata is walked up to the
 metadata's count: the decoders flush metadata in batches, so a decode that was
 stopped early leaves a described prefix and an undescribed tail.
+
+### Skipping the burst (`--no-burst`)
+
+Burst amplitude is the only thing the chroma TBC is read for, and it is
+measured over the few samples of each line the colour burst occupies — about
+4% of a line. The walk still reads the whole file, so on a decode with a
+chroma sibling the burst costs half of all the I/O the walk does. On a
+475,000-field Video8 capture over a 1 GbE NFS mount that is 227.6 GB of the
+458.3 GB read, and about 34 minutes of the 68.
+
+`--no-burst` skips the measurement and never opens the chroma TBC. The other
+metrics are unaffected. What is lost is the `no_burst` event, which flags
+fields whose burst has collapsed.
+
+Note that a decode backfilled this way counts as complete: a field is
+considered measured if *any* of its metrics is finite, so a later run will not
+walk it again to fill the burst in. Use `--force-walk` (without `--no-burst`)
+if you want it after all.
 
 ### Stored metrics, events and segments
 

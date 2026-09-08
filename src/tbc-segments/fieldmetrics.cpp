@@ -146,8 +146,11 @@ FieldSample measureField(const SourceVideo::Data &luma, const SourceVideo::Data 
         if (!std::isfinite(s.noiseIre) && std::isfinite(dev)) s.noiseIre = dev / scale;
     }
 
-    // Burst amplitude, from the chroma field when there is one.
-    if (g.colourBurstEnd - g.colourBurstStart >= 4) {
+    // Burst amplitude, from the chroma field when there is one. Skipped
+    // entirely under --no-burst: with no chroma open this would otherwise fall
+    // back to the luma TBC, which for a colour-under decode (S-Video, Video8,
+    // VHS) carries no burst and would store a meaningless number.
+    if (!g.skipBurst && g.colourBurstEnd - g.colourBurstStart >= 4) {
         const SourceVideo::Data &burstSource = (chroma && chroma->size() >= g.fieldWidth * g.fieldHeight) ? *chroma : luma;
         const double pp = regionPeakToPeak(burstSource, g, {g.colourBurstStart, g.colourBurstEnd});
         if (std::isfinite(pp)) s.burstAmpIre = pp / scale;

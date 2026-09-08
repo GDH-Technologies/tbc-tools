@@ -27,7 +27,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QThread>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -128,9 +130,34 @@ double verifyStored(const FieldMetrics &stored, const FieldMetrics &walked, QStr
     return worst;
 }
 
+// Two decoder events are the same record if everything but their provenance
+// matches. detailJson carries the build's APP_COMMIT, which changes between
+// builds (and gains a "-dirty" suffix on a dirty tree), so comparing the text
+// would report a difference on every rebuild and force a needless rewrite.
+bool sameEvent(const TbcMetaData::DecoderEvent &a, const TbcMetaData::DecoderEvent &b)
+{
+    if (a.kind != b.kind || a.field != b.field || a.fileLoc != b.fileLoc
+        || a.source != b.source || a.hasRfDeltaSamples != b.hasRfDeltaSamples
+        || a.rfDeltaSamples != b.rfDeltaSamples) {
+        return false;
+    }
+    // rfDeltaFields defaults to NaN, and NaN compares unequal to itself
+    const bool aNan = std::isnan(a.rfDeltaFields), bNan = std::isnan(b.rfDeltaFields);
+    if (aNan != bNan) return false;
+    if (!aNan && !qFuzzyCompare(1.0 + a.rfDeltaFields, 1.0 + b.rfDeltaFields)) return false;
+
+    QJsonObject aDetail = QJsonDocument::fromJson(a.detailJson.toUtf8()).object();
+    QJsonObject bDetail = QJsonDocument::fromJson(b.detailJson.toUtf8()).object();
+    aDetail.remove(QStringLiteral("commit"));
+    bDetail.remove(QStringLiteral("commit"));
+    return aDetail == bDetail;
+}
+
 // Reconstruct decoder events from the field records when the decoder stored
 // none: gaps (with direction), skipped and duplicated fields. Rows from an
 // earlier reconstruction are replaced; rows the decoder wrote are never touched.
+// Returns whether the metadata was actually changed: an unchanged return keeps
+// --write from rewriting the whole file to store rows it already holds.
 bool reconstructEvents(TbcMetaData &metaData, const SegmentsAnalysis &analysis)
 {
     QVector<TbcMetaData::DecoderEvent> kept;
@@ -164,6 +191,13 @@ bool reconstructEvents(TbcMetaData &metaData, const SegmentsAnalysis &analysis)
         }
         kept.append(de);
     }
+
+    const QVector<TbcMetaData::DecoderEvent> &existing = metaData.getDecoderEvents();
+    if (existing.size() == kept.size()
+        && std::equal(existing.cbegin(), existing.cend(), kept.cbegin(), sameEvent)) {
+        return false; // the stored rows already say this; leave the file alone
+    }
+
     metaData.setDecoderEvents(kept);
     return true;
 }
@@ -218,6 +252,7 @@ int main(int argc, char *argv[])
     QCommandLineOption blankOption("blank-luma-ire", QCoreApplication::translate("main", "Active luma at or below which a quiet field is blank (default 5)"), "IRE");
     QCommandLineOption minClipOption("min-clip-fields", QCoreApplication::translate("main", "A section shorter than this is 'unknown', never a clip (default 10)"), "n");
     QCommandLineOption minNonClipRunOption("min-non-clip-run-fields", QCoreApplication::translate("main", "A noise/blank run at least this long splits a section (default 50)"), "n");
+    QCommandLineOption noBurstOption("no-burst", QCoreApplication::translate("main", "Do not measure burst amplitude, and do not read the chroma TBC for it (halves the walk's I/O; no no_burst events)"));
     QCommandLineOption forceWalkOption("force-walk", QCoreApplication::translate("main", "Walk the TBC even when the metadata already holds picture metrics"));
     QCommandLineOption verifyStoredOption("verify-stored", QCoreApplication::translate("main", "Walk the TBC and compare with the stored metrics; exit 1 above 0.05 IRE"));
     QCommandLineOption writeOption("write", QCoreApplication::translate("main", "Store walked metrics and reconstructed events in the metadata (the .tbc.db; a JSON-only decode gets one first and the JSON is refreshed)"));
@@ -228,7 +263,7 @@ int main(int argc, char *argv[])
     for (const QCommandLineOption *opt : {&jsonOption, &startOption, &lengthOption, &rfRateOption, &sensitivityOption,
                                           &gapToleranceOption, &syncConfOption, &minRunOption, &dropoutStormOption,
                                           &tbcOption, &chromaOption, &threadsOption, &sceneOption, &noiseOption, &blankOption,
-                                          &minClipOption, &minNonClipRunOption, &forceWalkOption, &verifyStoredOption,
+                                          &minClipOption, &minNonClipRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
                                           &writeOption, &writeSegmentsOption, &forceOption, &perFieldOption, &summaryOption}) {
         parser.addOption(*opt);
     }
@@ -322,9 +357,17 @@ int main(int argc, char *argv[])
     const bool needWalk = parser.isSet(tbcOption)
                           && (wantVerify || parser.isSet(forceWalkOption) || !storedComplete);
     if (needWalk) {
+        const bool noBurst = parser.isSet(noBurstOption);
         const QString luma = parser.value(tbcOption);
-        const QString chroma = parser.isSet(chromaOption) ? parser.value(chromaOption) : defaultChromaFor(luma);
+        // With --no-burst there is nothing the chroma TBC is needed for, so it
+        // is never named and never opened.
+        const QString chroma = noBurst ? QString()
+                                       : (parser.isSet(chromaOption) ? parser.value(chromaOption) : defaultChromaFor(luma));
+        if (noBurst && parser.isSet(chromaOption)) {
+            qWarning() << "tbc-segments: --no-burst ignores --chroma-tbc";
+        }
         FieldGeometry geometry = geometryFromParameters(metaData.getVideoParameters());
+        geometry.skipBurst = noBurst;
         FieldWalkPool pool(luma, chroma, threads, metaData, geometry);
         FieldMetrics walkedMetrics;
         if (!pool.process(walkedMetrics)) return 1;
@@ -363,24 +406,28 @@ int main(int argc, char *argv[])
     }
 
     if (wantWrite) {
-        bool changed = false;
+        // Track what actually changed so the write can be narrowed to it. A
+        // backfill never touches the field records, and rewriting 475,000 of
+        // them to store the metrics is what makes --write cost hours on a
+        // large capture.
+        bool metricsDirty = false, captureDirty = false, eventsDirty = false, segmentsDirty = false;
         if (walked) {
             storeMetrics(metaData, metrics);
-            changed = true;
+            metricsDirty = true;
         }
         if (rfRate > 0 && !(metaData.getVideoParameters().rfSourceSampleRateHz > 0)) {
             TbcMetaData::VideoParameters vp = metaData.getVideoParameters();
             vp.rfSourceSampleRateHz = rfRate;
             metaData.setVideoParameters(vp);
-            changed = true;
+            captureDirty = true;
         }
-        if (reconstructEvents(metaData, analysis)) changed = true;
+        if (reconstructEvents(metaData, analysis)) eventsDirty = true;
         if (wantWriteSegments) {
             const bool hasStored = !metaData.getSegments().isEmpty();
             if (!hasStored) {
                 metaData.setSegments(derived);
                 segmentsSource = QStringLiteral("stored");
-                changed = true;
+                segmentsDirty = true;
             } else if (parser.isSet(forceOption)) {
                 // Replace derived segments, keep every user one
                 QVector<TbcMetaData::Segment> merged;
@@ -403,14 +450,26 @@ int main(int argc, char *argv[])
                 });
                 metaData.setSegments(merged);
                 segments = metaData.getSegments();
-                changed = true;
+                segmentsDirty = true;
             } else {
                 qInfo() << "Metadata already holds segments; not replacing them (--force overrides)";
             }
         }
+        const bool changed = metricsDirty || captureDirty || eventsDirty || segmentsDirty;
         if (changed) {
+            // The capture row is always written on an update: it is one row, and
+            // it is what carries the schema migrations. The field records are
+            // never ours to change, so leave them alone unless we are creating
+            // the database (a JSON-only decode getting its first .tbc.db), which
+            // writeSqlite detects for itself and writes in full.
+            SqliteWriteScope scope;
+            scope.fields = false;
+            scope.pictureMetrics = metricsDirty;
+            scope.decoderEvents = eventsDirty;
+            scope.segments = segmentsDirty;
+
             QString canonical;
-            if (!metaData.writeWithProjection(inputFilename, &canonical)) {
+            if (!metaData.writeWithProjection(inputFilename, &canonical, scope)) {
                 qCritical() << "Unable to write the metadata";
                 return 1;
             }

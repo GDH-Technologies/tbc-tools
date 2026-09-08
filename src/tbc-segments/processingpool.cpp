@@ -79,7 +79,9 @@ bool FieldWalkPool::process(FieldMetrics &out)
 
     out.resize(lastFieldNumber);
     out.enabled = true;
-    out.hasBurst = true;
+    // Not chromaOpen: a composite decode (CVBS, LaserDisc) has no chroma
+    // sibling and measures burst from the luma TBC quite legitimately.
+    out.hasBurst = !geometry.skipBurst;
     output = &out;
     inputFieldNumber = 1;
     storedFields = 0;

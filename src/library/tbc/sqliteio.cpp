@@ -55,6 +55,12 @@ namespace SqliteValue
 // Keep in step with the PRAGMA at the top of SCHEMA_SQL.
 static constexpr int kSchemaUserVersion = 8;
 
+// Page cache for a writer connection, in KiB (SQLite reads a negative
+// cache_size as KiB rather than pages). Large enough to hold a whole metadata
+// transaction so it never spills mid-write, bounded so a tool that opens
+// several writers does not run away with memory.
+static constexpr int kWriterCacheSizeKiB = 256 * 1024; // 256 MB
+
 // The segmentation tables added in schema version 8. Shared verbatim with
 // vhs-decode's lddecode/tbc_db.py (its schema version 2), which writes the
 // picture_metrics and decoder_event rows during a decode; this library writes
@@ -989,10 +995,26 @@ SqliteWriter::SqliteWriter(const QString &fileName)
         // Create new database connection
         db = QSqlDatabase::addDatabase("QSQLITE", connectionName);
         db.setDatabaseName(fileName);
-        
+
         if (!db.open()) {
             throwError("Failed to open database: " + db.lastError().text().toStdString());
         }
+
+        // SQLite's default page cache is ~2 MB. A metadata file for a long
+        // capture runs to gigabytes, so a rewrite spills the cache constantly,
+        // and every spill has to sync the rollback journal before dirty pages
+        // reach the database file. On a network filesystem each of those syncs
+        // is a COMMIT round trip, which is what turns a large write into hours
+        // of wait_on_commit. A cache big enough to hold the transaction, and
+        // temporary tables in memory, remove the spills.
+        //
+        // journal_mode is deliberately left alone: WAL must never be used here,
+        // because these files are routinely opened over NFS. synchronous stays
+        // at FULL too — on a rollback journal, NORMAL is not the benign trade
+        // it is under WAL; it reopens a real corruption window on power loss.
+        QSqlQuery pragma(db);
+        pragma.exec(QStringLiteral("PRAGMA cache_size = -%1").arg(kWriterCacheSizeKiB));
+        pragma.exec(QStringLiteral("PRAGMA temp_store = MEMORY"));
     }
 }
 

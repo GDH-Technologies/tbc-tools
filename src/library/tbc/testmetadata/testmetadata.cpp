@@ -241,6 +241,20 @@ int queryInt(const QString &dbPath, const QString &sql)
     return value;
 }
 
+void execSql(const QString &dbPath, const QString &sql)
+{
+    const QString connection = QStringLiteral("testmetadata_exec");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(dbPath);
+        CHECK(db.open());
+        QSqlQuery query(db);
+        CHECK(query.exec(sql));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+}
+
 QString queryString(const QString &dbPath, const QString &sql)
 {
     const QString connection = QStringLiteral("testmetadata_probe_s");
@@ -638,6 +652,51 @@ void testMigrationFromVhsDecodeV1()
 }
 
 // Path helpers and the SQLite-first write
+// A backfill only changes the picture metrics, the decoder events and the
+// segments. Rewriting the field rows to persist them is what makes
+// tbc-segments --write cost a full rewrite of the database (2.6 GB of churn
+// for ~40 MB of metrics on a long capture, hours of it over NFS), so a scoped
+// write has to leave those rows strictly alone.
+void testScopedSqliteWrite()
+{
+    std::cerr << "Testing scoped SQLite writes\n";
+    QTemporaryDir dir;
+    CHECK(dir.isValid());
+    const QString dbPath = dir.filePath(QStringLiteral("scoped.tbc.db"));
+
+    TbcMetaData original;
+    buildMetadata(original, 8, true);
+    CHECK(original.write(dbPath));
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM field_record")) == 8);
+
+    // Mark a field row on disk with a value the in-memory object does not have.
+    // A scoped write that excludes the field rows must not touch it.
+    execSql(dbPath, QStringLiteral("UPDATE field_record SET sync_conf = 4242 WHERE field_id = 3"));
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT sync_conf FROM field_record WHERE field_id = 3")) == 4242);
+
+    TbcMetaData loaded;
+    CHECK(loaded.read(dbPath));
+    TbcMetaData::PictureMetrics metrics;
+    metrics.lumaMeanIre = 12.5;
+    metrics.noiseIre = 3.25;
+    loaded.updateFieldPictureMetrics(metrics, 4); // 1-based field number
+
+    SqliteWriteScope scope;
+    scope.fields = false;
+    CHECK(loaded.writeWithProjection(dbPath, nullptr, scope));
+
+    // The field row still carries the marker: it was never rewritten
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT sync_conf FROM field_record WHERE field_id = 3")) == 4242);
+    // ...and the metrics did land
+    CHECK(queryString(dbPath, QStringLiteral("SELECT luma_mean_ire FROM picture_metrics WHERE field_id = 3")).toDouble() == 12.5);
+
+    // A full-scope write is still a full rewrite. "original" never saw the
+    // marker, so writing it back puts the field row's own value (syncConf 45,
+    // as buildMetadata sets it) over the top of it.
+    CHECK(original.writeWithProjection(dbPath));
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT sync_conf FROM field_record WHERE field_id = 3")) == 45);
+}
+
 void testSqliteFirstPaths()
 {
     std::cerr << "Testing SQLite-first path resolution and projection\n";
@@ -745,6 +804,7 @@ int main(int argc, char *argv[])
         testSqliteRoundTrip();
         testMigrationFromVhsDecodeV1();
         testSqliteFirstPaths();
+        testScopedSqliteWrite();
         std::cout << "testmetadata: all checks passed\n";
         return 0;
     }
