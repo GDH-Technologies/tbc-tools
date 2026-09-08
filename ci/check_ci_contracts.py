@@ -284,9 +284,12 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # A cancelled deploy can interrupt `nix profile upgrade` or the Windows
     # directory swap halfway through, so back-to-back merges must queue.
     "cancel-in-progress: false",
-    # wm's deploy fast-forwards the developer's real working checkout, so it
-    # must refuse a dirty or non-main tree and prove the profile actually moved.
+    # wm's deploy advances refs/heads/main in the developer's real checkout.
+    # Both routes must be fast-forward-only, the working tree must be left
+    # alone unless main is the checked-out branch, and the profile must be
+    # proven to have actually moved rather than silently no-opped.
     "Refusing to deploy:",
+    "fetch --no-tags origin main:main",
     # Written as `git -C "$CHECKOUT" merge --ff-only`, so pin the operation
     # rather than the whole invocation: a fast-forward can never rewrite or
     # discard work in the developer's checkout.
@@ -335,7 +338,7 @@ AGENTS_HARD_RULE_REQUIRED_SNIPPETS = (
     "Hard rule: Windows dedicated cache repo pushes must clear checkout-injected github.com auth headers before pull/push",
     "Hard rule: Linux AAA source builds must stay xbuild-compatible and must not require apt msbuild on arm64",
     "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",
-    "Hard rule: the self-hosted deploy must refuse a dirty or non-main working checkout",
+    "Hard rule: the self-hosted deploy must never disturb the developer's working tree",
     "Hard rule: self-hosted runners have persistent disks, not persistent workspaces",
 )
 

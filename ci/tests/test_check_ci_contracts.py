@@ -625,13 +625,15 @@ class ContractCoverageTests(unittest.TestCase):
         )
 
     def test_self_hosted_deploy_contract_requires_install_safety_guards(self) -> None:
-        # wm's deploy fast-forwards the developer's real working checkout, so it
-        # must refuse a dirty or non-main tree, prove the profile actually moved
-        # rather than silently no-opping, re-register XDG (INSTALL.md), and swap
-        # the Windows install atomically without clobbering a running tool.
+        # wm's deploy advances refs/heads/main in the developer's real checkout
+        # by whichever fast-forward-only route leaves the working tree alone,
+        # proves the profile actually moved rather than silently no-opping,
+        # re-registers XDG (INSTALL.md), and swaps the Windows install
+        # atomically without clobbering a running tool.
         expected = {
             "Refusing to deploy:",
             "merge --ff-only",
+            "fetch --no-tags origin main:main",
             "nix profile upgrade tbc-tools",
             'grep -q "rev=$GITHUB_SHA"',
             "decode-desktop-sync",
@@ -644,7 +646,7 @@ class ContractCoverageTests(unittest.TestCase):
     def test_agents_hard_rules_include_self_hosted_guards(self) -> None:
         expected = {
             "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",
-            "Hard rule: the self-hosted deploy must refuse a dirty or non-main working checkout",
+            "Hard rule: the self-hosted deploy must never disturb the developer's working tree",
             "Hard rule: self-hosted runners have persistent disks, not persistent workspaces",
         }
         self.assertTrue(

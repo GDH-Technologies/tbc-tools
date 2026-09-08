@@ -129,7 +129,7 @@ jobs:
       # runner's own CI workspace is a different checkout entirely.
       CHECKOUT: /home/rdodge/Repos/tbc-tools
     steps:
-      - name: Fast-forward the working checkout and upgrade the profile
+      - name: Advance main in the working checkout and upgrade the profile
         run: |
           set -euo pipefail
 
@@ -138,27 +138,36 @@ jobs:
             exit 1
           fi
 
-          # Guard before touching anything. This is somebody's live working
-          # copy, not a CI scratch dir.
-          BRANCH="$(git -C "$CHECKOUT" rev-parse --abbrev-ref HEAD)"
-          if [ "$BRANCH" != "main" ]; then
-            echo "Refusing to deploy: $CHECKOUT is on '$BRANCH', not main." >&2
-            exit 1
-          fi
-          # --porcelain ignores gitignored paths, so build/, result and testout/
-          # do not trip this; only real uncommitted work does.
-          if [ -n "$(git -C "$CHECKOUT" status --porcelain)" ]; then
-            echo "Refusing to deploy: $CHECKOUT has uncommitted changes." >&2
-            git -C "$CHECKOUT" status --short >&2
-            exit 1
-          fi
-
           git -C "$CHECKOUT" fetch --tags --prune --prune-tags --force origin
-          git -C "$CHECKOUT" merge --ff-only "$GITHUB_SHA"
 
-          HEAD_SHA="$(git -C "$CHECKOUT" rev-parse HEAD)"
-          if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then
-            echo "Refusing to deploy: $CHECKOUT is at $HEAD_SHA, expected $GITHUB_SHA." >&2
+          # The profile entry's flake URL is git+file://$CHECKOUT?ref=refs/heads/main,
+          # so nix reads the main REF -- not the working tree. Only that ref has
+          # to advance, which means the developer's branch and uncommitted work
+          # are almost always none of this job's business.
+          BRANCH="$(git -C "$CHECKOUT" rev-parse --abbrev-ref HEAD)"
+          if [ "$BRANCH" = "main" ]; then
+            # main is the checked-out branch, so the only way to move the ref
+            # goes through the working tree -- which therefore has to be clean.
+            # --porcelain ignores gitignored paths, so build/, result and
+            # testout/ do not trip this; only real uncommitted work does.
+            if [ -n "$(git -C "$CHECKOUT" status --porcelain)" ]; then
+              echo "Refusing to deploy: $CHECKOUT is on main with uncommitted changes." >&2
+              git -C "$CHECKOUT" status --short >&2
+              exit 1
+            fi
+            git -C "$CHECKOUT" merge --ff-only "$GITHUB_SHA"
+          else
+            # main is not checked out: move the ref and leave the working tree
+            # completely alone, whatever branch and uncommitted work it holds.
+            # Without a leading '+' this refuses anything but a fast-forward,
+            # which is the same safety property `merge --ff-only` gives above.
+            echo "Checkout is on '$BRANCH'; advancing refs/heads/main without touching the working tree."
+            git -C "$CHECKOUT" fetch --no-tags origin main:main
+          fi
+
+          MAIN_SHA="$(git -C "$CHECKOUT" rev-parse refs/heads/main)"
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Refusing to deploy: $CHECKOUT main is at $MAIN_SHA, expected $GITHUB_SHA." >&2
             exit 1
           fi
 
