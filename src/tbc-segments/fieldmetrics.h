@@ -49,6 +49,12 @@ struct FieldGeometry {
     qint32 sampleStep = 4;
     qint32 lineStep = 2;
 
+    // Do not measure burst amplitude (--no-burst). Set when the caller would
+    // rather not read the chroma TBC at all: burst is the only thing it is
+    // needed for, and reading it doubles the walk's I/O to sample the few
+    // samples of each line the burst occupies.
+    bool skipBurst = false;
+
     double ireScale() const { return (white16bIre - black16bIre) / 100.0; }
     double toIre(double sample16) const { return (sample16 - black16bIre) / ireScale(); }
     bool valid() const;

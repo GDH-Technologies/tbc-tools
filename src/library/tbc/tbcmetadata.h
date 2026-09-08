@@ -42,6 +42,23 @@ enum VideoSystem {
 
 bool parseVideoSystemName(QString name, VideoSystem &system);
 
+// Which parts of an existing .tbc.db an update should touch. The default
+// writes everything, so a caller that does not care is unaffected.
+//
+// A backfill (tbc-segments --write) only ever changes the picture metrics, the
+// decoder events, the segments and the capture row, but rewriting the field
+// rows to persist them costs a full rewrite of the database: for a
+// 475,000-field capture that is 2.6 GB of churn to store ~40 MB of metrics, and
+// over NFS it is hours. Narrowing the scope keeps the transaction to the rows
+// that actually changed. It applies only when the file already exists; creating
+// one always writes everything.
+struct SqliteWriteScope {
+    bool fields = true;          // field_record, vits_metrics, vbi, vitc, closed_caption, drop_outs
+    bool pictureMetrics = true;  // picture_metrics
+    bool decoderEvents = true;
+    bool segments = true;
+};
+
 class TbcMetaData
 {
 
@@ -353,6 +370,7 @@ public:
     void writeFields(JsonWriter &writer) const;
     void readFields(SqliteReader &reader, int captureId);
     void writeFields(SqliteWriter &writer, int captureId) const;
+    void writePictureMetrics(SqliteWriter &writer, int captureId) const;
 
     // The SQLite file is the canonical store and the JSON a projection of it.
     // Given a .tbc.json path whose .tbc.db sibling exists, returns the .db
@@ -369,7 +387,8 @@ public:
     // sibling exists or fileName named one, that JSON rewritten atomically as
     // a projection (<json>.tmp then rename). Returns the canonical (.db) path
     // written through *canonicalPath when given.
-    bool writeWithProjection(const QString &fileName, QString *canonicalPath = nullptr) const;
+    bool writeWithProjection(const QString &fileName, QString *canonicalPath = nullptr,
+                             const SqliteWriteScope &scope = SqliteWriteScope()) const;
 
     // Decoder events and segments (see the struct comments)
     const QVector<DecoderEvent> &getDecoderEvents() const;
@@ -459,7 +478,7 @@ private:
     void readSegments(SqliteReader &reader, int captureId);
     void writeSegments(SqliteWriter &writer, int captureId) const;
     bool writeJson(const QString &fileName) const;
-    bool writeSqlite(const QString &fileName) const;
+    bool writeSqlite(const QString &fileName, const SqliteWriteScope &scope = SqliteWriteScope()) const;
     QString effectiveDecoderName() const;
 };
 

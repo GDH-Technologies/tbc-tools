@@ -376,12 +376,8 @@ void TbcMetaData::Field::write(SqliteWriter &writer, int captureId) const
     vitc.write(writer, captureId, fieldId);
     closedCaption.write(writer, captureId, fieldId);
     dropOuts.write(writer, captureId, fieldId);
-    if (pictureMetrics.anyFinite()) {
-        writer.writeFieldPictureMetrics(captureId, fieldId, pictureMetrics.lumaMeanIre,
-                                        pictureMetrics.fieldDiffIre, pictureMetrics.blankingDevIre,
-                                        pictureMetrics.syncTipDevIre, pictureMetrics.noiseIre,
-                                        pictureMetrics.burstAmpIre);
-    }
+    // Picture metrics are written by TbcMetaData::writePictureMetrics, not here:
+    // a backfill needs to store them without touching any of the rows above.
 }
 
 // Read Vbi from JSON
@@ -1321,7 +1317,7 @@ QString TbcMetaData::effectiveDecoderName() const
 }
 
 // Write (create or update) the canonical SQLite file
-bool TbcMetaData::writeSqlite(const QString &fileName) const
+bool TbcMetaData::writeSqlite(const QString &fileName, const SqliteWriteScope &scope) const
 {
     // Check if we're updating an existing file or creating a new one
     bool isUpdate = QFileInfo::exists(fileName);
@@ -1483,13 +1479,17 @@ bool TbcMetaData::writeSqlite(const QString &fileName) const
             }
         }
 
-        // Write all fields
-        writeFields(writer, captureId);
+        // Creating a file always writes everything; the scope only narrows an
+        // update, where the untouched rows are already on disk and correct.
+        const SqliteWriteScope effective = isUpdate ? scope : SqliteWriteScope{};
+
+        if (effective.fields) writeFields(writer, captureId);
+        if (effective.pictureMetrics) writePictureMetrics(writer, captureId);
 
         // Decoder events and segments: replaced wholesale inside the same
         // transaction, so a rewrite of the same metadata is idempotent
-        writeDecoderEvents(writer, captureId);
-        writeSegments(writer, captureId);
+        if (effective.decoderEvents) writeDecoderEvents(writer, captureId);
+        if (effective.segments) writeSegments(writer, captureId);
 
         if (!writer.commitTransaction()) {
             qCritical() << "Failed to commit transaction";
@@ -1664,6 +1664,20 @@ void TbcMetaData::writeFields(SqliteWriter &writer, int captureId) const
 {
     for (const Field &field : fields) {
         field.write(writer, captureId);
+    }
+}
+
+// The picture_metrics rows for every field that has any. Separate from
+// writeFields so a metrics backfill can leave field_record, drop_outs and the
+// VBI tables alone: they are unchanged, and rewriting them is what makes a
+// backfill cost a full rewrite of the database.
+void TbcMetaData::writePictureMetrics(SqliteWriter &writer, int captureId) const
+{
+    for (const Field &field : fields) {
+        const PictureMetrics &m = field.pictureMetrics;
+        if (!m.anyFinite()) continue;
+        writer.writeFieldPictureMetrics(captureId, field.seqNo - 1, m.lumaMeanIre, m.fieldDiffIre,
+                                        m.blankingDevIre, m.syncTipDevIre, m.noiseIre, m.burstAmpIre);
     }
 }
 
@@ -2196,7 +2210,8 @@ void TbcMetaData::writeSegments(SqliteWriter &writer, int captureId) const
 }
 
 // Write SQLite-first: the canonical .tbc.db, then the JSON projection
-bool TbcMetaData::writeWithProjection(const QString &fileName, QString *canonicalPath) const
+bool TbcMetaData::writeWithProjection(const QString &fileName, QString *canonicalPath,
+                                      const SqliteWriteScope &scope) const
 {
     const bool namedJson = isJsonMetadataFilename(fileName);
     const QString dbPath = namedJson ? sqliteSiblingPath(fileName) : fileName;
@@ -2205,7 +2220,7 @@ bool TbcMetaData::writeWithProjection(const QString &fileName, QString *canonica
         return false;
     }
 
-    if (!writeSqlite(dbPath)) return false;
+    if (!writeSqlite(dbPath, scope)) return false;
 
     // The JSON projection: the named file when it was JSON, otherwise the
     // sibling only if one already exists (nothing conjures a JSON up)
