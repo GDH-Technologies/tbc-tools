@@ -1,0 +1,97 @@
+name: "Self-hosted CI guardrails (wm)"
+
+# Fork-exclusive. The fast, always-on check: actionlint over every workflow,
+# the CI contract checks, and the GDH version-scheme tests.
+#
+# This is what the fork runs instead of tests.yml, which is now
+# workflow_dispatch-only. tests.yml cost 15m26s per push, and 810s of that was
+# a "Full Linux build and test parity" job running exactly the command
+# self-hosted-linux.yml already runs on wm -- where the whole job, AppImage
+# packaging included, takes about four and a half minutes. Duplicating a Linux
+# build on a hosted runner bought nothing the fleet was not already doing
+# faster, on three platforms rather than one. So build and test coverage stays
+# in the platform workflows and only the guardrails live here.
+#
+# Deliberately UNFILTERED, unlike the platform workflows. It costs seconds, and
+# check_ci_contracts.py validates source files too -- src/ld-analyse's export
+# dialog, tbc-video-export's field-order helpers -- so a paths filter would
+# create blind spots. It is also the only workflow here eligible to be a
+# required status check: the path-gated ones produce no run at all for a PR
+# that touches none of their paths, and a required check that never runs blocks
+# a merge for ever.
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # head_ref || ref_name collapses the push and pull_request events for a
+  # branch into one group, so a push to a PR branch leaves one run rather than
+  # two. Cancelling is safe: this workflow only reports.
+  group: tbc-tools-guardrails-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  guardrails:
+    name: CI guardrails
+    runs-on: [self-hosted, Linux, X64, wm]
+    timeout-minutes: 20
+    # A forked PR must never execute on a workstation -- this repository is
+    # public. There is deliberately no from_deploy guard here, unlike the
+    # platform workflows: self-hosted-deploy.yml does not call this one, and it
+    # SHOULD run on a push to main.
+    if: >-
+      ${{ github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history and tags are required: ci/tests/test_gdh_version.py
+          # resolves versions with `git describe`, and a shallow checkout
+          # silently resolves the wrong base.
+          fetch-depth: 0
+          fetch-tags: true
+          # Submodules are NOT required. No contract-checked path lives in
+          # ezpwd or cc_decoder, and if that ever changes the required-files
+          # check in check_ci_contracts.py fails naming the exact missing path.
+          submodules: false
+
+      - name: Refresh tags
+        # The workspace may persist between runs, so a tag deleted or moved on
+        # the remote can linger locally and poison `git describe`. Same
+        # reasoning as the other self-hosted workflows.
+        run: git fetch --tags --prune --prune-tags --force origin
+
+      - name: Provision actionlint from nixpkgs
+        # ci/run_local_ci_parity.sh resolves actionlint as ACTIONLINT_BIN, then
+        # `command -v actionlint`, then downloads a release tarball from
+        # GitHub. Putting it on PATH removes that network fetch from every run
+        # and pins the version to nixpkgs rather than whatever is latest.
+        # --out-link, not --no-link: nix.conf has min-free/max-free auto-GC and
+        # would otherwise be free to collect it mid-run.
+        run: |
+          set -euo pipefail
+          TOOLS="$HOME/.cache/tbc-tools-selfhosted/tools"
+          mkdir -p "$TOOLS"
+          nix build nixpkgs#actionlint --out-link "$TOOLS/actionlint"
+          echo "$TOOLS/actionlint/bin" >> "$GITHUB_PATH"
+
+      - name: Run GDH version scheme unit tests
+        # Not covered by the parity script. This is the suite that keeps
+        # CMakeLists.txt's APP_VERSION block and scripts/gdh_version.py in
+        # agreement, by extracting the CMake block and running it under
+        # `cmake -P` against fixture repositories.
+        run: python3 -m unittest -v ci.tests.test_gdh_version
+
+      - name: Run CI guardrails
+        # actionlint over every workflow, the contract unit tests,
+        # check_ci_contracts.py, and a syntax check of verify_linux_bundle.sh.
+        run: bash ci/run_local_ci_parity.sh --guardrails-only

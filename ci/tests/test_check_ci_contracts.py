@@ -643,6 +643,27 @@ class ContractCoverageTests(unittest.TestCase):
             expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS))
         )
 
+    def test_guardrails_contract_keeps_it_unfiltered_and_complete(self) -> None:
+        # The fork's always-on check. A paths filter would both create contract
+        # blind spots (check_ci_contracts.py validates source files too) and
+        # destroy its one unique property: being the only workflow that can be
+        # a required status check, since every other one is path-gated and so
+        # can produce no run at all.
+        self.assertIn("paths:", check_ci_contracts.SELF_HOSTED_GUARDRAILS_FORBIDDEN_SNIPPETS)
+        expected = {
+            "bash ci/run_local_ci_parity.sh --guardrails-only",
+            # The one suite the parity script does not itself run.
+            "python3 -m unittest -v ci.tests.test_gdh_version",
+            "nix build nixpkgs#actionlint",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS))
+        )
+        self.assertTrue(
+            check_ci_contracts.SELF_HOSTED_GUARDRAILS_WORKFLOW.exists(),
+            "self-hosted-guardrails.yml is a required contract file",
+        )
+
     def test_version_bump_contract_requires_the_deploy_dispatch(self) -> None:
         # Silent failure mode: a bump pushes the tag and .gdh-version, reports
         # success, and the fleet quietly stays on the old version, because
