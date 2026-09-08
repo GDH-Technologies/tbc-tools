@@ -16,6 +16,11 @@ on:
     paths:
       - "src/**"
       - "ci/**"
+      # ...but not the guardrail-only files in it. These cannot change an
+      # artifact, and a contract edit should not cost a fleet rebuild. Order
+      # matters: a later pattern overrides an earlier one.
+      - "!ci/tests/**"
+      - "!ci/check_ci_contracts.py"
       - "scripts/**"
       - "CMakeLists.txt"
       - "CMakePresets.json"
@@ -63,6 +68,10 @@ jobs:
             common: &common
               - 'src/**'
               - 'ci/**'
+              # Guardrail-only files cannot change an artifact; see the push
+              # gate above. dorny/paths-filter honours '!' the same way.
+              - '!ci/tests/**'
+              - '!ci/check_ci_contracts.py'
               - 'scripts/**'
               - 'CMakeLists.txt'
               # In the shared anchor, so a version bump rebuilds and reinstalls

@@ -52,6 +52,11 @@ on:
     paths:
       - "src/**"
       - "ci/**"
+      # ...but not the guardrail-only files in it. These cannot change an
+      # artifact, and a contract edit should not cost a fleet rebuild. Order
+      # matters: a later pattern overrides an earlier one.
+      - "!ci/tests/**"
+      - "!ci/check_ci_contracts.py"
       - "scripts/**"
       - "CMakeLists.txt"
       - ".gdh-version"
@@ -63,6 +68,11 @@ on:
     paths:
       - "src/**"
       - "ci/**"
+      # ...but not the guardrail-only files in it. These cannot change an
+      # artifact, and a contract edit should not cost a fleet rebuild. Order
+      # matters: a later pattern overrides an earlier one.
+      - "!ci/tests/**"
+      - "!ci/check_ci_contracts.py"
       - "scripts/**"
       - "CMakeLists.txt"
       - ".gdh-version"
