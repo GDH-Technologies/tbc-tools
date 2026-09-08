@@ -113,7 +113,16 @@
         runtimeLibraryPath = pkgs.lib.optionalString isLinux (pkgs.lib.makeLibraryPath ([ onnxruntimePackage ] ++ cudaRuntimeDependencies));
       in
       let
-        packageVersion = "3.2.8";
+        # The GDH fork version. A Nix build never sees git tags -- flakes expose
+        # rev/revCount only, and .git is filtered out of src below -- so
+        # .gdh-version (written and committed by scripts/gdh_version.py at bump
+        # time) is the only thing here that knows it. Before the first bump the
+        # file does not exist and this falls back to upstream's own declared
+        # version, which is exactly what CMakeLists.txt would resolve anyway.
+        packageVersion =
+          if builtins.pathExists ./.gdh-version
+          then pkgs.lib.removeSuffix "\n" (builtins.readFile ./.gdh-version)
+          else (builtins.fromJSON (builtins.readFile ./vcpkg.json)).version;
         rev = if self ? rev then self.rev else "";
         shortRev = if self ? shortRev then self.shortRev else (if rev != "" then builtins.substring 0 7 rev else "unknown");
         dirtySuffix = if self ? dirtyRev then "-dirty" else "";
@@ -178,6 +187,10 @@
             cmakeFlags = [
               "-DCMAKE_BUILD_TYPE=Release"
               "-DEZPWD_DIR=${ezpwdSrc}/c++"
+              # Pin the version explicitly rather than letting CMake re-derive
+              # it, so the store path name and what the binaries report can
+              # never disagree.
+              "-DAPP_VERSION=${packageVersion}"
               "-DAPP_BRANCH=${branch}"
               "-DAPP_COMMIT=${nixCommit}"
               "-DLDCHROMA_ENABLE_CUDA=${if withCuda then "ON" else "OFF"}"

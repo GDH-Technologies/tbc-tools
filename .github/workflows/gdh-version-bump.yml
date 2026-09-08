@@ -2,10 +2,15 @@ name: "GDH version bump"
 
 # Cut a GDH fork version tag: v<upstream>-gdh-<major>.<minor>.
 #
-# The tag is the only source of truth for the GDH version -- no file is bumped
-# or committed. scripts/gdh_version.py scans Conventional Commits since the last
-# gdh tag to pick the level; this workflow just runs it somewhere with a
-# trustworthy set of tags.
+# The tag is the only INPUT for the GDH version: scripts/gdh_version.py scans
+# Conventional Commits since the last gdh tag to pick the level, and this
+# workflow just runs it somewhere with a trustworthy set of tags.
+#
+# The bump also commits .gdh-version to main and tags that commit. That file is
+# the version for consumers that cannot see tags -- a Nix build gets only the
+# tracked tree -- so it has to be pushed with the tag, not after it. This needs
+# main to accept a push from github-actions[bot]; if main is protected, grant
+# the bot an exception or the bump step will fail at the push.
 #
 # GDH tags are excluded from release.yml's trigger, so cutting one here does NOT
 # publish a GitHub Release or touch harrypm's release path.
@@ -88,14 +93,18 @@ jobs:
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push the tag
+      - name: Commit the version file and push the tag
         if: ${{ inputs.dry_run == false && steps.propose.outputs.proceed == 'true' }}
         env:
           LEVEL: ${{ inputs.level }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python3 scripts/gdh_version.py bump --level "$LEVEL" --push | tee -a "$GITHUB_STEP_SUMMARY"
+          # --branch is mandatory here: actions/checkout leaves HEAD detached,
+          # so the script cannot work out where the version commit belongs. The
+          # first step of this job has already refused anything but main.
+          python3 scripts/gdh_version.py bump --level "$LEVEL" --push --branch main \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Note that this was a dry run
         if: ${{ inputs.dry_run == true && steps.propose.outputs.proceed == 'true' }}
