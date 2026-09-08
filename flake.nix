@@ -156,6 +156,11 @@
               qt6.qtsvg
               fftw
               flacPackage
+              # flac's own flac-config.cmake does find_dependency(Ogg), and it
+              # is not satisfied by flac's closure alone. Without libogg here,
+              # Ogg::ogg resolves outside Nix. The sandbox hides that during
+              # `nix build`; the devShell below does not (see there).
+              libogg
               ffmpeg
               sqlite
               libGL
@@ -241,6 +246,16 @@
             qt6.qtsvg
             fftw
             flacPackage
+            # Required, not cosmetic. src/ld-lds-converter/CMakeLists.txt does
+            # find_package(FLAC CONFIG), and nixpkgs' flac-config.cmake then
+            # does find_dependency(Ogg). With no libogg in the shell that
+            # resolves to the host's /usr/lib64/libogg.so on a distro that has
+            # one, which puts `-Wl,-rpath,/usr/lib64` on the link line -- and
+            # ld then resolves the host libQt6DBus.so.6 / libglib-2.0.so.0
+            # against nix Qt, failing with a wall of Qt_6.11_PRIVATE_API and
+            # free_sized@GLIBC_2.43 undefined references. Reproduced on Fedora
+            # 44 (system Qt 6.11); invisible on a distro with no system Qt6.
+            libogg
             ffmpeg
             sqlite
             libGL
