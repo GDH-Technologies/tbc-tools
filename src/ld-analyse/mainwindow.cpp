@@ -5420,19 +5420,6 @@ void MainWindow::on_actionProcess_VBI_triggered()
     const bool reloadingCurrentSource = tbcSource.getIsSourceLoaded()
                                         && sameFilePath(inputFileName, tbcSource.getCurrentSourceFilename());
 
-    const QString autoTeletextDirectory = resolveTeletextHtmlDirectoryFromHints({
-        teletextOutputDirectory,
-        inputFileName,
-        metadataFilename
-    });
-    if (!autoTeletextDirectory.isEmpty()) {
-        if (!teletextViewerDialog) {
-            teletextViewerDialog = new TeletextViewerDialog(nullptr);
-            teletextViewerDialog->setConfiguration(&configuration);
-            teletextViewerDialog->setWindowFlag(Qt::Window, true);
-        }
-        if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
-            teletextViewerDialog->setDirectory(autoTeletextDirectory);
     // Only auto-open the teletext viewer when teletext was actually requested
     // and produced output.
     QString autoTeletextDirectory;
@@ -5445,6 +5432,7 @@ void MainWindow::on_actionProcess_VBI_triggered()
         if (!autoTeletextDirectory.isEmpty()) {
             if (!teletextViewerDialog) {
                 teletextViewerDialog = new TeletextViewerDialog(nullptr);
+                teletextViewerDialog->setConfiguration(&configuration);
                 teletextViewerDialog->setWindowFlag(Qt::Window, true);
             }
             if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
@@ -6135,6 +6123,7 @@ void MainWindow::on_actionTeletext_Viewer_triggered()
 {
     if (!teletextViewerDialog) {
         teletextViewerDialog = new TeletextViewerDialog(nullptr);
+        teletextViewerDialog->setConfiguration(&configuration);
         teletextViewerDialog->setWindowFlag(Qt::Window, true);
     }
     const QString suggestedDirectory = resolveTeletextHtmlDirectoryFromHints({
