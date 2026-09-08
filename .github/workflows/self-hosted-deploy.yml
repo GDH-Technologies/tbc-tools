@@ -22,6 +22,10 @@ on:
       - "vcpkg.json"
       - "flake.nix"
       - "flake.lock"
+      # A version bump is a commit whose only changed file is this one. Without
+      # it here the deploy that matters most for a release is the one that gets
+      # skipped, and the fleet keeps reporting the previous version.
+      - ".gdh-version"
       - ".github/workflows/self-hosted-*.yml"
   workflow_dispatch:
 
@@ -61,6 +65,9 @@ jobs:
               - 'ci/**'
               - 'scripts/**'
               - 'CMakeLists.txt'
+              # In the shared anchor, so a version bump rebuilds and reinstalls
+              # on all three boxes rather than none of them.
+              - '.gdh-version'
               - '.github/workflows/self-hosted-deploy.yml'
             linux:
               - *common

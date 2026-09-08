@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 
@@ -38,7 +39,7 @@ def run(binary: Path, db: Path, tbc: Path, *extra: str) -> str:
 
 def metrics(db: Path) -> dict[int, tuple]:
     """field_id -> (burst, luma, field_diff, blanking, sync_tip, noise)."""
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         rows = conn.execute(
             "SELECT field_id, burst_amp_ire, luma_mean_ire, field_diff_ire, "
             "blanking_dev_ire, sync_tip_dev_ire, noise_ire FROM picture_metrics "

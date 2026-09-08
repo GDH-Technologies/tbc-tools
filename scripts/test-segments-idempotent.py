@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 
@@ -37,7 +38,7 @@ def run(binary: Path, db: Path, tbc: Path) -> str:
 
 def inject_gap(db: Path) -> None:
     """Push the second half of the capture forward in the RF file."""
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         rows = conn.execute(
             "SELECT field_id, file_loc FROM field_record ORDER BY field_id"
         ).fetchall()
@@ -52,13 +53,13 @@ def inject_gap(db: Path) -> None:
 
 
 def event_count(db: Path) -> int:
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         return conn.execute("SELECT COUNT(*) FROM decoder_event").fetchone()[0]
 
 
 def restamp_commit(db: Path) -> None:
     """Make the stored rows look like they came from a different build."""
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:
         rows = conn.execute("SELECT event_id, detail_json FROM decoder_event").fetchall()
         for event_id, detail in rows:
             obj = json.loads(detail)

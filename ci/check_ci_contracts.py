@@ -328,6 +328,10 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # registers nothing with XDG.
     "decode-desktop-sync",
     "github:GDH-Technologies/tbc-tools",
+    # A version bump touches only .gdh-version. If it falls out of the gates,
+    # the release deploy is the one deploy that silently does not happen.
+    '".gdh-version"',
+    "'.gdh-version'",
     # The Windows swap must be atomic and must refuse a locked install dir.
     "Programs\\tbc-tools",
     "Refusing to deploy: tbc-tools is running from",

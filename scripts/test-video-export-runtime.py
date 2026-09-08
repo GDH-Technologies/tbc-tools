@@ -43,15 +43,28 @@ def main() -> int:
     build_dir = Path(args.build).resolve()
     source_dir = Path(args.source).resolve()
 
-    export_candidates = [
-        build_dir / "bin" / "tbc-video-export",
-        build_dir / "bin" / "tbc-video-export.exe",
-    ]
+    # On Windows only the .exe is runnable. build/bin/tbc-video-export also
+    # exists there -- it is the CMake-generated POSIX shell wrapper -- and
+    # handing that to CreateProcess fails with "WinError 193: %1 is not a valid
+    # Win32 application". The PyInstaller .exe is not built until packaging, so
+    # in a Windows build tree there is usually nothing to run and we skip.
+    if sys.platform == "win32":
+        export_candidates = [build_dir / "bin" / "tbc-video-export.exe"]
+    else:
+        export_candidates = [
+            build_dir / "bin" / "tbc-video-export",
+            build_dir / "bin" / "tbc-video-export.exe",
+        ]
     export_tool = next(
         (candidate for candidate in export_candidates if candidate.is_file()),
         None,
     )
     if export_tool is None:
+        if sys.platform == "win32":
+            return skip(
+                "tbc-video-export.exe not in build/bin; the PyInstaller binary "
+                "is only produced during packaging."
+            )
         return skip("tbc-video-export binary not found in build/bin.")
 
     ffprobe_path = shutil.which("ffprobe")
