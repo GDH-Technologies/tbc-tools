@@ -20,6 +20,7 @@ SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml
 SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
 ACTIONLINT_CONFIG = ROOT / ".github/actionlint.yaml"
 GDH_VERSION_BUMP_WORKFLOW = ROOT / ".github/workflows/gdh-version-bump.yml"
+SELF_HOSTED_GUARDRAILS_WORKFLOW = ROOT / ".github/workflows/self-hosted-guardrails.yml"
 CUDA_PLUGIN_PACKAGE_SCRIPT = ROOT / "scripts/cuda-plugin-package.sh"
 WINDOWS_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-windows.txt"
 LINUX_BUILD_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-linux.txt"
@@ -357,6 +358,11 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # the release deploy is the one deploy that silently does not happen.
     '".gdh-version"',
     "'.gdh-version'",
+    # Resolve the smoke-test binaries from the store path just installed, not
+    # from PATH. The PATH form passed on wm and failed on air0 for a deploy
+    # that had entirely succeeded, because that runner has no nix profile bin
+    # on PATH.
+    "awk '/^Store paths:/ { print $3; exit }'",
     # The Windows swap must be atomic and must refuse a locked install dir.
     "Programs\\tbc-tools",
     "Refusing to deploy: tbc-tools is running from",
@@ -404,6 +410,28 @@ GDH_VERSION_BUMP_REQUIRED_SNIPPETS = (
 )
 
 
+# The fork's always-on check, replacing tests.yml on push/PR. Everything here
+# is load-bearing in a way that is silent if lost: an added paths filter would
+# create contract blind spots and make it useless as a required check;
+# test_gdh_version is the one suite run_local_ci_parity.sh does NOT run, and it
+# is what keeps CMakeLists.txt's APP_VERSION block and scripts/gdh_version.py
+# in agreement; and provisioning actionlint stops the parity script falling
+# back to downloading a release tarball on every run.
+SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS = (
+    "runs-on: [self-hosted, Linux, X64, wm]",
+    "bash ci/run_local_ci_parity.sh --guardrails-only",
+    "python3 -m unittest -v ci.tests.test_gdh_version",
+    "nix build nixpkgs#actionlint",
+    "git fetch --tags --prune --prune-tags --force origin",
+)
+# It must stay unfiltered. `paths:` appearing at all would mean it had been
+# gated, which is the one change that breaks both its coverage and its
+# eligibility as a required status check.
+SELF_HOSTED_GUARDRAILS_FORBIDDEN_SNIPPETS = (
+    "paths:",
+)
+
+
 # Keep AGENTS hard rules aligned with CI-enforced guardrails.
 AGENTS_HARD_RULE_REQUIRED_SNIPPETS = (
     "Hard rule: Windows dedicated cache repo pushes must clear checkout-injected github.com auth headers before pull/push",
@@ -411,6 +439,7 @@ AGENTS_HARD_RULE_REQUIRED_SNIPPETS = (
     "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",
     "Hard rule: the self-hosted deploy must never disturb the developer's working tree",
     "Hard rule: self-hosted runners have persistent disks, not persistent workspaces",
+    "Hard rule: the guardrails workflow stays unfiltered and is the only viable required check",
 )
 
 # ld-analyse must route all deinterlace/proxy output through tbc-video-export web profiles
@@ -610,6 +639,7 @@ def main() -> int:
         SELF_HOSTED_DEPLOY_WORKFLOW,
         ACTIONLINT_CONFIG,
         GDH_VERSION_BUMP_WORKFLOW,
+        SELF_HOSTED_GUARDRAILS_WORKFLOW,
     ):
         if not required_file.exists():
             errors.append(f"missing required file: {required_file}")
@@ -660,6 +690,10 @@ def main() -> int:
         check_contains(ACTIONLINT_CONFIG, snippet, errors)
     for snippet in GDH_VERSION_BUMP_REQUIRED_SNIPPETS:
         check_contains(GDH_VERSION_BUMP_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_GUARDRAILS_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_GUARDRAILS_FORBIDDEN_SNIPPETS:
+        check_not_contains(SELF_HOSTED_GUARDRAILS_WORKFLOW, snippet, errors)
 
     for snippet in BUNDLE_VERIFY_REQUIRED_SNIPPETS:
         check_contains(BUNDLE_VERIFY_SCRIPT, snippet, errors)

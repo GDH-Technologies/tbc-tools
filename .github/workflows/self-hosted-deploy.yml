@@ -216,10 +216,37 @@ jobs:
           fi
 
       - name: Smoke test and report
+        # Resolve the binaries from the store path that was just installed,
+        # not from PATH. The PATH form passed on wm and failed on air0 for a
+        # deploy that had entirely succeeded: `command -v ld-analyse` returned
+        # nothing in 30ms because the runner service there does not have the
+        # nix profile's bin on PATH. That is a property of the runner's
+        # environment, not of the deployment, and it must not fail a good
+        # deploy -- so it is reported below as a warning instead.
+        #
+        # Reading the store path also makes this a stronger check: it exercises
+        # exactly the artifact this job installed rather than whatever the
+        # shell happens to find.
         run: |
           set -euo pipefail
-          command -v ld-analyse
-          tbc-video-export --version
+          STORE="$(awk '/^Store paths:/ { print $3; exit }' "$RUNNER_TEMP/profile.txt")"
+          if [ -z "$STORE" ]; then
+            echo "Could not read the installed store path from nix profile list." >&2
+            exit 1
+          fi
+          echo "Installed store path: $STORE"
+          if [ ! -x "$STORE/bin/ld-analyse" ]; then
+            echo "Missing $STORE/bin/ld-analyse in the installed closure." >&2
+            exit 1
+          fi
+          "$STORE/bin/tbc-video-export" --version
+
+          # Non-fatal: says whether an ordinary shell on this box would find
+          # the tools, which is what actually bit air0.
+          if ! command -v ld-analyse >/dev/null 2>&1; then
+            echo "::warning::ld-analyse is installed but not on PATH for this runner;" \
+                 "add the nix profile's bin directory to the service environment."
+          fi
           {
             echo "## wm deploy"
             echo ""
@@ -271,10 +298,37 @@ jobs:
           fi
 
       - name: Smoke test and report
+        # Resolve the binaries from the store path that was just installed,
+        # not from PATH. The PATH form passed on wm and failed on air0 for a
+        # deploy that had entirely succeeded: `command -v ld-analyse` returned
+        # nothing in 30ms because the runner service there does not have the
+        # nix profile's bin on PATH. That is a property of the runner's
+        # environment, not of the deployment, and it must not fail a good
+        # deploy -- so it is reported below as a warning instead.
+        #
+        # Reading the store path also makes this a stronger check: it exercises
+        # exactly the artifact this job installed rather than whatever the
+        # shell happens to find.
         run: |
           set -euo pipefail
-          command -v ld-analyse
-          tbc-video-export --version
+          STORE="$(awk '/^Store paths:/ { print $3; exit }' "$RUNNER_TEMP/profile.txt")"
+          if [ -z "$STORE" ]; then
+            echo "Could not read the installed store path from nix profile list." >&2
+            exit 1
+          fi
+          echo "Installed store path: $STORE"
+          if [ ! -x "$STORE/bin/ld-analyse" ]; then
+            echo "Missing $STORE/bin/ld-analyse in the installed closure." >&2
+            exit 1
+          fi
+          "$STORE/bin/tbc-video-export" --version
+
+          # Non-fatal: says whether an ordinary shell on this box would find
+          # the tools, which is what actually bit air0.
+          if ! command -v ld-analyse >/dev/null 2>&1; then
+            echo "::warning::ld-analyse is installed but not on PATH for this runner;" \
+                 "add the nix profile's bin directory to the service environment."
+          fi
           {
             echo "## air0 deploy"
             echo ""

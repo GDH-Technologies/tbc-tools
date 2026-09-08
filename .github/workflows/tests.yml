@@ -1,9 +1,16 @@
 name: Tests
 
+# On this fork every trigger but workflow_dispatch is gone. The per-push
+# guardrails moved to self-hosted-guardrails.yml, which runs the same checks on
+# wm in seconds; this workflow was costing 15m26s a push, 810s of it a "Full
+# Linux build and test parity" job running the very command
+# self-hosted-linux.yml already runs on the fleet. Tag pushes still reach the
+# full release pipeline directly through release.yml, which is untouched.
+#
+# The file stays rather than being deleted: it is shared with harrypm, it is a
+# contract-required file, and it still carries the reusable release.yml call
+# that a hard rule in AGENTS.md mandates.
 on:
-  push:
-  pull_request:
-  release:
   workflow_dispatch:
 
 concurrency:
