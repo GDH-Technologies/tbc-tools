@@ -313,11 +313,17 @@ jobs:
       - name: Refresh tags
         # If the workspace persisted, a tag deleted or moved on the remote can
         # linger locally and poison `git describe`. That matters more here than
-        # anywhere else: Windows is the only platform whose build sees .git, so
-        # it is the only one where CMakeLists.txt resolves the real
-        # <upstream>-gdh-<major>.<minor> APP_VERSION rather than falling back to
-        # vcpkg.json. (flake.nix strips .git, so the Nix-built Linux and macOS
-        # artifacts report the plain upstream version -- same as hosted.)
+        # anywhere else: this is the platform whose SHIPPED build sees .git, so
+        # CMakeLists.txt resolves the real <upstream>-gdh-<major>.<minor>
+        # APP_VERSION from the tag rather than falling back to vcpkg.json.
+        #
+        # The Nix-built Linux and macOS artifacts cannot do that -- flake.nix
+        # filters .git out of the build source -- so today they report the plain
+        # upstream version. Do not read that as permanent: the .gdh-version file
+        # exists to carry the version across the sandbox boundary, and once the
+        # flake feeds it to -DAPP_VERSION all three platforms agree again. This
+        # tag refresh stays correct either way, because Windows resolves from
+        # the tag rather than from that file.
         run: git fetch --tags --prune --prune-tags --force origin
 
       - name: Report toolchain and version

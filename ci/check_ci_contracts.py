@@ -217,6 +217,13 @@ SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
     # occupy it. "src/**" appears only inside those paths: blocks.
     '"src/**"',
+    # .gdh-version belongs in every platform gate too, not just the deploy's.
+    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
+    # so changing it changes the artifact; on Windows the version comes from the
+    # tag instead, but a bump commit still changes what that build stamps.
+    # Without this the "PR build set == redeploy set" claim in each file's own
+    # trigger comment is merely stated, not enforced.
+    '".gdh-version"',
     "runs-on: [self-hosted, Linux, X64, wm]",
     "workflow_call:",
     "permissions:\n  contents: read",
@@ -243,6 +250,13 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
     # occupy it. "src/**" appears only inside those paths: blocks.
     '"src/**"',
+    # .gdh-version belongs in every platform gate too, not just the deploy's.
+    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
+    # so changing it changes the artifact; on Windows the version comes from the
+    # tag instead, but a bump commit still changes what that build stamps.
+    # Without this the "PR build set == redeploy set" claim in each file's own
+    # trigger comment is merely stated, not enforced.
+    '".gdh-version"',
     "runs-on: [self-hosted, macOS, ARM64, air0]",
     "workflow_call:",
     "permissions:\n  contents: read",
@@ -262,6 +276,13 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
     # occupy it. "src/**" appears only inside those paths: blocks.
     '"src/**"',
+    # .gdh-version belongs in every platform gate too, not just the deploy's.
+    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
+    # so changing it changes the artifact; on Windows the version comes from the
+    # tag instead, but a bump commit still changes what that build stamps.
+    # Without this the "PR build set == redeploy set" claim in each file's own
+    # trigger comment is merely stated, not enforced.
+    '".gdh-version"',
     "runs-on: [self-hosted, Windows, X64, win0]",
     "workflow_call:",
     "permissions:\n  contents: read",

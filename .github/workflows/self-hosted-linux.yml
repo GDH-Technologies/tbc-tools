@@ -126,9 +126,16 @@ jobs:
 
       - name: Refresh tags
         # If the workspace persisted, a tag deleted or moved on the remote can
-        # linger locally and poison `git describe` -- which is what
-        # CMakeLists.txt derives APP_VERSION from. Same reasoning as
+        # linger locally and poison `git describe`. Same reasoning as
         # gdh-version-bump.yml.
+        #
+        # Which build that matters to is worth being precise about: the
+        # in-tree configure below (ci/run_local_ci_parity.sh runs
+        # `cmake -S . -B build`, so .git is present) does reach CMakeLists.txt's
+        # git-describe tier, and that is the binary ctest exercises. The shipped
+        # AppImage does not -- it comes from `nix build .#`, whose sandbox has
+        # no .git at all, which is why Nix-built artifacts fall through to the
+        # version in vcpkg.json.
         run: git fetch --tags --prune --prune-tags --force origin
 
       - name: Report toolchain and version
