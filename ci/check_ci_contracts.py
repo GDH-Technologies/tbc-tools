@@ -19,6 +19,7 @@ SELF_HOSTED_MACOS_WORKFLOW = ROOT / ".github/workflows/self-hosted-macos.yml"
 SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml"
 SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
 ACTIONLINT_CONFIG = ROOT / ".github/actionlint.yaml"
+GDH_VERSION_BUMP_WORKFLOW = ROOT / ".github/workflows/gdh-version-bump.yml"
 CUDA_PLUGIN_PACKAGE_SCRIPT = ROOT / "scripts/cuda-plugin-package.sh"
 WINDOWS_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-windows.txt"
 LINUX_BUILD_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-linux.txt"
@@ -344,7 +345,10 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # discard work in the developer's checkout.
     "merge --ff-only",
     "nix profile upgrade tbc-tools",
-    'grep -q "rev=$GITHUB_SHA"',
+    # Matched on the Locked flake URL line, not a `rev=` prefix: wm's git+file
+    # lock has `rev=<sha>` but air0's github: lock is `github:owner/repo/<sha>`,
+    # so a `rev=`-anchored check could never pass on macOS.
+    'grep -q "Locked flake URL:.*$GITHUB_SHA"',
     # INSTALL.md makes this required after an upgrade: a nix profile install
     # registers nothing with XDG.
     "decode-desktop-sync",
@@ -383,6 +387,20 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     "- wm",
     "- air0",
     "- win0",
+)
+
+
+# A version bump must ask for the deploy, not rely on its push to cause one.
+# GitHub does not create workflow runs for pushes made with GITHUB_TOKEN, so
+# although .gdh-version sits in self-hosted-deploy.yml's paths filter, the
+# bump's own push can never trigger it -- cutting v3.2.8-gdh-1.0 produced zero
+# runs and left the fleet on the previous version, with the bump reporting
+# success. workflow_dispatch is one of the documented exceptions to that rule.
+# The failure mode is silent, so pin the dispatch and the permission it needs.
+GDH_VERSION_BUMP_REQUIRED_SNIPPETS = (
+    "runs-on: [self-hosted, Linux, X64, wm]",
+    "gh workflow run self-hosted-deploy.yml",
+    "actions: write",
 )
 
 
@@ -591,6 +609,7 @@ def main() -> int:
         SELF_HOSTED_WINDOWS_WORKFLOW,
         SELF_HOSTED_DEPLOY_WORKFLOW,
         ACTIONLINT_CONFIG,
+        GDH_VERSION_BUMP_WORKFLOW,
     ):
         if not required_file.exists():
             errors.append(f"missing required file: {required_file}")
@@ -639,6 +658,8 @@ def main() -> int:
             check_not_contains(workflow, snippet, errors)
     for snippet in ACTIONLINT_CONFIG_REQUIRED_SNIPPETS:
         check_contains(ACTIONLINT_CONFIG, snippet, errors)
+    for snippet in GDH_VERSION_BUMP_REQUIRED_SNIPPETS:
+        check_contains(GDH_VERSION_BUMP_WORKFLOW, snippet, errors)
 
     for snippet in BUNDLE_VERIFY_REQUIRED_SNIPPETS:
         check_contains(BUNDLE_VERIFY_SCRIPT, snippet, errors)

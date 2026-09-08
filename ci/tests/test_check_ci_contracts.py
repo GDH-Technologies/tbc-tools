@@ -635,12 +635,30 @@ class ContractCoverageTests(unittest.TestCase):
             "merge --ff-only",
             "fetch --no-tags origin main:main",
             "nix profile upgrade tbc-tools",
-            'grep -q "rev=$GITHUB_SHA"',
+            'grep -q "Locked flake URL:.*$GITHUB_SHA"',
             "decode-desktop-sync",
             "Refusing to deploy: tbc-tools is running from",
         }
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS))
+        )
+
+    def test_version_bump_contract_requires_the_deploy_dispatch(self) -> None:
+        # Silent failure mode: a bump pushes the tag and .gdh-version, reports
+        # success, and the fleet quietly stays on the old version, because
+        # GitHub does not create runs for GITHUB_TOKEN pushes. The dispatch is
+        # the only thing that closes that gap, and workflow_dispatch is exempt
+        # from the rule -- so it has to stay, along with actions: write.
+        expected = {
+            "gh workflow run self-hosted-deploy.yml",
+            "actions: write",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.GDH_VERSION_BUMP_REQUIRED_SNIPPETS))
+        )
+        self.assertTrue(
+            check_ci_contracts.GDH_VERSION_BUMP_WORKFLOW.exists(),
+            "gdh-version-bump.yml is a required contract file",
         )
 
     def test_agents_hard_rules_include_self_hosted_guards(self) -> None:

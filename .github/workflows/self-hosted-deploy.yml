@@ -16,6 +16,11 @@ on:
     paths:
       - "src/**"
       - "ci/**"
+      # ...but not the guardrail-only files in it. These cannot change an
+      # artifact, and a contract edit should not cost a fleet rebuild. Order
+      # matters: a later pattern overrides an earlier one.
+      - "!ci/tests/**"
+      - "!ci/check_ci_contracts.py"
       - "scripts/**"
       - "CMakeLists.txt"
       - "CMakePresets.json"
@@ -63,6 +68,10 @@ jobs:
             common: &common
               - 'src/**'
               - 'ci/**'
+              # Guardrail-only files cannot change an artifact; see the push
+              # gate above. dorny/paths-filter honours '!' the same way.
+              - '!ci/tests/**'
+              - '!ci/check_ci_contracts.py'
               - 'scripts/**'
               - 'CMakeLists.txt'
               # In the shared anchor, so a version bump rebuilds and reinstalls
@@ -180,12 +189,17 @@ jobs:
 
           nix profile upgrade tbc-tools
 
-          # The profile entry records `?ref=refs/heads/main&rev=<sha>`, so this
-          # proves the upgrade actually moved rather than silently no-opping.
+          # Prove the upgrade actually moved rather than silently no-opping.
+          # Match the commit on the Locked flake URL line rather than on a
+          # `rev=` prefix: nix renders a git+file lock as
+          # `...?ref=refs/heads/main&rev=<sha>` but a github: lock as
+          # `github:owner/repo/<sha>`, and the deploy-macos job below needs the
+          # same check to work against the second form.
           nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' > "$RUNNER_TEMP/profile.txt"
           cat "$RUNNER_TEMP/profile.txt"
-          if ! grep -q "rev=$GITHUB_SHA" "$RUNNER_TEMP/profile.txt"; then
-            echo "nix profile did not move to $GITHUB_SHA." >&2
+          if ! grep -q "Locked flake URL:.*$GITHUB_SHA" "$RUNNER_TEMP/profile.txt"; then
+            echo "wm profile is not at $GITHUB_SHA. Locked flake URL reads:" >&2
+            grep "Locked flake URL:" "$RUNNER_TEMP/profile.txt" >&2 || true
             exit 1
           fi
 
@@ -239,10 +253,20 @@ jobs:
             nix profile "$ADD" --refresh "$FLAKE_URL"
           fi
 
+          # air0's entry is a github: flake, which nix locks as
+          # `github:owner/repo/<sha>` -- no `rev=` anywhere in it. Matching the
+          # sha on the Locked flake URL line covers that and wm's git+file form
+          # alike.
           nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' > "$RUNNER_TEMP/profile.txt"
           cat "$RUNNER_TEMP/profile.txt"
-          if ! grep -q "rev=$GITHUB_SHA" "$RUNNER_TEMP/profile.txt"; then
-            echo "air0 profile did not resolve to $GITHUB_SHA (GitHub flake cache lag?)." >&2
+          if ! grep -q "Locked flake URL:.*$GITHUB_SHA" "$RUNNER_TEMP/profile.txt"; then
+            # Report what the entry actually says rather than guessing why. The
+            # first version of this check blamed "GitHub flake cache lag" for
+            # what was really its own bad pattern, on a deploy that had in fact
+            # succeeded -- a stale tarball cache is only one of the reasons this
+            # can trip, and the locked URL distinguishes them.
+            echo "air0 profile is not at $GITHUB_SHA. Locked flake URL reads:" >&2
+            grep "Locked flake URL:" "$RUNNER_TEMP/profile.txt" >&2 || true
             exit 1
           fi
 
