@@ -121,14 +121,24 @@ jobs:
         # system python3 is 3.14 under PEP 668. --out-link rather than
         # --no-link is load-bearing: /etc/nix/nix.conf has min-free/max-free
         # auto-GC, and without a GC root these can be collected mid-run.
+        #
+        # patchelfUnstable, not patchelf: nixpkgs#patchelf is 0.15.2, which
+        # predates support for packed relative relocations (DT_RELR) and
+        # silently corrupts any binary that uses them -- the rewritten file
+        # segfaults in call_init at load time. Fedora 44 builds with DT_RELR,
+        # so scripts/package-aaa-appimage.sh (which bundles the HOST's mono
+        # and its libs, unlike everything else here, which comes from the Nix
+        # store) produced an AAA AppImage whose mono died instantly. 0.18.0
+        # handles DT_RELR. Verified on the box: patched with 0.15.2 the
+        # bundled mono is rc=139, with 0.18.0 it reports its version.
         run: |
           set -euo pipefail
           TOOLS="$HOME/.cache/tbc-tools-selfhosted/tools"
           mkdir -p "$TOOLS"
-          for pkg in patchelf msbuild python311; do
+          for pkg in patchelfUnstable msbuild python311; do
             nix build "nixpkgs#$pkg" --out-link "$TOOLS/$pkg"
           done
-          echo "$TOOLS/patchelf/bin" >> "$GITHUB_PATH"
+          echo "$TOOLS/patchelfUnstable/bin" >> "$GITHUB_PATH"
           echo "PYTHON311=$TOOLS/python311/bin/python3.11" >> "$GITHUB_ENV"
           # msbuild is deliberately NOT put on $GITHUB_PATH. It is prepended
           # for the AAA source build only: package-aaa-appimage.sh resolves

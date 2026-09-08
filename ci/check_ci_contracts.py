@@ -228,6 +228,13 @@ SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
     # wm's Nix store is the user's shared multi-project store: every lookup must
     # be scoped to the closure of the build, never a store-wide scan.
     'nix-store -qR "$(readlink -f result)"',
+    # patchelfUnstable (0.18.0), never nixpkgs#patchelf (0.15.2). 0.15 predates
+    # DT_RELR and silently corrupts binaries that use it -- they segfault in
+    # call_init. Fedora 44 builds with DT_RELR, and package-aaa-appimage.sh
+    # bundles the HOST's mono and libs, so 0.15 produced an AAA AppImage whose
+    # mono died instantly.
+    "nixpkgs#$pkg",
+    "patchelfUnstable",
 )
 SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     "runs-on: [self-hosted, macOS, ARM64, air0]",
