@@ -268,6 +268,20 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     "VCPKG_BINARY_SOURCES=clear;files,",
     "pyinstaller\\build_windows.py",
     "import pywintypes, win32file, win32pipe",
+    # Qt does NOT come from vcpkg here. Compiling qtbase from source is the
+    # dominant cost of a cold Windows build (it drags in icu, harfbuzz,
+    # freetype, libpng, brotli, pcre2, zstd, double-conversion, openssl), so a
+    # prebuilt Qt is installed instead and vcpkg runs in classic mode over the
+    # remaining packages -- which is also what keeps the shared, Qt-bearing
+    # vcpkg.json untouched for the hosted job.
+    "-DVCPKG_MANIFEST_MODE=OFF",
+    "aqt install-qt",
+    # Pinned to the version vcpkg's own baseline was building (ports/qtbase
+    # 6.8.3) so swapping to prebuilt binaries is not also a silent Qt upgrade.
+    'QT_VERSION: "6.8.3"',
+    # windeployqt replaces the hosted job's hand-rolled Qt plugin copy: it reads
+    # each binary's imports and lays out exactly the DLLs and plugins it needs.
+    "windeployqt.exe",
     # BUILD_TESTING is ON here (hosted uses OFF) so ctest runs; the POSIX shell
     # tests are excluded and the test binaries are kept out of release\.
     "-DBUILD_TESTING=ON",

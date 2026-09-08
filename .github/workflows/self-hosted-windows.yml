@@ -5,17 +5,33 @@ name: "Self-hosted Windows build (win0)"
 #
 # Not a copy of build_windows_tools.yml: that file is shared with
 # harrypm/tbc-tools and must stay byte-identical so upstream merges never
-# conflict. The packaging steps below are ported from it; everything else is
-# dictated by what win0 actually is:
+# conflict. What it does is ported here; how it does it differs, because win0
+# is not a GitHub image and because the hosted job's biggest cost is avoidable.
 #
-#   * win0 is BARE. It has the runner agent and git, and nothing else that
-#     matters: no Visual Studio at all (no vswhere, no cl), `cmake` and `ninja`
-#     resolve to msys64/mingw64 builds, and `python` is the Microsoft Store
-#     redirector stub. So this workflow installs and shadows its own MSVC
-#     toolset, CMake and Python rather than assuming a hosted image's.
-#   * Everything it bootstraps lives in C:\ci-tools, OUTSIDE the workspace.
-#     actions/checkout runs `git clean -ffdx`, which is exactly why the hosted
-#     job's `.\vcpkg` clone location cannot be reused here.
+# The cost. Measured on the hosted job, ~all the wall clock is vcpkg compiling
+# dependencies -- and most of that is qtbase, which drags in icu, harfbuzz,
+# freetype, libpng, brotli, pcre2, zstd, double-conversion and openssl. So Qt
+# does not come from vcpkg here: it comes prebuilt from the Qt project via
+# aqtinstall, pinned to the same 6.8.3 the vcpkg baseline was building (and the
+# same version the Nix Linux/macOS builds use). vcpkg is left with fftw3,
+# libflac, ffmpeg and sqlite3, in classic mode so the shared vcpkg.json -- which
+# still lists Qt for the hosted job -- is untouched.
+#
+# Prebuilt Qt also brings windeployqt, which resolves the Qt DLLs and plugins a
+# binary actually needs. That replaces the hosted job's hand-rolled plugin copy.
+# CMakeLists.txt already supports this layout: stage_windows_qt_platform_runtime
+# falls back from the vcpkg <prefix>/Qt6/plugins layout to Qt::Core's imported
+# location, which is where an official Qt keeps its plugins.
+#
+# The rest is dictated by what win0 actually is:
+#
+#   * It is BARE. No Visual Studio at all (no vswhere, no cl), `cmake` and
+#     `ninja` resolve to msys64/mingw64 builds, and `python` is the Microsoft
+#     Store redirector stub. This workflow installs and shadows its own MSVC
+#     toolset, CMake, Python and Qt.
+#   * Everything it bootstraps lives in C:\ci-tools, OUTSIDE the workspace,
+#     because actions/checkout runs `git clean -ffdx`. That is also why the
+#     hosted job's `.\vcpkg` clone location cannot be reused.
 #   * No actions/cache. The disk persists, so the vcpkg binary cache is just a
 #     directory on the box. None of the hosted job's cross-repo cache machinery
 #     comes along -- no checkout of the upstream CI cache repository, no chunked
@@ -23,9 +39,8 @@ name: "Self-hosted Windows build (win0)"
 #     repository, and this workflow needs no secret beyond the default token.
 #   * x86_64 only: win0 is x64, so the hosted arm64 matrix leg goes away, and
 #     with it the gas-preprocessor.pl pre-fetch that only arm64 ffmpeg needs.
-#   * -DBUILD_TESTING=ON (hosted uses OFF) so ctest runs here. The two POSIX
-#     shell tests are excluded, and the test binaries are filtered out of the
-#     release copy.
+#   * -DBUILD_TESTING=ON (hosted uses OFF) so ctest runs. The POSIX shell tests
+#     are excluded and the test binaries are filtered out of the release copy.
 
 on:
   pull_request:
@@ -61,6 +76,15 @@ env:
   VCPKG_BINARY_CACHE_DIR: 'C:\ci-tools\vcpkg-binary-cache\x64-windows'
   VCPKG_COMMIT: "d30fdf55cfca16e12bc3ad99cbc615997014b61b"
   VCPKG_TRIPLET: "x64-windows"
+  # Everything vcpkg still builds here. Qt is deliberately absent -- see the
+  # header. Keep this in step with the non-Qt entries of the shared vcpkg.json.
+  VCPKG_PACKAGES: "fftw3 libflac ffmpeg sqlite3"
+  # The version vcpkg's pinned baseline was compiling (ports/qtbase 6.8.3), so
+  # switching to a prebuilt Qt is not also a Qt upgrade. It is likewise the
+  # version the flake pins for the Linux and macOS builds.
+  QT_VERSION: "6.8.3"
+  QT_ARCH: "win64_msvc2022_64"
+  QT_DIR_NAME: "msvc2022_64"
   # Pinned to CMake 3.x: fftw3 does not yet support CMake 4.x. Same pin the
   # hosted job gets from jwlawson/actions-setup-cmake.
   CMAKE_VERSION: "3.31.6"
@@ -143,6 +167,7 @@ jobs:
             throw "MSVC x64 toolset unavailable on win0. Install VS 2022 Build Tools manually and re-run."
           }
           Write-Host "Using Visual Studio at: $vs"
+          "VS_INSTALL_PATH=$vs" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Ensure pinned CMake
         # win0's `cmake` on PATH is msys64/mingw64's. Prepend our own pinned
@@ -185,10 +210,40 @@ jobs:
           $py           | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "$py\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Ensure prebuilt Qt
+        # The whole point of the refactor. Compiling qtbase from source under
+        # vcpkg is the dominant cost of a cold Windows build -- it pulls in icu,
+        # harfbuzz, freetype, libpng, brotli, pcre2, zstd, double-conversion and
+        # openssl behind it. The Qt project ships binaries for exactly this
+        # toolchain; take those instead, pinned to the version vcpkg's baseline
+        # was building so this is not also a Qt upgrade.
+        #
+        # qtbase covers Core, Gui, Widgets, Sql and Network; qtsvg is the one
+        # extra module CMakeLists.txt asks for.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $qtRoot = "$env:TOOLS_ROOT\Qt"
+          $qtDir  = "$qtRoot\$env:QT_VERSION\$env:QT_DIR_NAME"
+          if (-not (Test-Path "$qtDir\bin\windeployqt.exe")) {
+            python -m pip install --upgrade aqtinstall
+            if ($LASTEXITCODE -ne 0) { throw "aqtinstall install failed" }
+            python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -m qtsvg -O $qtRoot
+            if ($LASTEXITCODE -ne 0) { throw "aqt install-qt failed" }
+          }
+          foreach ($probe in @("$qtDir\bin\windeployqt.exe",
+                               "$qtDir\bin\Qt6Core.dll",
+                               "$qtDir\bin\Qt6Svg.dll",
+                               "$qtDir\plugins\platforms\qwindows.dll",
+                               "$qtDir\plugins\sqldrivers\qsqlite.dll")) {
+            if (-not (Test-Path $probe)) { throw "Qt install incomplete: missing $probe" }
+          }
+          Write-Host "Using Qt $env:QT_VERSION at $qtDir"
+          "QT_DIR=$qtDir"   | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$qtDir\bin"      | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Reset stale build output
         run: |
           Remove-Item -Recurse -Force build, release -ErrorAction SilentlyContinue
-          Remove-Item -Force ffmpeg.zip, flac.zip -ErrorAction SilentlyContinue
 
       - uses: actions/checkout@v5
         with:
@@ -211,6 +266,7 @@ jobs:
         run: |
           cmake --version
           python --version
+          Write-Host "Qt: $env:QT_DIR"
           git describe --tags --long --abbrev=8 --match "v*-gdh-*" 2>$null
           if ($LASTEXITCODE -ne 0) { Write-Host "no gdh tag in range yet" }
           $global:LASTEXITCODE = 0
@@ -241,11 +297,29 @@ jobs:
           if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
             throw "vcpkg bootstrap did not produce vcpkg.exe"
           }
-          "RUNVCPKG_VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           # A plain directory on the persistent disk replaces both the hosted
           # job's actions/cache and its cross-repo cache checkout.
           "VCPKG_BINARY_SOURCES=clear;files,$env:VCPKG_BINARY_CACHE_DIR,readwrite" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install vcpkg dependencies (classic mode, no Qt)
+        # Classic mode rather than the shared manifest: vcpkg.json lists Qt
+        # because the hosted job needs it there, and that file must stay
+        # byte-identical for upstream merges. Naming the packages here takes Qt
+        # out of the picture without touching it. Still fully pinned -- the
+        # vcpkg checkout is at VCPKG_COMMIT, so these resolve to the same
+        # versions the manifest baseline would have used.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkgs = $env:VCPKG_PACKAGES -split '\s+' | Where-Object { $_ }
+          Write-Host "vcpkg install $($pkgs -join ' ') --triplet $env:VCPKG_TRIPLET"
+          & "$env:VCPKG_ROOT\vcpkg.exe" install @pkgs "--triplet=$env:VCPKG_TRIPLET"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          $installed = "$env:VCPKG_ROOT\installed\$env:VCPKG_TRIPLET"
+          if (-not (Test-Path "$installed\bin\sqlite3.dll")) {
+            throw "vcpkg install did not produce $installed\bin\sqlite3.dll"
+          }
+          "VCPKG_INSTALLED=$installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Ensure ONNX Runtime
         run: |
@@ -267,6 +341,8 @@ jobs:
           "ONNXRUNTIME_ROOT=$onnxRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Ensure FFmpeg and FLAC payloads
+        # The bundled ffmpeg.exe/ffprobe.exe end users invoke, distinct from the
+        # vcpkg ffmpeg the code links against.
         run: |
           $ErrorActionPreference = 'Stop'
           $ext = "$env:TOOLS_ROOT\external"
@@ -290,20 +366,25 @@ jobs:
       - name: Configure
         # The hosted job wraps this in lukka/run-cmake@v10; calling CMake
         # directly keeps the arguments visible in the log and drops an action
-        # dependency. BUILD_TESTING is ON here (hosted uses OFF) so ctest can
-        # run; the test binaries are filtered back out of the release copy.
+        # dependency. The preset supplies the vcpkg toolchain and the x64
+        # architecture; the extra args are what differ here:
+        #   VCPKG_MANIFEST_MODE=OFF  -- use the classic-mode installs above
+        #                               instead of the shared, Qt-bearing manifest
+        #   CMAKE_PREFIX_PATH        -- find the prebuilt Qt
+        #   BUILD_TESTING=ON         -- hosted uses OFF; ctest runs here
+        # The triplet argument MUST be quoted. Unquoted, PowerShell parses
+        # `-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET` with its `-Param:Value`
+        # colon-binding syntax and hands vcpkg the literal text, which fails
+        # with "Invalid triplet name ... on expression: $env:VCPKG_TRIPLET".
         run: |
           $ErrorActionPreference = 'Stop'
-          # The triplet argument MUST be quoted. Unquoted, PowerShell parses
-          # `-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET` with its `-Param:Value`
-          # colon-binding syntax and hands vcpkg the literal text, which fails
-          # with "Invalid triplet name ... on expression: $env:VCPKG_TRIPLET".
-          # Quoting forces ordinary string interpolation.
           cmake --preset vcpkg `
             -DCMAKE_BUILD_TYPE=Release `
             -DUSE_QT_VERSION=6 `
             -DBUILD_PYTHON=false `
+            -DVCPKG_MANIFEST_MODE=OFF `
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET" `
+            "-DCMAKE_PREFIX_PATH=$env:QT_DIR" `
             -DVCPKG_APPLOCAL_DEPS=ON `
             -DBUILD_TESTING=ON
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
@@ -321,22 +402,51 @@ jobs:
           ctest --test-dir build -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"
           if ($LASTEXITCODE -ne 0) { throw "ctest failed" }
 
-      - name: Create release directory
-        run: New-Item -ItemType Directory -Path release | Out-Null
-
-      - name: Copy binaries to release directory
-        # BUILD_TESTING=ON puts the ctest binaries in build\bin alongside the
-        # tools; they must not ship. The hosted job needs no such filter because
-        # it builds with BUILD_TESTING=OFF.
+      - name: Stage binaries into the release directory
+        # Top level of build\bin only. The hosted job copies *.exe/*.dll
+        # recursively, which flattens the staged Qt plugin subdirectories into
+        # the release root and then has to undo that; here windeployqt lays the
+        # plugins out properly a few steps down, and the vendor payloads are
+        # copied as trees below. BUILD_TESTING=ON also puts the ctest binaries
+        # in build\bin, and those must not ship.
         run: |
-          Get-ChildItem -Recurse -Path build\bin\* -Include *.exe, *.dll |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path release | Out-Null
+          Get-ChildItem -Path build\bin\* -Include *.exe, *.dll -File |
             Where-Object { $_.Name -notmatch '^test' } |
             Copy-Item -Destination release\
+          if (-not (Test-Path 'release\ld-analyse.exe')) {
+            throw "build\bin did not yield ld-analyse.exe"
+          }
+
+      - name: Deploy Qt runtime with windeployqt
+        # Replaces the hosted job's manual Qt plugin copy and qt.conf writer.
+        # windeployqt reads a binary's imports and brings exactly the Qt DLLs
+        # and plugins it needs, in the layout Qt expects relative to the exe.
+        #
+        # One call, against ld-analyse: CMakeLists.txt asks Qt for Core, Gui,
+        # Widgets, Sql, Svg and Network, and ld-analyse is the binary that uses
+        # all of them -- every CLI tool links a subset. Deploying the superset
+        # once covers the whole tree and avoids invoking windeployqt on a
+        # binary that turns out not to link Qt at all, which it treats as an
+        # error.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:QT_DIR\bin\windeployqt.exe" `
+            --release --no-translations --no-system-d3d-compiler --no-opengl-sw `
+            --dir release release\ld-analyse.exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          # windeployqt places plugins relative to --dir, which Qt finds on its
+          # own; qt.conf is written anyway so plugin discovery cannot fall back
+          # to Qt's compiled-in prefix (which does not exist off this machine).
+          Set-Content -Path release\qt.conf -Encoding ASCII -Value "[Paths]"
+          Add-Content -Path release\qt.conf -Encoding ASCII -Value "Prefix = ."
+          Add-Content -Path release\qt.conf -Encoding ASCII -Value "Plugins = ."
 
       - name: Copy AAA (Auto Audio Align) vendor payload to release directory
-        # The "Copy binaries" step flattens *.exe/*.dll to the release root, which
-        # breaks the AAA resolver path (<appDir>\vendor\vhs_decode_auto_audio_align\)
-        # that audioalignmentutil.cpp expects for ld-analyse/tbc-audio-align.
+        # audioalignmentutil.cpp resolves AAA at
+        # <appDir>\vendor\vhs_decode_auto_audio_align\ for ld-analyse and
+        # tbc-audio-align, so the tree has to keep that shape.
         run: |
           $ErrorActionPreference = 'Stop'
           $vendorSrc = "build\bin\vendor\vhs_decode_auto_audio_align"
@@ -349,11 +459,11 @@ jobs:
           Write-Host "Bundled AAA vendor payload to $vendorDst"
 
       - name: Copy vhs-teletext vendor payload to release directory
-        # Same reason as AAA: the flattening copy drops the vendored Python tree
-        # that teletextintegration.cpp resolves at <appDir>\vendor\vhs-teletext
-        # (validated by the presence of teletext\__main__.py). Without it,
-        # ld-process-vbi's --teletext-html-dir export fails with "Could not
-        # locate vendored vhs-teletext runtime directory."
+        # teletextintegration.cpp's resolveTeletextVendorDirectory() looks for
+        # <appDir>\vendor\vhs-teletext and validates it by the presence of
+        # teletext\__main__.py. Without it, ld-process-vbi's --teletext-html-dir
+        # export fails with "Could not locate vendored vhs-teletext runtime
+        # directory."
         run: |
           $ErrorActionPreference = 'Stop'
           $vendorSrc = "build\bin\vendor\vhs-teletext"
@@ -380,94 +490,36 @@ jobs:
           Get-ChildItem -Path $onnxLibDir -Filter "onnxruntime_providers_*.dll" -ErrorAction SilentlyContinue |
             Copy-Item -Destination release\
 
-      - name: Copy Qt plugins to release directory
-        run: Copy-Item -Recurse -Exclude *.pdb -Path build\vcpkg_installed\x64-windows\Qt6\plugins\* -Destination release\
-
-      - name: Write qt.conf for Qt plugin discovery
-        run: |
-          # The Windows release lays Qt plugins out flat (release\<category>\*.dll,
-          # e.g. release\platforms\qwindows.dll). Without a qt.conf Qt falls back
-          # to its compiled-in vcpkg prefix, which does not exist on end-user
-          # machines, and the platform plugin is not found -> "no Qt platform
-          # plugin could be initialized" (the classic Windows startup failure).
-          Set-Content -Path release\qt.conf -Encoding ASCII -Value "[Paths]"
-          Add-Content -Path release\qt.conf -Encoding ASCII -Value "Prefix = ."
-          Add-Content -Path release\qt.conf -Encoding ASCII -Value "Plugins = ."
-
       - name: Copy MSVC runtime DLLs to release directory
-        # The executables dynamically import VCRUNTIME140.dll / VCRUNTIME140_1.dll
-        # (and MSVCP140.dll), but vcpkg does not redistribute the CRT next to the
-        # binaries, so a clean Windows machine without the VC++ redistributable
-        # gets "VCRUNTIME140.dll was not found". Prefer the desktop (non-onecore)
-        # VC143 CRT with the highest version: bundling a VC142 CRT with
-        # VC143-built binaries is an ABI mismatch that crashes the GUI at startup
-        # (STATUS_DLL_INIT_FAILED 0xC0000142 inside MSVCP140.dll).
+        # The executables import VCRUNTIME140.dll / VCRUNTIME140_1.dll and
+        # MSVCP140.dll, but neither vcpkg nor windeployqt redistributes the CRT,
+        # so a clean machine without the VC++ redistributable gets
+        # "VCRUNTIME140.dll was not found".
+        #
+        # The hosted job finds these with two `Get-ChildItem -Recurse` sweeps of
+        # the entire VS install -- ~40s of the run. vswhere already told us the
+        # install path, and the redist lives at a known place under it, so glob
+        # that directly. Still prefer the highest-versioned desktop (non-onecore)
+        # VC143 CRT: bundling a VC142 CRT with VC143-built binaries is an ABI
+        # mismatch that crashes the GUI at startup (STATUS_DLL_INIT_FAILED
+        # 0xC0000142 inside MSVCP140.dll).
         run: |
           $ErrorActionPreference = 'Stop'
-          $redistRoots = @("C:\Program Files\Microsoft Visual Studio\2022",
-                           "C:\Program Files (x86)\Microsoft Visual Studio\2022")
-          $candidates = @()
-          foreach ($root in $redistRoots) {
-            if (-not (Test-Path $root)) { continue }
-            $candidates += Get-ChildItem -Path $root -Recurse -ErrorAction SilentlyContinue -Filter "vcruntime140.dll" |
-              Where-Object { $_.FullName -match "\\x64\\Microsoft\.VC[0-9]+\.CRT\\" }
+          $redistGlob = Join-Path $env:VS_INSTALL_PATH 'VC\Redist\MSVC\*\x64\Microsoft.VC143.CRT'
+          $crtDir = Get-ChildItem -Path $redistGlob -Directory -ErrorAction SilentlyContinue |
+            Sort-Object -Descending { [version]($_.Parent.Parent.Name) } |
+            Select-Object -First 1
+          if (-not $crtDir) {
+            throw "VC143 CRT redist not found under $redistGlob"
           }
-          if ($candidates.Count -eq 0) { throw "MSVC CRT directory not found under VS 2022 redist for arch x64" }
-          $hit = $candidates | Where-Object { $_.FullName -match 'Microsoft\.VC143\.CRT' -and $_.FullName -notmatch '\\onecore\\' } | Sort-Object -Descending { [version]$_.VersionInfo.FileVersion } | Select-Object -First 1
-          if (-not $hit) {
-            $hit = $candidates | Where-Object { $_.FullName -match 'Microsoft\.VC143\.CRT' } | Sort-Object -Descending { [version]$_.VersionInfo.FileVersion } | Select-Object -First 1
-          }
-          if (-not $hit) {
-            $hit = $candidates | Sort-Object -Descending { [version]$_.VersionInfo.FileVersion } | Select-Object -First 1
-            Write-Warning "VS 2022 (VC143) MSVC CRT not found for arch x64; using newest available: $($hit.FullName)"
-          }
-          $crtDir = Split-Path $hit.FullName
-          Write-Host "Using MSVC CRT from: $crtDir (vcruntime140.dll $((Get-Item (Join-Path $crtDir 'vcruntime140.dll')).VersionInfo.FileVersion))"
+          Write-Host "Using MSVC CRT from: $($crtDir.FullName)"
           foreach ($dll in @("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")) {
-            $src = Join-Path $crtDir $dll
+            $src = Join-Path $crtDir.FullName $dll
             if (Test-Path $src) { Copy-Item -Path $src -Destination release\ }
-            else { Write-Warning "MSVC CRT $dll not found in $crtDir" }
+            else { Write-Warning "MSVC CRT $dll not found in $($crtDir.FullName)" }
           }
 
-      - name: Copy license files to release directory
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path release\LICENSES | Out-Null
-          "brotli", `
-          "bzip2", `
-          "double-conversion", `
-          "fftw3", `
-          "flac", `
-          "freetype", `
-          "getopt-win32", `
-          "harfbuzz", `
-          "icu", `
-          "libpng", `
-          "openssl", `
-          "pcre2", `
-          "qtbase", `
-          "sqlite3", `
-          "zlib", `
-          "zstd" | ForEach-Object {
-            $copyright = "build\vcpkg_installed\x64-windows\share\$($_)\copyright"
-            if (Test-Path $copyright) {
-              Copy-Item -Path $copyright -Destination release\LICENSES\copyright-$($_)
-            }
-          }
-          if (Test-Path release\LICENSES\copyright-qtbase) {
-            Rename-Item -Path release\LICENSES\copyright-qtbase -NewName copyright-qt6
-          }
-          if (Test-Path "$env:ONNXRUNTIME_ROOT\LICENSE") {
-            Copy-Item -Path "$env:ONNXRUNTIME_ROOT\LICENSE" -Destination release\LICENSES\copyright-onnxruntime
-          }
-
-      - name: Copy scripts to release directory (if they exist)
-        run: |
-          if (Test-Path ".\scripts\Windows\*.bat") {
-            Copy-Item .\scripts\Windows\*.bat -Destination release\
-          }
-
-      - name: Copy FFmpeg to release directory
+      - name: Copy FFmpeg and FLAC to release directory
         run: |
           $ErrorActionPreference = 'Stop'
           Copy-Item -Path "$env:FFMPEG_DIR\bin\ffmpeg.exe" -Destination release\
@@ -475,13 +527,47 @@ jobs:
             Copy-Item -Path "$env:FFMPEG_DIR\bin\ffprobe.exe" -Destination release\
           }
           Copy-Item -Path "$env:FFMPEG_DIR\bin\*.dll" -Destination release\
-          Copy-Item -Path "$env:FFMPEG_DIR\LICENSE" -Destination release\LICENSES\copyright-ffmpeg
+          Copy-Item -Path "$env:FLAC_DIR\Win64\*" -Destination release\
 
-      - name: Copy FLAC to release directory
+      - name: Copy sqlite runtime to release directory
         run: |
           $ErrorActionPreference = 'Stop'
-          Copy-Item -Path "$env:FLAC_DIR\Win64\*" -Destination release\
-          Copy-Item -Path "$env:FLAC_DIR\COPYING.GPL" -Destination release\LICENSES\copyright-flac
+          $sqliteDll = "$env:VCPKG_INSTALLED\bin\sqlite3.dll"
+          if (-not (Test-Path $sqliteDll)) { throw "sqlite3.dll not found at $sqliteDll" }
+          Copy-Item -Path $sqliteDll -Destination release\
+
+      - name: Copy scripts to release directory (if they exist)
+        run: |
+          if (Test-Path ".\scripts\Windows\*.bat") {
+            Copy-Item .\scripts\Windows\*.bat -Destination release\
+          }
+
+      - name: Copy license files to release directory
+        # vcpkg copyrights come from the classic-mode install tree now, and Qt's
+        # licence comes from the Qt install rather than a vcpkg port.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release\LICENSES | Out-Null
+          foreach ($pkg in @("fftw3", "flac", "ffmpeg", "sqlite3", "zlib", "bzip2", "zstd", "openssl")) {
+            $copyright = "$env:VCPKG_INSTALLED\share\$pkg\copyright"
+            if (Test-Path $copyright) {
+              Copy-Item -Path $copyright -Destination "release\LICENSES\copyright-$pkg"
+            }
+          }
+          $qtLicense = Get-ChildItem -Path "$env:QT_DIR\..\..\Licenses\LICENSE*" -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($qtLicense) { Copy-Item -Path $qtLicense.FullName -Destination release\LICENSES\copyright-qt6 }
+          else { Write-Warning "Qt licence file not found under $env:QT_DIR\..\..\Licenses" }
+          if (Test-Path "$env:ONNXRUNTIME_ROOT\LICENSE") {
+            Copy-Item -Path "$env:ONNXRUNTIME_ROOT\LICENSE" -Destination release\LICENSES\copyright-onnxruntime
+          }
+          if (Test-Path "$env:FFMPEG_DIR\LICENSE") {
+            Copy-Item -Path "$env:FFMPEG_DIR\LICENSE" -Destination release\LICENSES\copyright-ffmpeg-bundled
+          }
+          if (Test-Path "$env:FLAC_DIR\COPYING.GPL") {
+            Copy-Item -Path "$env:FLAC_DIR\COPYING.GPL" -Destination release\LICENSES\copyright-flac-bundled
+          }
+          Copy-Item -Path .\LICENSE -Destination release\LICENSES\copyright-tbc-tools
 
       - name: Build and copy vendored tbc-video-export to release directory
         run: |
@@ -502,32 +588,32 @@ jobs:
           .\tbc-video-export.exe --dump-default-config
           Pop-Location
 
-      - name: Copy sqlite runtime to release directory
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sqliteDll = "build\vcpkg_installed\x64-windows\bin\sqlite3.dll"
-          if (-not (Test-Path $sqliteDll)) { throw "sqlite3.dll not found at $sqliteDll" }
-          Copy-Item -Path $sqliteDll -Destination release\
-
-      - name: Copy project license
-        run: Copy-Item -Path .\LICENSE -Destination release\LICENSES\copyright-tbc-tools
-
       - name: Verify required Windows runtime files are present
-        # Mirror the macOS enforcement: fail the build if any runtime file the
-        # GUI tools need to start on a clean machine is absent.
+        # The backstop. windeployqt is trusted to find the Qt pieces, but this
+        # still fails the build if anything a GUI tool needs to start on a clean
+        # machine is absent -- which is also how a windeployqt regression would
+        # surface.
         run: |
           $required = @(
             "release\qt.conf",
             "release\platforms\qwindows.dll",
+            "release\sqldrivers\qsqlite.dll",
             "release\Qt6Core.dll",
             "release\Qt6Gui.dll",
             "release\Qt6Widgets.dll",
+            "release\Qt6Sql.dll",
+            "release\Qt6Svg.dll",
+            "release\Qt6Network.dll",
             "release\FLAC.dll",
+            "release\sqlite3.dll",
             "release\ld-lds-converter.exe",
             "release\ld-analyse.exe",
             "release\tbc-video-export.exe",
+            "release\ffmpeg.exe",
+            "release\onnxruntime.dll",
             "release\vcruntime140.dll",
             "release\vcruntime140_1.dll",
+            "release\msvcp140.dll",
             "release\vendor\vhs_decode_auto_audio_align\VhsDecodeAutoAudioAlign.exe",
             "release\vendor\vhs_decode_auto_audio_align\Binah.dll",
             "release\vendor\vhs-teletext\teletext\__main__.py",
