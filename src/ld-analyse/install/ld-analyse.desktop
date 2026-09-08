@@ -1,11 +1,13 @@
 [Desktop Entry]
-Encoding=UTF-8
 Type=Application
-NoDisplay=false
-Terminal=false
-Exec=ld-analyse
-Icon=ld-analyse
 Name=ld-analyse
-MimeType=application/video-tbc
-Comment=
-Categories=AudioVideo;Video;Utility;
+GenericName=TBC Analysis Tool
+Comment=Analyse and adjust 4fsc TBC video captures and their metadata
+Exec=ld-analyse %f
+Icon=ld-analyse
+Terminal=false
+NoDisplay=false
+StartupNotify=true
+MimeType=application/video-tbc;application/video-tbc-chroma;application/x-tbc-luma;application/x-tbc-chroma;application/x-tbc-metadata;application/x-tbc-metadata-json;
+Categories=AudioVideo;Video;
+Keywords=tbc;laserdisc;vhs;decode;video;analysis;metadata;

@@ -1,0 +1,17 @@
+# OVERRIDE - not a package file. hifi-decode ships from vhs-decode (pipx), not tbc-tools.
+# Same handling as io.github.vhs-decode.decode-launcher.desktop: installed to
+# $XDG_DATA_HOME/applications by decode-desktop-sync, gated on the binary existing, with
+# Exec= rewritten to the resolved absolute path.
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=HiFi Decode
+GenericName=HiFi Audio RF Decoder
+Comment=Extracts audio from RAW HiFi FM RF captures
+Exec=hifi-decode --gui %f
+Icon=io.github.vhs-decode.hifi-decode
+Terminal=false
+MimeType=application/x-rf-hifi-u8;application/x-rf-hifi-flac;application/x-rf-combined-u8;application/x-rf-combined-flac;
+Categories=AudioVideo;Audio;
+Keywords=hifi;audio;rf;vhs;decode;fm;
+StartupNotify=true

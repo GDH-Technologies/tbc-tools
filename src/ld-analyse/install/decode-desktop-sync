@@ -1,0 +1,617 @@
+#!/usr/bin/env bash
+# decode-desktop-sync - file associations for the decode toolchain.
+#
+# Covers three families:
+#   TBC  (.tbc .tbcy .tbcc .ytbc .ctbc .tbc.db .tbc.json) -> ld-analyse
+#   RF   (video/hifi/combined, .u8 and .flac)             -> decode-launcher
+#                                                            hifi-decode --gui
+#   ORC  (.orcprj)                                        -> orc-gui
+#
+# Installs the shared-mime-info packages, desktop entries that actually pass
+# the filename (the shipped ones lack %f), the mimetype and application icons,
+# and the handful of mimeapps.list defaults that cannot be inferred, then
+# refreshes the three XDG caches.
+#
+# WHY THIS EXISTS: a `nix profile` install registers nothing with XDG, because
+# nix never runs the cache builders. ~/.nix-profile/share/mime/ has only
+# packages/ (no mime.cache, no globs2), share/applications/ has no
+# mimeinfo.cache, and share/icons/hicolor has no index.theme. A desktop entry
+# there resolves by name but Gio.AppInfo.get_all_for_type() returns empty - the
+# type->app index lives only in mimeinfo.cache. Anything that must be
+# REGISTERED rather than merely present has to be mirrored into
+# $XDG_DATA_HOME and have the caches rebuilt there. That is this script's job.
+#
+# Everything it writes lives under $XDG_DATA_HOME (plus a few keys in
+# mimeapps.list), which neither nix nor pipx touches, so it survives every
+# install / reinstall / upgrade. Re-run it afterwards to pick up new app
+# artwork; the ~/.bashrc.d drop-in does that automatically.
+#
+# The assets ship with tbc-tools (share/decode-desktop), but the script is
+# deliberately NOT wrapped with a pinned PATH: it needs the *user's*
+# update-mime-database, ld-analyse, orc-gui, decode-launcher and hifi-decode,
+# so a makeWrapper "fix" would break it. python3 is likewise optional, not a
+# build input - see apply_defaults.
+#
+# Nothing here needs root.
+
+set -euo pipefail
+
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+
+# Resolve this script's own directory through any symlink chain, the way
+# tbc-video-export.in does, so PREFIX works from bin/ in a nix store path, from
+# /usr/local, and from a plain checkout.
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+    _self_dir="$(cd -P -- "$(dirname -- "$_self")" && pwd)"
+    _self="$(readlink -- "$_self")"
+    case "$_self" in /*) ;; *) _self="$_self_dir/$_self" ;; esac
+done
+SELF_DIR="$(cd -P -- "$(dirname -- "$_self")" && pwd)"
+PREFIX="$(cd -- "$SELF_DIR/.." && pwd)"
+
+# Asset root. Probe for a FILE, not a directory: an empty or half-populated
+# decode-desktop/ must not win over a good one. Order: explicit override, then
+# the checkout (the script lives beside its own assets in the repo), then the
+# install prefix, then the pre-packaging hand-maintained tree - which exists
+# only so an unmigrated machine keeps working until it is removed.
+resolve_src() {
+    local candidates=(
+        ${DECODE_DESKTOP_ASSET_DIR:+"$DECODE_DESKTOP_ASSET_DIR"}
+        "$SELF_DIR"
+        "$PREFIX/share/decode-desktop"
+        "$DATA_HOME/decode-desktop"
+    )
+    local c
+    for c in "${candidates[@]}"; do
+        if [ -f "$c/tbc-formats.xml" ]; then
+            printf '%s\n' "$c"
+            return 0
+        fi
+    done
+    printf 'decode-desktop-sync: no asset directory found. Tried:\n' >&2
+    printf '  %s\n' "${candidates[@]}" >&2
+    printf 'Set DECODE_DESKTOP_ASSET_DIR to override.\n' >&2
+    return 1
+}
+SRC="$(resolve_src)" || exit 1
+
+# NOT under $SRC - that is a read-only nix store path once packaged, and
+# `mkdir -p` failing there would abort the run mid-install under `set -e`.
+# These are recovery artefacts, so state rather than data.
+BACKUP_ROOT="$STATE_HOME/decode-desktop/backups"
+LEGACY_BACKUP_ROOT="$DATA_HOME/decode-desktop/backups"
+
+MIME_DIR="$DATA_HOME/mime"
+MIME_PKG_DIR="$MIME_DIR/packages"
+APPS_DIR="$DATA_HOME/applications"
+ICON_THEME_DIR="$DATA_HOME/icons/hicolor"
+
+MIMEAPPS="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"
+
+# MIME packages and mimetype icons are installed unconditionally: they are
+# harmless without the owning app and still give correct icons and a correct
+# "Open With" list. Only the desktop entries and defaults are gated on a
+# binary actually existing - see build_app_lists.
+MIME_PKGS=(
+    tbc-formats.xml
+    rf-captures.xml
+    orcprj.xml
+)
+
+# Packages superseded by the ones above, removed on install.
+#   application-video-tbc*.xml, application-x-tbc-*.xml
+#       the one-type-per-file set that tbc-formats.xml replaces wholesale
+#   io.github.decode_orc.decode-orc.xml
+#       was a symlink into ~/.nix-profile, pointing at a decode-orc build
+#       carrying an un-upstreamed MIME commit. orcprj.xml owns the type now,
+#       and the link would dangle the moment decode-orc is rebuilt.
+SUPERSEDED=(
+    application-video-tbc-chroma.xml
+    application-x-tbc-luma.xml
+    application-x-tbc-chroma.xml
+    io.github.decode_orc.decode-orc.xml
+)
+
+# Desktop entries and the mimeapps.list defaults, both built at runtime by
+# build_app_lists() so a machine with only tbc-tools installed does not get
+# menu entries that fail to launch or defaults pointing at them.
+DESKTOP_FILES=()
+DEFAULTS=()
+
+# Entries whose Exec= is a bare command in the shipped file. A file manager
+# does not necessarily have pipx's bindir on PATH, so the resolved absolute
+# path is substituted at install time. ld-analyse and orc-gui are left alone -
+# both come from a nix profile whose bin/ is on PATH for the session.
+declare -A EXEC_REWRITE=(
+    [io.github.vhs-decode.decode-launcher.desktop]=decode-launcher
+    [io.github.vhs-decode.hifi-decode.desktop]=hifi-decode
+)
+
+build_app_lists() {
+    DESKTOP_FILES=(ld-analyse.desktop)
+
+    if command -v decode-launcher >/dev/null 2>&1; then
+        DESKTOP_FILES+=(io.github.vhs-decode.decode-launcher.desktop)
+        # decode-launcher declares all six RF types so it can be reached from
+        # any capture, so video and combined would otherwise have an arbitrary
+        # winner. Video goes to the launcher; combined goes there too (it can
+        # dispatch to hifi-decode from its own tool dropdown).
+        DEFAULTS+=(
+            "application/x-rf-video-u8=io.github.vhs-decode.decode-launcher.desktop"
+            "application/x-rf-video-flac=io.github.vhs-decode.decode-launcher.desktop"
+            "application/x-rf-combined-u8=io.github.vhs-decode.decode-launcher.desktop"
+            "application/x-rf-combined-flac=io.github.vhs-decode.decode-launcher.desktop"
+        )
+    else
+        say "decode-launcher not on PATH; skipping its desktop entry and defaults"
+    fi
+
+    if command -v hifi-decode >/dev/null 2>&1; then
+        DESKTOP_FILES+=(io.github.vhs-decode.hifi-decode.desktop)
+        # hifi has two declarers once the launcher is present, so it needs an
+        # explicit default even though the others do not.
+        DEFAULTS+=(
+            "application/x-rf-hifi-u8=io.github.vhs-decode.hifi-decode.desktop"
+            "application/x-rf-hifi-flac=io.github.vhs-decode.hifi-decode.desktop"
+        )
+    else
+        say "hifi-decode not on PATH; skipping its desktop entry and defaults"
+    fi
+
+    if command -v orc-gui >/dev/null 2>&1; then
+        DESKTOP_FILES+=(io.github.decode_orc.decode-orc.desktop)
+    else
+        say "orc-gui not on PATH; skipping its desktop entry"
+    fi
+
+    # No default for application/x-orcprj, and none for the TBC types: orc-gui
+    # and ld-analyse are their sole declarers, so they win automatically.
+}
+
+# Defaults this script used to set, or that were set by hand, which must be
+# cleared rather than rewritten. application/x-orcprj pointed at
+# io.github.simoninns.decode-orc.desktop - a desktop ID that has never
+# existed - and needs no replacement now that orc-gui declares the type.
+OBSOLETE_DEFAULTS=(
+    application/x-orcprj
+)
+
+# Root-owned leftovers from an old `sudo make install`; belong to no package.
+# Harmless once tbc-formats.xml defines application/video-tbc itself, but worth
+# clearing out by hand. We only ever report them - never escalate.
+STALE_SYSTEM_MIME_FILES=(
+    /usr/share/mime/packages/application-video-tbc.xml
+    /usr/local/share/mime/packages/application-video-tbc.xml
+)
+
+APP_ICON_SIZES=(16 32 64 128)
+
+# Assets that PRE-EXISTED this tool and were adopted byte-identically: the RF
+# MIME package, the RF mimetype icons and the decode-launcher app icon were all
+# hand-placed and already working before decode-desktop-sync existed. Because
+# install_file skips a byte-identical destination, they are never backed up -
+# so --uninstall must leave them alone rather than delete something it cannot
+# put back. Everything else the tool installs, it created.
+is_adopted() {
+    case "$1" in
+        rf-captures.xml)                          return 0 ;;
+        */mimetypes/application-x-rf-*.png|\
+        */mimetypes/application-x-rf-*.svg)       return 0 ;;
+        */apps/io.github.vhs-decode.vhs-decode.png) return 0 ;;
+    esac
+    return 1
+}
+
+QUIET=0
+DRY_RUN=0
+MODE=install
+BACKUP_DIR=""
+
+usage() {
+    cat <<'USAGE'
+Usage: decode-desktop-sync [--uninstall] [--dry-run] [--quiet]
+
+  (no flags)   Install or re-sync the decode desktop integration.
+  --uninstall  Restore the most recent backup and remove what was installed.
+  --dry-run    Print what would change; write nothing.
+  --quiet      Only report errors and actual changes.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --uninstall) MODE=uninstall ;;
+        --dry-run)   DRY_RUN=1 ;;
+        --quiet|-q)  QUIET=1 ;;
+        -h|--help)   usage; exit 0 ;;
+        *) printf 'decode-desktop-sync: unknown option %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+say()  { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
+warn() { printf 'decode-desktop-sync: %s\n' "$*" >&2; }
+die()  { warn "$*"; exit 1; }
+run()  { if [ "$DRY_RUN" -eq 1 ]; then printf '  would: %s\n' "$*"; else "$@"; fi; }
+
+CHANGES=0
+changed() { CHANGES=$((CHANGES + 1)); }
+
+# Back up a file the first time this run touches it, preserving its path
+# relative to $DATA_HOME so --uninstall can put it straight back.
+backup() {
+    local path="$1" rel dest
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    [ "$DRY_RUN" -eq 1 ] && { printf '  would: back up %s\n' "$path"; return 0; }
+    if [ -z "$BACKUP_DIR" ]; then
+        BACKUP_DIR="$BACKUP_ROOT/$(date +%Y-%m-%d-%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+    fi
+    case "$path" in
+        "$DATA_HOME"/*) rel="${path#"$DATA_HOME"/}" ;;
+        *)              rel="abs${path}" ;;
+    esac
+    dest="$BACKUP_DIR/$rel"
+    mkdir -p "$(dirname "$dest")"
+    cp -a "$path" "$dest"
+}
+
+# Materialise $1 at $2, comparing against the content that will actually be
+# written so re-runs are silent no-ops. $3, if given, is a file holding the
+# rewritten content (see rewrite_exec); $1 is still the name used for messages
+# and for is_adopted.
+install_file() {
+    local src="$1" dst="$2" payload="${3:-$1}"
+    [ -f "$payload" ] || die "missing source file: $payload"
+
+    # A symlink is replaced even when its target is byte-identical. Two of
+    # these destinations are links into ~/.nix-profile, and leaving them means
+    # the association silently depends on another package staying installed at
+    # a particular revision - exactly the breakage this move exists to end.
+    if [ ! -L "$dst" ] && [ -f "$dst" ] && cmp -s "$payload" "$dst"; then
+        return 0
+    fi
+    backup "$dst"
+    run mkdir -p "$(dirname "$dst")"
+    # Never write *through* a symlink: cp would follow it into /nix/store and
+    # take EACCES, which is fatal under `set -e`.
+    run rm -f "$dst"
+    run cp -p "$payload" "$dst"
+    # cp -p carries the store's r--r--r-- onto the user's own file, which would
+    # make the *next* run fail on its own output.
+    run chmod u+w "$dst"
+    say "  + $dst"
+    changed
+}
+
+# Substitute the resolved absolute path into a desktop entry's Exec= line and
+# echo the path of a temp file holding the result. Callers pass that to
+# install_file as the payload so the no-op comparison stays honest.
+rewrite_exec() {
+    local src="$1" binary="$2" resolved tmp
+    resolved="$(command -v "$binary" 2>/dev/null)" || { printf '%s\n' "$src"; return 0; }
+    # Deliberately NOT readlink -f: for a pipx install that would resolve the
+    # ~/.local/bin shim down to the venv's bin, which moves on reinstall. The
+    # shim is the stable name.
+    tmp="$(mktemp)"
+    TMPFILES+=("$tmp")
+    sed "s|^Exec=${binary}\\b|Exec=${resolved}|" "$src" > "$tmp"
+    printf '%s\n' "$tmp"
+}
+
+TMPFILES=()
+cleanup_tmpfiles() {
+    [ "${#TMPFILES[@]}" -gt 0 ] && rm -f "${TMPFILES[@]}"
+    return 0
+}
+trap cleanup_tmpfiles EXIT
+
+remove_file() {
+    local path="$1"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    backup "$path"
+    run rm -f "$path"
+    say "  - $path"
+    changed
+}
+
+# Write the DEFAULTS entries into mimeapps.list's [Default Applications]
+# section, touching only our own keys. This is the one thing the tool writes
+# outside $XDG_DATA_HOME, so the file is backed up before the first edit and
+# every other line is passed through byte-for-byte. Uses python3 rather than
+# sed so a missing section, CRLF, or a key appearing in another section cannot
+# corrupt a file that also holds the user's vlc/audacity/firefox entries.
+# Rewrite the DEFAULTS entries into mimeapps.list's [Default Applications]
+# section and drop the OBSOLETE_DEFAULTS keys, touching only our own keys. This
+# is the one thing the tool writes outside $XDG_DATA_HOME, so the file is
+# backed up before the first edit and every other line is passed through
+# byte-for-byte. Uses python3 rather than sed so a missing section, CRLF, or a
+# key appearing in another section cannot corrupt a file that also holds the
+# user's vlc/audacity/firefox entries.
+#
+# python3 is NOT a hard dependency: it is absent on plenty of minimal boxes,
+# and aborting here under `set -e` would leave a half-finished install with the
+# caches unrefreshed. Warn and carry on instead - the defaults are the one part
+# of the integration that degrades gracefully, since everything else either has
+# a sole declarer or is reachable through "Open With".
+apply_defaults() {
+    [ "${#DEFAULTS[@]}" -gt 0 ] || [ "${#OBSOLETE_DEFAULTS[@]}" -gt 0 ] || return 0
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        warn "python3 not found; leaving $MIMEAPPS alone"
+        warn "  ${#DEFAULTS[@]} default(s) not set, ${#OBSOLETE_DEFAULTS[@]} stale key(s) not removed"
+        return 0
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    TMPFILES+=("$tmp")
+
+    python3 - "$MIMEAPPS" "${#DEFAULTS[@]}" ${DEFAULTS[@]+"${DEFAULTS[@]}"} \
+        ${OBSOLETE_DEFAULTS[@]+"${OBSOLETE_DEFAULTS[@]}"} > "$tmp" <<'PYEOF'
+import sys, pathlib
+
+path = pathlib.Path(sys.argv[1])
+n_set = int(sys.argv[2])
+rest = sys.argv[3:]
+want = dict(pair.split("=", 1) for pair in rest[:n_set])
+drop = set(rest[n_set:])
+
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+section, seen, out = None, set(), []
+
+def flush(out):
+    for k, v in want.items():
+        if k not in seen:
+            out.append(f"{k}={v}")
+
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        # Leaving [Default Applications]: append whatever we did not rewrite.
+        if section == "[Default Applications]":
+            flush(out)
+        section = stripped
+    elif section == "[Default Applications]" and "=" in stripped and not stripped.startswith("#"):
+        key = stripped.split("=", 1)[0].strip()
+        if key in drop:
+            continue
+        if key in want:
+            seen.add(key)
+            out.append(f"{key}={want[key]}")
+            continue
+    out.append(line)
+
+if section == "[Default Applications]":
+    flush(out)
+elif "[Default Applications]" not in text:
+    if out and out[-1].strip():
+        out.append("")
+    out.append("[Default Applications]")
+    out.extend(f"{k}={v}" for k, v in want.items())
+
+sys.stdout.write("\n".join(out) + "\n")
+PYEOF
+
+    if [ -f "$MIMEAPPS" ] && cmp -s "$tmp" "$MIMEAPPS"; then
+        return 0
+    fi
+
+    backup "$MIMEAPPS"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '  would: rewrite %s (%s default(s), %s stale key(s))\n' \
+            "$MIMEAPPS" "${#DEFAULTS[@]}" "${#OBSOLETE_DEFAULTS[@]}"
+    else
+        mkdir -p "$(dirname "$MIMEAPPS")"
+        cat "$tmp" > "$MIMEAPPS"
+    fi
+    say "  ~ $MIMEAPPS (${#DEFAULTS[@]} default(s))"
+    changed
+}
+
+# update-mime-database takes the mime dir, NOT mime/packages.
+refresh_caches() {
+    [ "$CHANGES" -gt 0 ] || { say "caches: already current"; return 0; }
+    say "refreshing caches"
+    if command -v update-mime-database >/dev/null; then
+        run update-mime-database "$MIME_DIR"
+    else
+        warn "update-mime-database not found; MIME types will not be picked up"
+    fi
+    if command -v update-desktop-database >/dev/null; then
+        run update-desktop-database "$APPS_DIR"
+    else
+        warn "update-desktop-database not found; the type->app index will be missing"
+    fi
+    if command -v gtk-update-icon-cache >/dev/null; then
+        # --quiet: it otherwise prints a success line, which is noise when the
+        # ~/.bashrc.d wrapper runs this after every nix profile operation.
+        run gtk-update-icon-cache -f -t --quiet "$ICON_THEME_DIR" || \
+            warn "gtk-update-icon-cache failed; icons may be stale"
+    else
+        warn "gtk-update-icon-cache not found; icons may be stale"
+    fi
+}
+
+# Where ld-analyse's own application icons were installed. $PREFIX first: once
+# this script ships in the same derivation as ld-analyse the answer is already
+# known, and that also works when the script is invoked by absolute path with
+# nothing on PATH. Fall back to locating the binary for the checkout case and
+# for a script copied to a machine by hand.
+resolve_app_icon_dir() {
+    local bin prefix
+    if [ -f "$PREFIX/share/icons/hicolor/128x128/apps/ld-analyse.png" ]; then
+        printf '%s\n' "$PREFIX/share/icons/hicolor"
+        return 0
+    fi
+    bin="$(command -v ld-analyse 2>/dev/null)" || return 1
+    [ -n "$bin" ] || return 1
+    bin="$(readlink -f "$bin")"
+    prefix="$(dirname "$(dirname "$bin")")"
+    printf '%s\n' "$prefix/share/icons/hicolor"
+}
+
+do_install() {
+    [ -d "$SRC" ] || die "source directory not found: $SRC"
+    # find inside a process substitution cannot trip `set -e`, so a missing
+    # icons/ would otherwise be a silent partial install.
+    [ -d "$SRC/icons" ] || die "asset directory is incomplete: $SRC/icons is missing"
+
+    say "decode-desktop-sync: installing into $DATA_HOME"
+    say "  assets: $SRC"
+    [ "$DRY_RUN" -eq 1 ] && say "(dry run - nothing will be written)"
+
+    build_app_lists
+
+    local f payload
+    for f in "${MIME_PKGS[@]}"; do
+        install_file "$SRC/$f" "$MIME_PKG_DIR/$f"
+    done
+    for f in "${DESKTOP_FILES[@]}"; do
+        if [ -n "${EXEC_REWRITE[$f]:-}" ]; then
+            payload="$(rewrite_exec "$SRC/$f" "${EXEC_REWRITE[$f]}")"
+        else
+            payload="$SRC/$f"
+        fi
+        install_file "$SRC/$f" "$APPS_DIR/$f" "$payload"
+    done
+
+    # Retire the packages folded into tbc-formats.xml and orcprj.xml.
+    # application-x-rf-flac.xml is left alone: it still owns the legacy
+    # *_video.flac naming (it never actually matches, lacking sub-class-of
+    # audio/flac, but removing it is a separate decision).
+    for f in "${SUPERSEDED[@]}"; do
+        remove_file "$MIME_PKG_DIR/$f"
+    done
+    # A stray copy of the old base package would double-define the type.
+    remove_file "$MIME_PKG_DIR/application-video-tbc.xml"
+
+    # Mimetype and application icons (PNG ladders plus the scalable SVGs).
+    local src_icon rel
+    while IFS= read -r src_icon; do
+        rel="${src_icon#"$SRC"/icons/}"
+        install_file "$src_icon" "$DATA_HOME/icons/$rel"
+    done < <(find "$SRC/icons" \( -name '*.png' -o -name '*.svg' \) | sort)
+
+    # App icon: nix puts it in the store path, but ~/.nix-profile/share/icons
+    # has no index.theme and empty size dirs, so GTK never sees it. Copy it
+    # where a valid theme index already exists. This is the one piece a new
+    # release can legitimately change, hence the re-sync after upgrades.
+    local app_icons size from
+    if app_icons="$(resolve_app_icon_dir)"; then
+        for size in "${APP_ICON_SIZES[@]}"; do
+            from="$app_icons/${size}x${size}/apps/ld-analyse.png"
+            [ -f "$from" ] || continue
+            install_file "$from" "$ICON_THEME_DIR/${size}x${size}/apps/ld-analyse.png"
+        done
+    else
+        warn "ld-analyse is not on PATH; skipping the application icon"
+    fi
+
+    apply_defaults
+
+    refresh_caches
+
+    if [ -n "$BACKUP_DIR" ]; then
+        say "backup: $BACKUP_DIR"
+    fi
+    if [ "$CHANGES" -eq 0 ]; then
+        say "already up to date"
+    else
+        say "done ($CHANGES change(s))"
+    fi
+
+    local stale
+    for stale in "${STALE_SYSTEM_MIME_FILES[@]}"; do
+        [ -e "$stale" ] || continue
+        say ""
+        say "note: $stale still exists."
+        say "      It is owned by no package and is no longer needed - tbc-formats.xml"
+        say "      now defines application/video-tbc. Remove it when convenient:"
+        say "          sudo rm $stale && sudo update-mime-database $(dirname "$(dirname "$stale")")"
+    done
+}
+
+do_uninstall() {
+    # The asset tree is what tells us which icons we installed, so removing the
+    # package first would leave ~30 orphans behind in silence.
+    [ -d "$SRC/icons" ] || die "cannot uninstall without the asset tree ($SRC/icons is missing).
+Reinstall tbc-tools, or point DECODE_DESKTOP_ASSET_DIR at a checkout's
+src/ld-analyse/install, then re-run."
+
+    build_app_lists
+
+    # Scan the legacy root too: backups taken before the assets moved into
+    # tbc-tools still live under $XDG_DATA_HOME, and --uninstall is exactly
+    # when they matter. Only pass roots that exist - `find` exits non-zero on a
+    # missing one, and under `set -o pipefail` that fails the assignment and
+    # kills the run before a single message is printed.
+    local latest roots=()
+    [ -d "$BACKUP_ROOT" ] && roots+=("$BACKUP_ROOT")
+    [ -d "$LEGACY_BACKUP_ROOT" ] && roots+=("$LEGACY_BACKUP_ROOT")
+    latest=""
+    if [ "${#roots[@]}" -gt 0 ]; then
+        latest="$(find "${roots[@]}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+                  | sort | tail -n1)"
+    fi
+
+    say "decode-desktop-sync: uninstalling"
+    [ "$DRY_RUN" -eq 1 ] && say "(dry run - nothing will be written)"
+
+    # Remove everything this tool installs.
+    local f
+    for f in "${MIME_PKGS[@]}"; do
+        if is_adopted "$f"; then
+            say "  = $MIME_PKG_DIR/$f (pre-existing, kept)"
+            continue
+        fi
+        run rm -f "$MIME_PKG_DIR/$f";  say "  - $MIME_PKG_DIR/$f"
+    done
+    for f in "${DESKTOP_FILES[@]}"; do
+        run rm -f "$APPS_DIR/$f";      say "  - $APPS_DIR/$f"
+    done
+    changed
+
+    local src_icon rel size dest
+    while IFS= read -r src_icon; do
+        rel="${src_icon#"$SRC"/icons/}"
+        is_adopted "$rel" && continue
+        run rm -f "$DATA_HOME/icons/$rel"
+    done < <(find "$SRC/icons" \( -name '*.png' -o -name '*.svg' \) | sort)
+    for size in "${APP_ICON_SIZES[@]}"; do
+        run rm -f "$ICON_THEME_DIR/${size}x${size}/apps/ld-analyse.png"
+    done
+
+    # Put back whatever the first install displaced.
+    if [ -n "$latest" ]; then
+        say "restoring from $latest"
+        if [ "$DRY_RUN" -eq 1 ]; then
+            printf '  would: restore contents of %s into %s\n' "$latest" "$DATA_HOME"
+        else
+            # Paths under abs/ were backed up from outside $DATA_HOME
+            # (mimeapps.list); they restore to an absolute location.
+            (cd "$latest" && find . -type f -printf '%P\n') | \
+            while IFS= read -r rel; do
+                case "$rel" in
+                    abs/*) dest="/${rel#abs/}" ;;
+                    *)     dest="$DATA_HOME/$rel" ;;
+                esac
+                mkdir -p "$(dirname "$dest")"
+                cp -a "$latest/$rel" "$dest"
+                say "  + restored $dest"
+            done
+        fi
+    else
+        warn "no backup found under $BACKUP_ROOT or $LEGACY_BACKUP_ROOT; removed installed files only"
+    fi
+
+    refresh_caches
+    say "done"
+}
+
+case "$MODE" in
+    install)   do_install ;;
+    uninstall) do_uninstall ;;
+esac

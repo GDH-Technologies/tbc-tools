@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+
+  <!-- .u8: no competing "*.u8" glob and no magic signature, so an interior
+       wildcard is fine here and gives the widest coverage. -->
+
+  <mime-type type="application/x-rf-hifi-u8">
+    <comment>Raw FM RF HiFi audio capture (8-bit unsigned)</comment>
+    <glob pattern="*_hifiRF*.u8" weight="80"/>
+    <glob pattern="*_hifi_RF*.u8" weight="80"/>
+    <icon name="application-x-rf-hifi-u8"/>
+    <generic-icon name="application-x-rf-hifi-u8"/>
+  </mime-type>
+
+  <mime-type type="application/x-rf-video-u8">
+    <comment>Raw FM RF video capture (8-bit unsigned)</comment>
+    <glob pattern="*_videoRF*.u8" weight="80"/>
+    <glob pattern="*_video_RF*.u8" weight="80"/>
+    <icon name="application-x-rf-video-u8"/>
+    <generic-icon name="application-x-rf-video-u8"/>
+  </mime-type>
+
+  <mime-type type="application/x-rf-combined-u8">
+    <comment>Raw FM RF combined video + HiFi capture (8-bit unsigned)</comment>
+    <glob pattern="*_combinedRF*.u8" weight="80"/>
+    <glob pattern="*_combined_RF*.u8" weight="80"/>
+    <icon name="application-x-rf-combined-u8"/>
+    <generic-icon name="application-x-rf-combined-u8"/>
+  </mime-type>
+
+
+  <!-- generic-icon deliberately repeats each type's own icon name.
+
+       GTK resolves a themed-icon name list by iterating THEMES in the outer loop
+       and names in the inner loop. With a conventional fallback such as
+       <generic-icon name="audio-x-generic"/>, GTK searches the active theme
+       (Adwaita) for every name, hits Adwaita's own audio-x-generic, and stops there,
+       so a custom icon living in hicolor is never reached, no matter that it is
+       first in the name list. Verify with:
+         gio info FILE | grep standard::icon
+       then look the names up in order against the active theme.
+
+       Repeating the specific name means no name in the list exists in Adwaita, so
+       the lookup falls through Adwaita -> AdwaitaLegacy -> hicolor and finds these
+       icons. This keeps every file in the standard hicolor location and survives
+       an icon-theme change. -->
+
+  <!-- .flac: two hard constraints, both required.
+
+       1. Every glob must be a SIMPLE SUFFIX: a single leading "*" followed by
+          literal text. Patterns with an interior wildcard (e.g. "*_hifiRF*.flac")
+          land in the matcher's "full glob" list, which is consulted ONLY when the
+          fast suffix trie finds nothing. The system's "*.flac" always matches in
+          that trie, so an interior-wildcard pattern is never evaluated at all,
+          regardless of its weight. Hence the explicit endings enumerated below.
+
+       2. Each type must be a sub-class-of audio/flac. GIO sniffs the "fLaC" magic
+          (priority 50) and, when the sniffed priority is < 80, keeps the
+          filename-derived type only if it is a subclass of the sniffed type.
+          Without this, audio/flac overrides the glob match.
+
+       Endings are deliberately exact so decoded audio outputs
+       (*_audio.flac, *_HiFi_Decoded.flac, *_hifi_decode.flac, *_audio_aligned.flac)
+       do NOT match and keep the ordinary audio icon. -->
+
+  <mime-type type="application/x-rf-hifi-flac">
+    <comment>Raw FM RF HiFi audio capture (FLAC compressed)</comment>
+    <sub-class-of type="audio/flac"/>
+    <glob pattern="*_hifiRF.flac" weight="80"/>
+    <glob pattern="*_hifiRF_8-bit.flac" weight="80"/>
+    <glob pattern="*_hifiRF_10-bit.flac" weight="80"/>
+    <glob pattern="*_hifiRF_16-bit.flac" weight="80"/>
+    <glob pattern="*_hifi_RF.flac" weight="80"/>
+    <glob pattern="*_hifi_RF_8-bit.flac" weight="80"/>
+    <glob pattern="*_hifi_RF_10-bit.flac" weight="80"/>
+    <glob pattern="*_hifi_RF_16-bit.flac" weight="80"/>
+    <icon name="application-x-rf-hifi-flac"/>
+    <generic-icon name="application-x-rf-hifi-flac"/>
+  </mime-type>
+
+  <mime-type type="application/x-rf-video-flac">
+    <comment>Raw FM RF video capture (FLAC compressed)</comment>
+    <sub-class-of type="audio/flac"/>
+    <glob pattern="*_videoRF.flac" weight="80"/>
+    <glob pattern="*_videoRF_8-bit.flac" weight="80"/>
+    <glob pattern="*_videoRF_10-bit.flac" weight="80"/>
+    <glob pattern="*_videoRF_16-bit.flac" weight="80"/>
+    <glob pattern="*_video_RF.flac" weight="80"/>
+    <glob pattern="*_video_RF_8-bit.flac" weight="80"/>
+    <glob pattern="*_video_RF_10-bit.flac" weight="80"/>
+    <glob pattern="*_video_RF_16-bit.flac" weight="80"/>
+    <icon name="application-x-rf-video-flac"/>
+    <generic-icon name="application-x-rf-video-flac"/>
+  </mime-type>
+
+  <mime-type type="application/x-rf-combined-flac">
+    <comment>Raw FM RF combined video + HiFi capture (FLAC compressed)</comment>
+    <sub-class-of type="audio/flac"/>
+    <glob pattern="*_combinedRF.flac" weight="80"/>
+    <glob pattern="*_combinedRF_8-bit.flac" weight="80"/>
+    <glob pattern="*_combinedRF_10-bit.flac" weight="80"/>
+    <glob pattern="*_combinedRF_16-bit.flac" weight="80"/>
+    <glob pattern="*_combined_RF.flac" weight="80"/>
+    <glob pattern="*_combined_RF_8-bit.flac" weight="80"/>
+    <glob pattern="*_combined_RF_10-bit.flac" weight="80"/>
+    <glob pattern="*_combined_RF_16-bit.flac" weight="80"/>
+    <icon name="application-x-rf-combined-flac"/>
+    <generic-icon name="application-x-rf-combined-flac"/>
+  </mime-type>
+
+</mime-info>

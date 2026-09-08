@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+
+  <!-- TBC capture formats and their metadata sidecars.
+       Installed to ~/.local/share/mime/packages/ by ~/.local/bin/tbc-desktop-sync.
+
+       This file supersedes the earlier one-type-per-file set
+       (application-video-tbc-chroma.xml, application-x-tbc-luma.xml,
+       application-x-tbc-chroma.xml) and additionally defines the base
+       application/video-tbc type, which until now existed ONLY in
+       /usr/share/mime/packages/application-video-tbc.xml — a root-owned file
+       belonging to no RPM, left behind by an old `sudo make install`. Defining
+       it here means .tbc identification no longer depends on untracked cruft.
+
+       Two file-naming conventions are in play:
+         ld-decode / vhs-decode  composite .tbc, chroma companion *_chroma.tbc
+         decode-orc              luma .tbcy + chroma .tbcc, sharing one .tbc.db
+       .ytbc / .ctbc are legacy aliases that only ld-analyse still recognises;
+       they carry the same meaning as .tbcy / .tbcc, so they are extra globs on
+       the same types rather than types of their own.
+
+       Every type here is openable by ld-analyse (see isSupportedInputExtension
+       in src/ld-analyse/mainwindow.cpp), which is what ld-analyse.desktop
+       declares in its MimeType= line. -->
+
+
+  <!-- GLOB WEIGHTS - why the numbers matter.
+
+       The matcher keeps two lists.  A glob that is a SIMPLE SUFFIX (a single
+       leading "*" followed by literal text) goes into a fast suffix trie; any
+       pattern with an interior wildcard goes into a slow "full glob" list that
+       is consulted ONLY when the trie finds nothing.  Weight breaks ties inside
+       the trie, longest-match breaks ties at equal weight.
+
+       Every glob below is a simple suffix, so they all live in the trie and
+       weight is the whole story:
+
+         *_chroma.tbc  needs w60 to beat *.tbc  (both match "foo_chroma.tbc")
+         *.tbc.db      needs w80 to beat *.json / *.db style competition
+         *.tbc.json    needs w80 to beat *.json (w50, from freedesktop.org.xml)
+         *.tbcy/.tbcc/.ytbc/.ctbc  have no competitors, default weight is fine
+
+       NOT REPRESENTABLE: vhs-decode's prefix form "chroma_*.tbc".  That pattern
+       has an interior wildcard, so it lands in the full-glob list, which is
+       never reached because *.tbc always matches in the trie first.  No weight
+       can fix this.  Those files stay application/video-tbc, which is harmless:
+       ld-analyse detects the chroma_ prefix itself when it opens them. -->
+
+
+  <!-- MAGIC vs GLOB - why the metadata types need sub-class-of.
+
+       When a magic (content-sniffing) rule matches with priority < 80, the
+       filename-derived type is kept only if it is a SUBCLASS of the sniffed
+       type; otherwise the sniffed type wins outright.  Weight does not enter
+       into it.
+
+       .tbc.db is a SQLite database, and SQLite's "SQLite format 3" magic sits
+       at the default priority 50.  Without <sub-class-of application/vnd.sqlite3>
+       every .tbc.db would resolve to application/vnd.sqlite3 and open in
+       sqlitebrowser no matter what glob weight we gave it.
+
+       .tbc.json has no such problem (application/json carries no magic rule, and
+       our w80 glob beats its w50 *.json), but it is subclassed anyway so that
+       text editors registered for JSON stay available under "Open With". -->
+
+
+  <!-- GENERIC-ICON - why the metadata types repeat their own icon name.
+
+       GTK resolves a themed-icon name list by iterating THEMES in the outer loop
+       and names in the inner loop.  A conventional fallback such as
+       <generic-icon name="application-x-sqlite3"/> would be found inside Adwaita
+       on the very first theme, and the lookup would stop there — our icon in
+       hicolor is never reached, however early it appears in the name list.
+
+       Repeating the specific name means no name in the list exists in Adwaita,
+       so the lookup falls through Adwaita -> AdwaitaLegacy -> hicolor and finds
+       ours.  Verify with:  gio info FILE | grep standard::icon
+       then look the names up in order against the active theme.
+
+       Only the two metadata types need this: they subclass types Adwaita has
+       icons for.  The four video types below subclass application/video-tbc,
+       which Adwaita has never heard of, so there is nothing to lose to. -->
+
+
+  <mime-type type="application/video-tbc">
+    <comment>CVBS video file</comment>
+    <icon name="application-video-tbc"/>
+    <glob pattern="*.tbc"/>
+  </mime-type>
+
+  <mime-type type="application/video-tbc-chroma">
+    <comment>Chroma TBC video file</comment>
+    <sub-class-of type="application/video-tbc"/>
+    <icon name="application-video-tbc-chroma"/>
+    <glob pattern="*_chroma.tbc" weight="60"/>
+  </mime-type>
+
+  <mime-type type="application/x-tbc-luma">
+    <comment>TBC luma (Y) video</comment>
+    <sub-class-of type="application/video-tbc"/>
+    <icon name="application-x-tbc-luma"/>
+    <glob pattern="*.tbcy"/>
+    <glob pattern="*.ytbc"/>
+  </mime-type>
+
+  <mime-type type="application/x-tbc-chroma">
+    <comment>TBC chroma (C) video</comment>
+    <sub-class-of type="application/video-tbc"/>
+    <icon name="application-x-tbc-chroma"/>
+    <glob pattern="*.tbcc"/>
+    <glob pattern="*.ctbc"/>
+  </mime-type>
+
+  <mime-type type="application/x-tbc-metadata">
+    <comment>TBC metadata database</comment>
+    <sub-class-of type="application/vnd.sqlite3"/>
+    <icon name="application-x-tbc-metadata"/>
+    <generic-icon name="application-x-tbc-metadata"/>
+    <glob pattern="*.tbc.db" weight="80"/>
+  </mime-type>
+
+  <mime-type type="application/x-tbc-metadata-json">
+    <comment>TBC metadata (legacy JSON)</comment>
+    <sub-class-of type="application/json"/>
+    <icon name="application-x-tbc-metadata-json"/>
+    <generic-icon name="application-x-tbc-metadata-json"/>
+    <glob pattern="*.tbc.json" weight="80"/>
+  </mime-type>
+
+</mime-info>

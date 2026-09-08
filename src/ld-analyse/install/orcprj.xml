@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+
+  <!-- Decode Orc project files.
+
+       NAMING: this file is deliberately NOT called
+       io.github.decode_orc.decode-orc.xml, the reverse-DNS name the convention
+       would suggest. decode-orc installs into the same nix profile as
+       tbc-tools, and two packages installing one filename is a
+       `nix profile add` conflict. Upstream ships no MIME package today, so the
+       reverse-DNS name happens to be free - but only until it does, and only
+       if decode-orc is upgraded before tbc-tools. The filename in
+       mime/packages/ carries no meaning (only the type inside it does), so a
+       tbc-tools-owned name removes the collision class outright.
+
+       The matching handler - Exec=orc-gui %f plus MimeType= - can only live
+       inside decode-orc's OWN desktop entry, which upstream does install. It
+       is therefore not a package file at all: decode-desktop-sync writes the
+       patched entry into $XDG_DATA_HOME/applications, which wins over
+       ~/.nix-profile by XDG precedence. See
+       io.github.decode_orc.decode-orc.desktop in this directory.
+
+       Projects are YAML (project_io::save_project writes a "# ORC Project
+       File / # Version: 2.0" header), hence sub-class-of application/yaml -
+       which also keeps text editors available under "Open With". Glob-only:
+       there is no competing *.orcprj pattern, so no weight is needed. -->
+
+  <mime-type type="application/x-orcprj">
+    <comment>Decode Orc project</comment>
+    <icon name="io.github.decode_orc.decode-orc"/>
+    <sub-class-of type="application/yaml"/>
+    <glob pattern="*.orcprj"/>
+  </mime-type>
+
+</mime-info>
