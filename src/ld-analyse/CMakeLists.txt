@@ -168,6 +168,7 @@ if(UNIX AND NOT APPLE)
             "${_dd_src}/tbc-formats.xml"
             "${_dd_src}/rf-captures.xml"
             "${_dd_src}/orcprj.xml"
+            "${_dd_src}/closed-captions.xml"
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/mime/packages")
 
     # ld-analyse.desktop ONLY. The decode-orc and vhs-decode entries in

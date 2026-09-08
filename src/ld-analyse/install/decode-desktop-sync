@@ -98,6 +98,7 @@ MIME_PKGS=(
     tbc-formats.xml
     rf-captures.xml
     orcprj.xml
+    closed-captions.xml
 )
 
 # Packages superseded by the ones above, removed on install.

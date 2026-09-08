@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+
+  <!-- Closed-caption sidecars for the decode workflow.
+
+       The closed-captions option of tbc-export-metadata writes Scenarist SCC V1.0
+       (src/tbc-export-metadata/closedcaptions.cpp), and the docs are explicit
+       that "SCC is the only supported output from ld-decode tools as the
+       format keeps the closed caption data intact". SRT and WebVTT are the
+       downstream conversions the digitization toolkit ingests alongside it -
+       all three carry the closed_captions stage role there.
+
+       WHY THIS FILE EXISTS AT ALL:
+
+       .scc has no type anywhere in shared-mime-info, so it resolved to
+       application/octet-stream. Neither do .mcc, .ttml or .dfxp; they are
+       left alone here because nothing in this toolchain reads or writes them.
+
+       .srt and .vtt DO have types upstream (application/x-subrip, text/vtt),
+       but no icon theme this workflow runs supplies art for them. Only breeze,
+       breeze-dark and Papirus ship subtitle mimetype icons at all, and all of
+       them are symlinks onto one shared application-x-srt.svg. Adwaita - what
+       a GNOME seat actually runs - has none, so captions were indistinguishable
+       from a plain .txt file. This file therefore does NOT redefine those two
+       types; it only overrides their icons. -->
+
+
+  <!-- GENERIC-ICON - the same trap tbc-formats.xml documents for .tbc.db.
+
+       GTK resolves a themed-icon name list by iterating THEMES in the outer
+       loop and names in the inner loop. Every type here either subclasses
+       text/plain or already carries text-x-generic as its generic icon, and
+       Adwaita HAS text-x-generic - so GTK would find that on the very first
+       theme and stop, and our icon sitting in hicolor would never be reached.
+
+       Repeating each type's own specific name as its generic-icon means no
+       name in the list exists in Adwaita, so the lookup falls through
+       Adwaita -> AdwaitaLegacy -> hicolor and finds ours. Verify with:
+         gio info FILE | grep standard::icon
+
+       Qt does not need this - QIcon::fromTheme() walks the inheritance chain
+       for a single name, so it finds the hicolor icon either way - but a file
+       manager does, and both should agree. -->
+
+
+  <!-- Scenarist SCC. Genuinely new: no shared-mime-info version defines it.
+
+       sub-class-of text/plain is not cosmetic. An SCC file IS plain text
+       (a header line, then timecode + hex byte pairs), so text/plain's magic
+       matches it. A filename-derived type is only kept over a sniffed one when
+       it is a SUBCLASS of what was sniffed - without this line every .scc
+       would resolve to text/plain no matter what weight the glob carried.
+       It also keeps text editors available under "Open With".
+
+       The magic rule makes detection survive a renamed or extension-less file:
+       closedcaptions.cpp writes the literal "Scenarist_SCC V1.0" header. It
+       sits above priority 80 so it also beats text/plain's own match. -->
+  <mime-type type="application/x-scenarist-cc">
+    <comment>Scenarist closed captions</comment>
+    <acronym>SCC</acronym>
+    <expanded-acronym>Scenarist Closed Captions</expanded-acronym>
+    <sub-class-of type="text/plain"/>
+    <icon name="application-x-scenarist-cc"/>
+    <generic-icon name="application-x-scenarist-cc"/>
+    <glob pattern="*.scc"/>
+    <magic priority="90">
+      <match type="string" value="Scenarist_SCC" offset="0"/>
+    </magic>
+  </mime-type>
+
+  <!-- Icon-only overrides. The type, comment and glob for these two come from
+       freedesktop.org.xml; redefining any of that here would double-define
+       them. shared-mime-info merges packages, so naming the type and giving it
+       only icon elements adds artwork without touching its identity. -->
+
+  <mime-type type="application/x-subrip">
+    <icon name="application-x-subrip"/>
+    <generic-icon name="application-x-subrip"/>
+  </mime-type>
+
+  <mime-type type="text/vtt">
+    <icon name="text-vtt"/>
+    <generic-icon name="text-vtt"/>
+  </mime-type>
+
+</mime-info>
