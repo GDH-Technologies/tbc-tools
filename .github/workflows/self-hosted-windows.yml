@@ -359,12 +359,26 @@ jobs:
         # out of the picture without touching it. Still fully pinned -- the
         # vcpkg checkout is at VCPKG_COMMIT, so these resolve to the same
         # versions the manifest baseline would have used.
+        #
+        # Run it from outside the checkout. vcpkg picks manifest mode purely
+        # from finding a vcpkg.json in the working directory, and then refuses
+        # package arguments outright: "In manifest mode, `vcpkg install` does
+        # not support individual package arguments." C:\ci-tools has no
+        # manifest, so the same command is classic mode there. Classic mode
+        # installs into $VCPKG_ROOT\installed\<triplet>, which is also where
+        # the toolchain looks once VCPKG_MANIFEST_MODE=OFF.
         run: |
           $ErrorActionPreference = 'Stop'
           $pkgs = $env:VCPKG_PACKAGES -split '\s+' | Where-Object { $_ }
-          Write-Host "vcpkg install $($pkgs -join ' ') --triplet $env:VCPKG_TRIPLET"
-          & "$env:VCPKG_ROOT\vcpkg.exe" install @pkgs "--triplet=$env:VCPKG_TRIPLET"
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          Write-Host "vcpkg install $($pkgs -join ' ') --triplet=$env:VCPKG_TRIPLET (from $env:TOOLS_ROOT)"
+          Push-Location $env:TOOLS_ROOT
+          try {
+            & "$env:VCPKG_ROOT\vcpkg.exe" install @pkgs "--triplet=$env:VCPKG_TRIPLET"
+            $rc = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($rc -ne 0) { throw "vcpkg install failed" }
           $installed = "$env:VCPKG_ROOT\installed\$env:VCPKG_TRIPLET"
           if (-not (Test-Path "$installed\bin\sqlite3.dll")) {
             throw "vcpkg install did not produce $installed\bin\sqlite3.dll"
