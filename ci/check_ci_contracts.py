@@ -291,6 +291,11 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # windeployqt replaces the hosted job's hand-rolled Qt plugin copy: it reads
     # each binary's imports and lays out exactly the DLLs and plugins it needs.
     "windeployqt.exe",
+    # Qt's bin must go on PATH. With Qt out of vcpkg, VCPKG_APPLOCAL_DEPS no
+    # longer places Qt6Core.dll beside the binaries and CMakeLists.txt stages
+    # only plugins and qt.conf, so without this every ctest binary fails to
+    # start -- long before windeployqt is reached.
+    '"$qtDir\\bin"      | Out-File -FilePath $env:GITHUB_PATH',
     # BUILD_TESTING is ON here (hosted uses OFF) so ctest runs; the POSIX shell
     # tests are excluded and the test binaries are kept out of release\.
     "-DBUILD_TESTING=ON",

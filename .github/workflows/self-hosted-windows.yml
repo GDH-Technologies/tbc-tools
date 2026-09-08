@@ -289,6 +289,12 @@ jobs:
           }
           Write-Host "Using Qt $env:QT_VERSION at $qtDir"
           "QT_DIR=$qtDir"   | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Putting Qt's bin on PATH is load-bearing for ctest, not just for
+          # finding windeployqt later. Qt is no longer a vcpkg package, so
+          # VCPKG_APPLOCAL_DEPS does not drop Qt6Core.dll beside the binaries in
+          # build\bin, and CMakeLists.txt's stage_windows_qt_platform_runtime
+          # stages only plugins and qt.conf there -- not the Qt DLLs. Without
+          # this line every test binary fails to start.
           "$qtDir\bin"      | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Reset stale build output

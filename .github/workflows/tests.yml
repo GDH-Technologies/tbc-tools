@@ -5,6 +5,21 @@ on:
   pull_request:
   release:
   workflow_dispatch:
+
+concurrency:
+  # Without this, nothing supersedes anything: every push starts a run AND the
+  # resulting pull_request synchronize starts a second one, none of them cancel
+  # each other, and each spends ~20 minutes on a full Nix build. Eight were
+  # alive at once while this branch was being iterated on.
+  #
+  # head_ref || ref_name deliberately collapses both events for a branch into
+  # one group: on a pull_request head_ref is the branch name, on a push it is
+  # empty and ref_name is the same branch name, so a push to a PR branch leaves
+  # exactly one run instead of two. Cancelling is safe here because this
+  # workflow only reports -- it builds and tests, it never publishes.
+  group: tbc-tools-tests-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
