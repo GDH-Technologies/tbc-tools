@@ -63,7 +63,8 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
   --tbc <luma.tbc>            walk the raw fields when the metadata holds no metrics
   --chroma-tbc <file>         burst source (default: the chroma sibling, see below)
   --no-burst                  do not measure burst amplitude, and do not read
-                              the chroma TBC for it (halves the walk's I/O)
+                              the chroma TBC for it (halves the walk's I/O; a
+                              stored burst amplitude is kept, not cleared)
   -t, --threads <n>           worker threads for the walk (logical CPUs)
   --scene-threshold-ire <x>   same-parity difference marking a scene change (12)
   --noise-threshold-ire <x>   back-porch noise marking snow (6)
@@ -117,6 +118,13 @@ chroma sibling the burst costs half of all the I/O the walk does. On a
 `--no-burst` skips the measurement and never opens the chroma TBC. The other
 metrics are unaffected. What is lost is the `no_burst` event, which flags
 fields whose burst has collapsed.
+
+A burst amplitude already in the metadata is **kept**, not cleared: not
+measuring a metric is not the same as erasing it, and a `--write` that dropped
+the column would cost a full chroma walk to recover. The run says so once, on
+stderr, naming the number of fields it kept. The consequence is that after such
+a run the burst column may be older than the other five metrics — if that
+matters, re-walk without `--no-burst`.
 
 Note that a decode backfilled this way counts as complete: a field is
 considered measured if *any* of its metrics is finite, so a later run will not

@@ -34,5 +34,14 @@ if(BUILD_TESTING)
                          $<TARGET_FILE:tbc-segments>
                          ${CMAKE_SOURCE_DIR}/test-data/pal/ggv-mb-1khz.tbc.db
                          ${CMAKE_SOURCE_DIR}/test-data/pal/ggv-mb-1khz.tbc)
+
+        # --no-burst must not erase a burst amplitude the metadata already
+        # holds: the walk's metrics replace the whole picture_metrics row.
+        add_test(NAME tbc-segments-no-burst-preserves
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_SOURCE_DIR}/scripts/test-segments-no-burst-preserves.py
+                         $<TARGET_FILE:tbc-segments>
+                         ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut.tbc.db
+                         ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut.tbc)
     endif()
 endif()
