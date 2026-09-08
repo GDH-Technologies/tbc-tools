@@ -27,7 +27,8 @@ n−2, back-porch noise, blanking and sync-tip level errors, colour-burst
 amplitude) add `scene_change`, `noise`, `blank_video` and `no_burst` events.
 The decoder stores them with the metadata (vhs-decode schema 2 and later); for
 a decode that has none, `--tbc <luma.tbc>` walks the raw fields to measure
-them (burst from `<luma>_chroma.tbc` when present, else from the luma TBC).
+them (burst from the chroma TBC beside the luma one when there is one,
+else from the luma TBC itself).
 `--per-field` dumps the arrays for downstream classifiers.
 
 The output is JSON (schema 1). Fields are 0-based and half-open, seconds count
@@ -60,7 +61,7 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
                               field-data runs (2)
   --dropout-storm-threshold <f>  active-area dropout coverage (0.25)
   --tbc <luma.tbc>            walk the raw fields when the metadata holds no metrics
-  --chroma-tbc <file>         burst source (default <luma>_chroma.tbc if present)
+  --chroma-tbc <file>         burst source (default: the chroma sibling, see below)
   --no-burst                  do not measure burst amplitude, and do not read
                               the chroma TBC for it (halves the walk's I/O)
   -t, --threads <n>           worker threads for the walk (logical CPUs)
@@ -90,6 +91,19 @@ metadata describes, stored metrics failing `--verify-stored`, an unwritable
 output). A TBC holding *more* fields than the metadata is walked up to the
 metadata's count: the decoders flush metadata in batches, so a decode that was
 stopped early leaves a described prefix and an undescribed tail.
+
+### Finding the chroma TBC
+
+`--chroma-tbc` is normally unnecessary: the chroma beside the luma is found the
+same way ld-analyse finds it. A `.tbcy` luma pairs with `.tbcc` and a `.ytbc`
+with `.ctbc`; a plain `.tbc` luma tries `<stem>_chroma.tbc`, then
+`chroma_<stem>.tbc`, then `<stem>.ctbc`, then `<stem>.tbcc`.
+
+Name it explicitly only when the pair does not follow one of those. If no
+chroma is found, burst is measured from the luma TBC — which is right for a
+composite decode (CVBS, LaserDisc) and wrong for a colour-under one (VHS,
+Video8, S-Video), where the luma carries no burst and the resulting numbers
+mean nothing. `--no-burst` is the way to skip the measurement deliberately.
 
 ### Skipping the burst (`--no-burst`)
 

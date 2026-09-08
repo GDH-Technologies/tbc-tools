@@ -28,6 +28,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStringList>
 #include <QThread>
 #include <algorithm>
 #include <cmath>
@@ -69,12 +70,38 @@ bool parseInt(const QCommandLineParser &parser, const QCommandLineOption &option
     return true;
 }
 
+// The chroma TBC beside a luma one, paired the way ld-analyse pairs them when
+// it opens a luma file (TbcSource::startBackgroundLoad, src/ld-analyse/
+// tbcsource.cpp): a .tbcy/.ytbc luma takes the matching .tbcc/.ctbc, and a
+// plain .tbc luma takes tbc-video-export's <stem>_chroma.tbc, vhs-decode's
+// chroma_<stem>.tbc, or an alternate-extension sibling, in that order.
+//
+// Getting this wrong is quiet rather than loud: with no chroma found, the burst
+// is measured from the luma TBC instead, which on a colour-under decode (VHS,
+// Video8, S-Video) carries no burst and yields a plausible but meaningless
+// number. Use --no-burst to skip the measurement deliberately.
 QString defaultChromaFor(const QString &lumaPath)
 {
-    // tbc-video-export's convention: <stem>_chroma.tbc beside <stem>.tbc.
-    if (!lumaPath.endsWith(QStringLiteral(".tbc"), Qt::CaseInsensitive)) return QString();
-    const QString candidate = lumaPath.left(lumaPath.length() - 4) + QStringLiteral("_chroma.tbc");
-    return QFileInfo::exists(candidate) ? candidate : QString();
+    QStringList candidates;
+    if (lumaPath.endsWith(QStringLiteral(".tbcy"), Qt::CaseInsensitive)) {
+        candidates << lumaPath.left(lumaPath.length() - 5) + QStringLiteral(".tbcc");
+    } else if (lumaPath.endsWith(QStringLiteral(".ytbc"), Qt::CaseInsensitive)) {
+        candidates << lumaPath.left(lumaPath.length() - 5) + QStringLiteral(".ctbc");
+    } else if (lumaPath.endsWith(QStringLiteral(".tbc"), Qt::CaseInsensitive)) {
+        const QString stem = lumaPath.left(lumaPath.length() - 4);
+        const QFileInfo info(lumaPath);
+        const QString dir = info.path();
+        const QString prefixDir = (dir.isEmpty() || dir == QStringLiteral(".")) ? QString()
+                                                                               : dir + QLatin1Char('/');
+        candidates << stem + QStringLiteral("_chroma.tbc")
+                   << prefixDir + QStringLiteral("chroma_") + info.fileName()
+                   << stem + QStringLiteral(".ctbc")
+                   << stem + QStringLiteral(".tbcc");
+    }
+    for (const QString &candidate : candidates) {
+        if (QFileInfo::exists(candidate)) return candidate;
+    }
+    return QString();
 }
 
 // Store a walk's metrics on the metadata's fields
