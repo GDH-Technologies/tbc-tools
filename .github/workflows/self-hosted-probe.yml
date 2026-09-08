@@ -156,3 +156,59 @@ jobs:
           $m = Join-Path $env:GITHUB_WORKSPACE 'probe-marker.txt'
           if (Test-Path $m) { Write-Host "ACROSS-JOBS: PERSISTENT -- $(Get-Content $m)" }
           else { Write-Host "ACROSS-JOBS: NOT persistent -- $m is gone" }
+
+  linux-nix:
+    name: "wm: nixpkgs tooling and result closure"
+    runs-on: [self-hosted, Linux, X64, wm]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: Can nixpkgs supply the tools wm is missing?
+        run: |
+          for pkg in patchelf msbuild python311; do
+            if nix build "nixpkgs#$pkg" --no-link --print-out-paths; then
+              echo "OK      nixpkgs#$pkg"
+            else
+              echo "FAILED  nixpkgs#$pkg"
+            fi
+          done
+      - name: Does the flake result closure carry the libs the bundle verifier wants?
+        run: |
+          nix build .# --out-link result
+          nix-store -qR "$(readlink -f result)" > /tmp/closure.txt
+          wc -l < /tmp/closure.txt
+          for want in libxcb-cursor.so.0 libxcb-icccm.so.4 libxcb-image.so.0 \
+                      libxcb-keysyms.so.1 libxcb-render-util.so.0 \
+                      libxkbcommon.so.0 libxkbcommon-x11.so.0 libQt6XcbQpa.so.6; do
+            hit="$(xargs -a /tmp/closure.txt -I{} find {} -name "$want" -print -quit 2>/dev/null | head -1)"
+            printf '%-28s %s\n' "$want" "${hit:-NOT IN CLOSURE}"
+          done
+          hit="$(xargs -a /tmp/closure.txt -I{} find {} -path '*/plugins/platforms/libqxcb.so' -print -quit 2>/dev/null | head -1)"
+          printf '%-28s %s\n' "platforms/libqxcb.so" "${hit:-NOT IN CLOSURE}"
+
+  macos-nix:
+    name: "air0: does the pinned Qt survive macOS 26?"
+    runs-on: [self-hosted, macOS, ARM64, air0]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: nix build .# (the AUTOUIC / uic SIGTRAP question)
+        run: |
+          sw_vers
+          # The hosted macOS job pins macos-15 because the flake.lock-pinned
+          # nixpkgs Qt uic crashes with SIGTRAP on macOS 26 during CMake
+          # AUTOUIC. air0 runs 26.6.2, so find out for real. --no-link so a
+          # success leaves no GC root behind.
+          nix build .# --no-link --print-out-paths --print-build-logs
+      - name: Can nixpkgs supply create-dmg and python311 here?
+        if: always()
+        run: |
+          for pkg in create-dmg python311; do
+            if nix build "nixpkgs#$pkg" --no-link --print-out-paths; then
+              echo "OK      nixpkgs#$pkg"
+            else
+              echo "FAILED  nixpkgs#$pkg"
+            fi
+          done
