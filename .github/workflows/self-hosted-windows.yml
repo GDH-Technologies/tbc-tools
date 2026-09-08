@@ -17,9 +17,10 @@ name: "Self-hosted Windows build (win0)"
 #     actions/checkout runs `git clean -ffdx`, which is exactly why the hosted
 #     job's `.\vcpkg` clone location cannot be reused here.
 #   * No actions/cache. The disk persists, so the vcpkg binary cache is just a
-#     directory on the box. No harrypm/tbc-tools-ci-cache, no chunked archive
-#     reassembly, no cache-repo token -- this fork does not own that repo, and
-#     this workflow needs no secret beyond the default token.
+#     directory on the box. None of the hosted job's cross-repo cache machinery
+#     comes along -- no checkout of the upstream CI cache repository, no chunked
+#     archive reassembly, no cache-repo token. This fork does not own that
+#     repository, and this workflow needs no secret beyond the default token.
 #   * x86_64 only: win0 is x64, so the hosted arm64 matrix leg goes away, and
 #     with it the gas-preprocessor.pl pre-fetch that only arm64 ffmpeg needs.
 #   * -DBUILD_TESTING=ON (hosted uses OFF) so ctest runs here. The two POSIX
