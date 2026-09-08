@@ -104,20 +104,34 @@ QString defaultChromaFor(const QString &lumaPath)
     return QString();
 }
 
-// Store a walk's metrics on the metadata's fields
-void storeMetrics(TbcMetaData &metaData, const FieldMetrics &metrics)
+// Store a walk's metrics on the metadata's fields. Returns the number of fields
+// whose stored burst amplitude was kept because this walk did not measure it.
+qint32 storeMetrics(TbcMetaData &metaData, const FieldMetrics &metrics)
 {
     const qint32 n = std::min<qint32>(metaData.getNumberOfFields(), metrics.lumaMeanIre.size());
+    qint32 preservedBurst = 0;
     for (qint32 i = 0; i < n; i++) {
-        TbcMetaData::PictureMetrics p;
+        // Start from the stored row: a metric this walk did not measure keeps the
+        // value already in the metadata. --no-burst means "do not measure burst",
+        // not "erase it", and the writer replaces the whole picture_metrics row.
+        TbcMetaData::PictureMetrics p = metaData.getFieldPictureMetrics(i + 1);
         p.lumaMeanIre = metrics.lumaMeanIre[i];
         p.fieldDiffIre = metrics.fieldDiffIre[i];
         p.blankingDevIre = metrics.blankingDevIre[i];
         p.syncTipDevIre = metrics.syncTipDevIre[i];
         p.noiseIre = metrics.noiseIre[i];
-        p.burstAmpIre = metrics.hasBurst ? metrics.burstAmpIre[i] : std::numeric_limits<double>::quiet_NaN();
+        // hasBurst is per-run: it says whether burst was measured at all, not
+        // whether this field's measurement succeeded. A per-value NaN test would
+        // also keep stale values where a real burst walk found nothing, so
+        // --force-walk could never clear a bad one.
+        if (metrics.hasBurst) {
+            p.burstAmpIre = metrics.burstAmpIre[i];
+        } else if (std::isfinite(p.burstAmpIre)) {
+            preservedBurst++;
+        }
         metaData.updateFieldPictureMetrics(p, i + 1);
     }
+    return preservedBurst;
 }
 
 // Compare walked metrics with the stored ones: max |stored - walked| per metric
@@ -279,7 +293,7 @@ int main(int argc, char *argv[])
     QCommandLineOption blankOption("blank-luma-ire", QCoreApplication::translate("main", "Active luma at or below which a quiet field is blank (default 5)"), "IRE");
     QCommandLineOption minClipOption("min-clip-fields", QCoreApplication::translate("main", "A section shorter than this is 'unknown', never a clip (default 10)"), "n");
     QCommandLineOption minNonClipRunOption("min-non-clip-run-fields", QCoreApplication::translate("main", "A noise/blank run at least this long splits a section (default 50)"), "n");
-    QCommandLineOption noBurstOption("no-burst", QCoreApplication::translate("main", "Do not measure burst amplitude, and do not read the chroma TBC for it (halves the walk's I/O; no no_burst events)"));
+    QCommandLineOption noBurstOption("no-burst", QCoreApplication::translate("main", "Do not measure burst amplitude, and do not read the chroma TBC for it (halves the walk's I/O; no no_burst events; a stored burst amplitude is kept, not cleared)"));
     QCommandLineOption forceWalkOption("force-walk", QCoreApplication::translate("main", "Walk the TBC even when the metadata already holds picture metrics"));
     QCommandLineOption verifyStoredOption("verify-stored", QCoreApplication::translate("main", "Walk the TBC and compare with the stored metrics; exit 1 above 0.05 IRE"));
     QCommandLineOption writeOption("write", QCoreApplication::translate("main", "Store walked metrics and reconstructed events in the metadata (the .tbc.db; a JSON-only decode gets one first and the JSON is refreshed)"));
@@ -439,7 +453,13 @@ int main(int argc, char *argv[])
         // large capture.
         bool metricsDirty = false, captureDirty = false, eventsDirty = false, segmentsDirty = false;
         if (walked) {
-            storeMetrics(metaData, metrics);
+            const qint32 preservedBurst = storeMetrics(metaData, metrics);
+            if (preservedBurst > 0) {
+                qWarning().noquote()
+                    << QStringLiteral("tbc-segments: --no-burst: kept the stored burst amplitude "
+                                      "for %1 field(s); it was not re-measured")
+                           .arg(preservedBurst);
+            }
             metricsDirty = true;
         }
         if (rfRate > 0 && !(metaData.getVideoParameters().rfSourceSampleRateHz > 0)) {
