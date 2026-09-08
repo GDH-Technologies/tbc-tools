@@ -43,6 +43,7 @@ set(ld-analyse_SOURCES
     chromadecoderconfigdialog.cpp chromadecoderconfigdialog.ui
     tbcsource.cpp
     vbidialog.cpp vbidialog.ui
+    vbiprocessingdialog.cpp vbiprocessingdialog.h
     configuration.cpp
     dropoutanalysisdialog.cpp dropoutanalysisdialog.ui
     visibledropoutanalysisdialog.cpp visibledropoutanalysisdialog.ui

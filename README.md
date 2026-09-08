@@ -28,8 +28,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ### Core Processing Tools
 
 - **ld-analyse**       - GUI tool for TBC file visual analysis & adjustment handler. Supports drag-and-drop loading of `.tbc`, `.ytbc`, `.ctbc`, `.tbcy`, `.tbcc`, `.db`, and `.json` files into the main window.
-- **ld-process-vbi**   - Decode Vertical Blanking Interval data (Closed Captions, VITC - Vertical Interval Time Code, XDS Data) 
-- **ld-process-vits**  - Process Vertical Interval Test Signals
+- **ld-process-vbi**   - Decode Vertical Blanking Interval data (Closed Captions, VITC - Vertical Interval Time Code, XDS Data) and VITS metrics; selectable processing options (`--no-vbi-core`/`--no-ntsc`/`--no-vitc`/`--no-closed-captions`/`--teletext`/`--vits`; teletext off by default, non-fatal)
 - **ac3-decoder**      - Decode AC3 data from demodulated AC3-RF QPSK symbols
 
 ### EFM Decoder Suite

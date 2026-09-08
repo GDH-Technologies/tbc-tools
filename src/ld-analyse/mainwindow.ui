@@ -805,7 +805,6 @@
      <string>Tools</string>
     </property>
     <addaction name="actionProcess_VBI"/>
-    <addaction name="actionProcess_VITS"/>
     <addaction name="actionFix_JSON_SNR"/>
     <addaction name="actionAuto_Audio_Align"/>
     <addaction name="actionEFM_Handler"/>
@@ -909,11 +908,6 @@
   <action name="actionProcess_VBI">
    <property name="text">
     <string>Process VBI...</string>
-   </property>
-  </action>
-  <action name="actionProcess_VITS">
-   <property name="text">
-    <string>Process VITS...</string>
    </property>
   </action>
   <action name="actionFix_JSON_SNR">

@@ -34,13 +34,29 @@
 #include "tbcmetadata.h"
 #include "vbilinedecoder.h"
 
+// Per-run selection of which VBI/VITS data types to decode. Default-constructed
+// options match the CLI defaults: the four in-process VBI decoders enabled,
+// teletext and VITS off (they are opt-in post-steps).
+struct VbiProcessingOptions {
+    bool vbiCore = true;
+    bool ntsc = true;
+    bool vitc = true;
+    bool closedCaptions = true;
+    bool teletext = false;
+    bool vits = false;
+};
+
 class DecoderPool
 {
 public:
     // Public methods
     explicit DecoderPool(QString _inputFilename, QString _outputMetadataFilename,
-                        qint32 _maxThreads, TbcMetaData &_metaData);
+                        qint32 _maxThreads, TbcMetaData &_metaData,
+                        VbiProcessingOptions _options = VbiProcessingOptions{});
     bool process();
+
+    // Accessor used by worker threads to gate per-type decoding
+    const VbiProcessingOptions &options() const { return processingOptions; }
 
     // Member functions used by worker threads
     bool getInputField(qint32 &fieldNumber, SourceVideo::Data &fieldVideoData, TbcMetaData::Field &fieldMetadata, TbcMetaData::VideoParameters &videoParameters);
@@ -64,6 +80,7 @@ private:
     qint32 progressReportInterval;
     TbcMetaData &metaData;
     SourceVideo sourceVideo;
+    VbiProcessingOptions processingOptions;
 
     // Output stream information (all guarded by outputMutex while threads are running)
     QMutex outputMutex;

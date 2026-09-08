@@ -48,6 +48,9 @@ void VbiLineDecoder::run()
     TbcMetaData::Field fieldMetadata;
     TbcMetaData::VideoParameters videoParameters;
 
+    // Which VBI types to decode this run (constant across all fields)
+    const VbiProcessingOptions options = decoderPool.options();
+
     while (!abort) {
         // Get the next field to process from the input file
         if (!decoderPool.getInputField(fieldNumber, sourceFieldData, fieldMetadata, videoParameters)) {
@@ -64,14 +67,16 @@ void VbiLineDecoder::run()
         else tbcDebugStream() << "VbiLineDecoder::process(): Getting metadata for field" << fieldNumber << "(second)";
 
         // Get the 24-bit biphase-coded data from field lines 16-18
-        BiphaseCode biphaseCode;
-        biphaseCode.decodeLines(getFieldLine(sourceFieldData, 16, videoParameters),
-                                getFieldLine(sourceFieldData, 17, videoParameters),
-                                getFieldLine(sourceFieldData, 18, videoParameters),
-                                videoParameters, fieldMetadata);
+        if (options.vbiCore) {
+            BiphaseCode biphaseCode;
+            biphaseCode.decodeLines(getFieldLine(sourceFieldData, 16, videoParameters),
+                                    getFieldLine(sourceFieldData, 17, videoParameters),
+                                    getFieldLine(sourceFieldData, 18, videoParameters),
+                                    videoParameters, fieldMetadata);
+        }
 
-        // Process NTSC specific data if source type is NTSC
-        if (videoParameters.system == NTSC) {
+        // Process NTSC specific data if source type is NTSC (and not disabled by the processing options)
+        if (options.ntsc && videoParameters.system == NTSC) {
             // Get the 40-bit FM coded data from field line 10
             FmCode fmCode;
             fmCode.decodeLine(getFieldLine(sourceFieldData, 10, videoParameters), videoParameters, fieldMetadata);
@@ -88,18 +93,22 @@ void VbiLineDecoder::run()
         }
 
         // Get VITC data, trying each possible line and stopping when we find a valid one
-        VitcCode vitcCode;
-        for (qint32 lineNumber: vitcCode.getLineNumbers(videoParameters)) {
-            if (vitcCode.decodeLine(getFieldLine(sourceFieldData, lineNumber, videoParameters),
-                                    videoParameters, fieldMetadata)) {
-                break;
+        if (options.vitc) {
+            VitcCode vitcCode;
+            for (qint32 lineNumber: vitcCode.getLineNumbers(videoParameters)) {
+                if (vitcCode.decodeLine(getFieldLine(sourceFieldData, lineNumber, videoParameters),
+                                        videoParameters, fieldMetadata)) {
+                    break;
+                }
             }
         }
 
         // Get Closed Caption data from line 21 (525-line) or 22 (625-line)
-        ClosedCaption closedCaption;
-        closedCaption.decodeLine(getFieldLine(sourceFieldData, (videoParameters.system == PAL || videoParameters.system == SECAM || videoParameters.system == MESECAM) ? 22 : 21, videoParameters),
-                                 videoParameters, fieldMetadata);
+        if (options.closedCaptions) {
+            ClosedCaption closedCaption;
+            closedCaption.decodeLine(getFieldLine(sourceFieldData, (videoParameters.system == PAL || videoParameters.system == SECAM || videoParameters.system == MESECAM) ? 22 : 21, videoParameters),
+                                     videoParameters, fieldMetadata);
+        }
 
         // Write the result to the output metadata
         if (!decoderPool.setOutputField(fieldNumber, fieldMetadata)) {
