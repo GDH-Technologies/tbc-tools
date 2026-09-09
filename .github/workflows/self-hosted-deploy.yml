@@ -229,11 +229,28 @@ jobs:
         # shell happens to find.
         run: |
           set -euo pipefail
-          STORE="$(awk '/^Store paths:/ { print $3; exit }' "$RUNNER_TEMP/profile.txt")"
+          # Scope this to the tbc-tools record. `nix profile list` prints every
+          # entry in the profile, and taking the first "Store paths:" line
+          # anywhere picked up decode-orc on wm, which sorts first -- so the
+          # check looked for ld-analyse inside the wrong package and failed a
+          # deploy that had succeeded. Reading the first match was an ordering
+          # assumption, the same shape of mistake as the PATH assumption this
+          # block replaced.
+          STORE="$(awk '/^Name:[[:space:]]+tbc-tools$/ { found = 1; next }
+                        found && /^Store paths:/ { print $3; exit }' \
+                   "$RUNNER_TEMP/profile.txt")"
           if [ -z "$STORE" ]; then
-            echo "Could not read the installed store path from nix profile list." >&2
+            echo "No tbc-tools entry with a store path in nix profile list:" >&2
+            cat "$RUNNER_TEMP/profile.txt" >&2
             exit 1
           fi
+          case "$STORE" in
+            */*-tbc-tools-*) ;;
+            *)
+              echo "Resolved store path is not a tbc-tools build: $STORE" >&2
+              exit 1
+              ;;
+          esac
           echo "Installed store path: $STORE"
           if [ ! -x "$STORE/bin/ld-analyse" ]; then
             echo "Missing $STORE/bin/ld-analyse in the installed closure." >&2
@@ -311,11 +328,28 @@ jobs:
         # shell happens to find.
         run: |
           set -euo pipefail
-          STORE="$(awk '/^Store paths:/ { print $3; exit }' "$RUNNER_TEMP/profile.txt")"
+          # Scope this to the tbc-tools record. `nix profile list` prints every
+          # entry in the profile, and taking the first "Store paths:" line
+          # anywhere picked up decode-orc on wm, which sorts first -- so the
+          # check looked for ld-analyse inside the wrong package and failed a
+          # deploy that had succeeded. Reading the first match was an ordering
+          # assumption, the same shape of mistake as the PATH assumption this
+          # block replaced.
+          STORE="$(awk '/^Name:[[:space:]]+tbc-tools$/ { found = 1; next }
+                        found && /^Store paths:/ { print $3; exit }' \
+                   "$RUNNER_TEMP/profile.txt")"
           if [ -z "$STORE" ]; then
-            echo "Could not read the installed store path from nix profile list." >&2
+            echo "No tbc-tools entry with a store path in nix profile list:" >&2
+            cat "$RUNNER_TEMP/profile.txt" >&2
             exit 1
           fi
+          case "$STORE" in
+            */*-tbc-tools-*) ;;
+            *)
+              echo "Resolved store path is not a tbc-tools build: $STORE" >&2
+              exit 1
+              ;;
+          esac
           echo "Installed store path: $STORE"
           if [ ! -x "$STORE/bin/ld-analyse" ]; then
             echo "Missing $STORE/bin/ld-analyse in the installed closure." >&2
