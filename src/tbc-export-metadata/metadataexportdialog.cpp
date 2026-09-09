@@ -12,6 +12,7 @@
 #include "ui_metadataexportdialog.h"
 
 #include "tbc/uistyle.h"
+#include "gui/processprogressrunner.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -48,13 +49,6 @@ bool parsePositiveInteger(const QString &text, qint32 *value)
     }
     return true;
 }
-
-class WaitCursorGuard
-{
-public:
-    WaitCursorGuard() { QApplication::setOverrideCursor(Qt::WaitCursor); }
-    ~WaitCursorGuard() { QApplication::restoreOverrideCursor(); }
-};
 
 QString helpOutputForExecutable(const QString &executablePath)
 {
@@ -437,34 +431,42 @@ void MetadataExportDialog::on_exportButton_clicked()
 
     arguments << inputFile;
 
-    WaitCursorGuard waitCursor;
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
     const QString processProgram = exportExecutablePath.isEmpty()
                                        ? QCoreApplication::applicationFilePath()
                                        : exportExecutablePath;
-    process.start(processProgram, arguments);
-    if (!process.waitForStarted(5000)) {
+
+    // Runs with the event loop alive, so the window keeps repainting and the
+    // export can be cancelled instead of locking the GUI for its duration
+    const ProcessProgressRunner::Result result =
+        ProcessProgressRunner::run(processProgram, arguments, this,
+                                   tr("Exporting metadata..."));
+
+    if (result.status == ProcessProgressRunner::Result::FailedToStart) {
         ui->statusLabel->setText(tr("Failed to start export process."));
         QMessageBox::warning(this, tr("Export failed"),
                              tr("Unable to start tbc-export-metadata process."));
         return;
     }
-    if (!process.waitForFinished(-1)) {
-        process.kill();
-        process.waitForFinished(1000);
+    if (result.status == ProcessProgressRunner::Result::Cancelled) {
+        // The user asked for this; it is not a failure to report back
+        ui->statusLabel->setText(tr("Export cancelled."));
+        return;
+    }
+    if (result.status != ProcessProgressRunner::Result::Finished) {
         ui->statusLabel->setText(tr("Export process timed out."));
         QMessageBox::warning(this, tr("Export failed"),
                              tr("tbc-export-metadata did not finish."));
         return;
     }
 
-    const QString processOutput = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    // The tool's streams were merged before; keep showing both to the user
+    const QString processOutput =
+        QString::fromLocal8Bit(result.standardOutput + result.standardError).trimmed();
+    if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
         ui->statusLabel->setText(tr("Export failed."));
         QMessageBox::warning(this, tr("Export failed"),
                              processOutput.isEmpty()
-                                 ? tr("tbc-export-metadata failed with exit code %1.").arg(process.exitCode())
+                                 ? tr("tbc-export-metadata failed with exit code %1.").arg(result.exitCode)
                                  : processOutput);
         return;
     }

@@ -11,6 +11,7 @@ add_executable(tbc-export-metadata
     vitcffmetadata.cpp
     metadataexportdialog.cpp
     metadataexportdialog.ui
+    ../library/gui/processprogressrunner.cpp
     main.cpp
 )
 target_link_libraries(tbc-export-metadata PRIVATE Qt::Core Qt::Gui Qt::Widgets tbc-library)

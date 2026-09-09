@@ -144,9 +144,10 @@ void DropOuts::read(SqliteReader &reader, int captureId, int fieldId)
 // Write DropOuts to SQLite
 void DropOuts::write(SqliteWriter &writer, int captureId, int fieldId) const
 {
-    // drop_outs has no primary key, so INSERT OR REPLACE appends; replace the
-    // field's rows wholesale so a rewrite of the same metadata is idempotent
-    writer.deleteFieldDropouts(captureId, fieldId);
+    // drop_outs has no primary key, so INSERT OR REPLACE appends rather than
+    // replacing. The capture's existing rows are cleared once by
+    // TbcMetaData::writeFields before this runs for any field, which keeps a
+    // rewrite of the same metadata idempotent without a scan per field.
     for (int i = 0; i < size(); i++) {
         writer.writeFieldDropouts(captureId, fieldId, startx(i), endx(i), fieldLine(i));
     }

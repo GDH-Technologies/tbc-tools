@@ -20,6 +20,7 @@ set(ld-analyse_SOURCES
     mainwindow.cpp mainwindow.ui
     timelinemarkerslider.cpp timelinemarkerslider.h
     metadataconverterutil.cpp
+    ../library/gui/processprogressrunner.cpp ../library/gui/processprogressrunner.h
     ../tbc-export-metadata/metadataexportdialog.cpp ../tbc-export-metadata/metadataexportdialog.h ../tbc-export-metadata/metadataexportdialog.ui
     oscilloscopedialog.cpp oscilloscopedialog.ui
     rgbscopedialog.cpp rgbscopedialog.h

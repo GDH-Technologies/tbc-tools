@@ -1704,6 +1704,13 @@ void TbcMetaData::readFields(SqliteReader &reader, int captureId)
 // Write array of Fields to SQLite
 void TbcMetaData::writeFields(SqliteWriter &writer, int captureId) const
 {
+    // Dropouts are replaced wholesale here, like decoder events and segments,
+    // because drop_outs has no primary key for INSERT OR REPLACE to match on.
+    // This loop always writes every field the capture has, so one delete up
+    // front leaves exactly the same rows as deleting field by field would --
+    // without making each delete scan the table.
+    writer.deleteCaptureDropouts(captureId);
+
     for (const Field &field : fields) {
         field.write(writer, captureId);
     }

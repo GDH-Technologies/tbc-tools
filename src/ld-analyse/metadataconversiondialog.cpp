@@ -164,7 +164,14 @@ void MetadataConversionDialog::on_convertButton_clicked()
         ui->outputLineEdit->setText(outputFileName);
     }
     QString errorMessage;
-    if (!MetadataConverterUtil::runMetadataConverter(direction, inputFileName, outputFileName, &errorMessage)) {
+    bool cancelled = false;
+    if (!MetadataConverterUtil::runMetadataConverter(direction, inputFileName, outputFileName,
+                                                    &errorMessage, this, &cancelled)) {
+        // Cancelling is something the user asked for, not an error to report back
+        if (cancelled) {
+            ui->statusLabel->setText(tr("Conversion cancelled."));
+            return;
+        }
         ui->statusLabel->setText(tr("Conversion failed."));
         QMessageBox messageBox;
         messageBox.warning(this, tr("Error"), errorMessage);
