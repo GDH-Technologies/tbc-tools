@@ -156,10 +156,22 @@ jobs:
 
           git -C "$CHECKOUT" fetch --tags --prune --prune-tags --force origin
 
-          # The profile entry's flake URL is git+file://$CHECKOUT?ref=refs/heads/main,
-          # so nix reads the main REF -- not the working tree. Only that ref has
-          # to advance, which means the developer's branch and uncommitted work
-          # are almost always none of this job's business.
+          # The profile entry's flake URL must be
+          # git+file://$CHECKOUT?ref=refs/heads/main so that nix reads the main
+          # REF -- not the working tree. Only that ref has to advance, which
+          # means the developer's branch and uncommitted work are almost always
+          # none of this job's business.
+          #
+          # That "?ref=" is load-bearing and is checked below. A bare
+          # git+file://$CHECKOUT resolves to whatever branch HEAD happens to be
+          # on, so `nix profile upgrade` silently builds the developer's branch
+          # instead of main. That is what happened on 2026-09-09: the entry had
+          # been installed unpinned, the checkout sat on a feature branch, and
+          # the deploy installed that branch's commit and failed the check
+          # below. Restore the pin with:
+          #
+          #   nix profile remove tbc-tools
+          #   nix profile install "git+file://$CHECKOUT?ref=refs/heads/main"
           BRANCH="$(git -C "$CHECKOUT" rev-parse --abbrev-ref HEAD)"
           if [ "$BRANCH" = "main" ]; then
             # main is the checked-out branch, so the only way to move the ref
@@ -184,6 +196,19 @@ jobs:
           MAIN_SHA="$(git -C "$CHECKOUT" rev-parse refs/heads/main)"
           if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
             echo "Refusing to deploy: $CHECKOUT main is at $MAIN_SHA, expected $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          # Catch a lost pin before spending a build on the wrong commit: an
+          # unpinned entry would resolve to HEAD's branch and the failure would
+          # only show up as a confusing rev mismatch further down.
+          if ! nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' \
+               | grep -q "Original flake URL:.*$CHECKOUT?ref=refs/heads/main"; then
+            echo "Refusing to deploy: the tbc-tools profile entry is not pinned to refs/heads/main." >&2
+            echo "It would follow whatever branch the checkout has open. Re-pin it with:" >&2
+            echo "  nix profile remove tbc-tools" >&2
+            echo "  nix profile install 'git+file://$CHECKOUT?ref=refs/heads/main'" >&2
+            nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' | grep "Original flake URL:" >&2 || true
             exit 1
           fi
 
