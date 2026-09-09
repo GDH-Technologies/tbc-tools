@@ -366,6 +366,9 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # on wm -- which failed a good deploy just as surely.
     "/^Name:[[:space:]]+tbc-tools$/",
     "*/*-tbc-tools-*)",
+    # macOS installs the GUI as a bundle, Linux as a plain binary. Checking
+    # only the Linux path failed every air0 deploy for a build that was fine.
+    "$STORE/bin/ld-analyse.app/Contents/MacOS/ld-analyse",
     # The Windows swap must be atomic and must refuse a locked install dir.
     "Programs\\tbc-tools",
     "Refusing to deploy: tbc-tools is running from",
