@@ -92,6 +92,17 @@ target_link_libraries(tbc-efm-handler PRIVATE
     tbc-library
 )
 
+add_executable(tbc-process-vbi
+    processvbi-main.cpp
+    processvbidialog.cpp
+    processvbidialog.h
+)
+
+target_link_libraries(tbc-process-vbi PRIVATE
+    Qt::Core Qt::Gui Qt::Widgets
+    tbc-library
+)
+
 set(_audio_align_vendor_dir "${CMAKE_SOURCE_DIR}/src/audio-align/vendor/vhs_decode_auto_audio_align")
 set(_teletext_vendor_dir "${CMAKE_SOURCE_DIR}/src/ld-process-vbi/vendor/vhs-teletext")
 target_compile_definitions(ld-analyse PRIVATE
@@ -129,6 +140,7 @@ endif()
 if(UNIX)
 	install(TARGETS ld-analyse BUNDLE DESTINATION bin)
 	install(TARGETS tbc-efm-handler)
+	install(TARGETS tbc-process-vbi)
 	
 	# Install desktop integration files directly to XDG standard locations
 	# This avoids hanging issues with xdg-* commands run via sudo
@@ -175,4 +187,5 @@ else()
 			BUNDLE DESTINATION bin
 	)
 	install(TARGETS tbc-efm-handler)
+	install(TARGETS tbc-process-vbi)
 endif()
