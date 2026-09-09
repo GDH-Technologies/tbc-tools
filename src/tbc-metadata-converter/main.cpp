@@ -184,6 +184,11 @@ int main(int argc, char *argv[])
                                         QCoreApplication::translate("main", "filename"));
     parser.addOption(outputJsonOption);
 
+    // Option to convert source metadata whose field numbering is broken
+    QCommandLineOption repairOption(QStringList() << "repair",
+                                    QCoreApplication::translate("main", "Convert source metadata with broken field numbering (a duplicate or missing field number) by dropping the repeats and renumbering. Lossy: fields after a gap shift down by one. Without this the conversion is refused."));
+    parser.addOption(repairOption);
+
     // Process the command line options and arguments given by the user
     parser.process(a);
 
@@ -269,7 +274,7 @@ int main(int argc, char *argv[])
 
     // Perform the conversion processing
     qInfo() << "Beginning metadata conversion (" << directionValue << ")...";
-    JsonConverter jsonConverter(inputFilename, outputFilename, direction);
+    JsonConverter jsonConverter(inputFilename, outputFilename, direction, parser.isSet(repairOption));
     if (!jsonConverter.process()) return 1;
 
     // Quit with success

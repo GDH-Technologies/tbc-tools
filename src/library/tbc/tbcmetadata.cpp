@@ -26,6 +26,7 @@
 #include <QSqlRecord>
 #include <fstream>
 #include <QDebug>
+#include <QSet>
 #include <QStringList>
 #include <QVariant>
 #include "tbc/logging.h"
@@ -1072,9 +1073,18 @@ void TbcMetaData::clear()
     segments.clear();
 }
 
+// Why the last read() refused the file, when it refused for a reason worth
+// putting in front of a user. Empty otherwise -- see the header.
+const QString &TbcMetaData::getLastReadError() const
+{
+    return lastReadError;
+}
+
 // Read all metadata from SQLite file
 bool TbcMetaData::read(QString fileName)
 {
+    lastReadError.clear();
+
     if (isJsonMetadataFilename(fileName)) {
         std::ifstream jsonFile(fileName.toStdString());
         if (jsonFile.fail()) {
@@ -1109,13 +1119,18 @@ bool TbcMetaData::read(QString fileName)
 
         // Check we saw VideoParameters - if not, we can't do anything useful!
         if (!videoParameters.isValid) {
-            qCritical("JSON file invalid: videoParameters object is not defined");
+            lastReadError = QStringLiteral("JSON file invalid: videoParameters object is not defined");
+            qCritical().noquote() << lastReadError;
             return false;
         }
 
         // Check numberOfSequentialFields is consistent
         if (videoParameters.numberOfSequentialFields != fields.size()) {
-            qCritical("JSON file invalid: numberOfSequentialFields does not match fields array");
+            lastReadError = QStringLiteral(
+                    "JSON file invalid: numberOfSequentialFields (%1) does not match the fields array (%2 entries)")
+                    .arg(videoParameters.numberOfSequentialFields)
+                    .arg(fields.size());
+            qCritical().noquote() << lastReadError;
             return false;
         }
 
@@ -1176,7 +1191,15 @@ bool TbcMetaData::read(QString fileName)
                                        userMarkerSelection, userMarkerComment,
                                        userMarkersJson,
                                        captureNotes, rfSourceSampleRateHz, osInfo, decoderVersion)) {
-            qCritical() << "Failed to read capture metadata from SQLite file";
+            // Usually the stub a conversion that died mid-transaction leaves:
+            // schema written, capture table empty. Worth saying so, because
+            // that file sits beside a .tbc.json that would have opened fine
+            // and takes precedence over it.
+            lastReadError = QStringLiteral(
+                    "SQLite file invalid: it holds no capture metadata. A conversion that "
+                    "failed part-way leaves a database in this state; reconvert it from the "
+                    ".tbc.json with tbc-metadata-converter");
+            qCritical().noquote() << lastReadError;
             return false;
         }
 
@@ -1244,6 +1267,25 @@ bool TbcMetaData::read(QString fileName)
 
         // Read all fields
         readFields(reader, captureId);
+
+        // The database states the field count twice -- capture.number_of_
+        // sequential_fields, and the field_record rows themselves -- and
+        // nothing made them agree until now. field_record is keyed on
+        // (capture_id, field_id) and written with INSERT OR REPLACE, so a
+        // source whose fields carry a duplicate seqNo converts into a
+        // database that declares one more field than it stores, with a hole
+        // where the loser went. readFields() appends row by row, so past that
+        // hole getField(n) silently returns the wrong field, and the last
+        // field number walks off the end of the vector. The JSON path has
+        // always refused this; refuse it here too rather than hand every
+        // consumer metadata that lies about its own shape.
+        const FieldNumbering numbering = checkFieldNumbering();
+        if (!numbering.isValid) {
+            lastReadError = QStringLiteral("SQLite file invalid: %1. Reconvert it from the .tbc.json "
+                                           "with tbc-metadata-converter").arg(numbering.summary());
+            qCritical().noquote() << lastReadError;
+            return false;
+        }
 
         // Schema version 8 tables (absent on older files: empty lists)
         readDecoderEvents(reader, captureId);
@@ -1837,12 +1879,32 @@ void TbcMetaData::LineParameters::applyTo(TbcMetaData::VideoParameters &videoPar
     videoParameters.lastActiveFrameLine = lastActiveFrameLine;
 }
 
+namespace {
+
+// What the field accessors below hand back when they are asked for a field
+// number that does not exist. They used to log the out-of-range number and
+// then index the vector with it anyway, which is undefined behaviour -- and
+// is what turned a .tbc.db whose declared field count outran its rows into an
+// ld-analyse crash instead of an error message. The bounds check now stands
+// on its own; a caller that ignores the log gets empty metadata, not a
+// segfault.
+const TbcMetaData::Field &outOfRangeField()
+{
+    // Value-initialised: Field holds a std::array with no default member
+    // initialiser, so a plain `const Field placeholder;` will not compile.
+    static const TbcMetaData::Field placeholder{};
+    return placeholder;
+}
+
+} // namespace
+
 // This method gets the metadata for the specified sequential field number (indexed from 1 (not 0!))
 const TbcMetaData::Field &TbcMetaData::getField(qint32 sequentialFieldNumber) const
 {
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getField(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField();
     }
 
     return fields[fieldNumber];
@@ -1854,6 +1916,7 @@ const TbcMetaData::VitsMetrics &TbcMetaData::getFieldVitsMetrics(qint32 sequenti
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldVitsMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().vitsMetrics;
     }
 
     return fields[fieldNumber].vitsMetrics;
@@ -1865,6 +1928,7 @@ const TbcMetaData::Vbi &TbcMetaData::getFieldVbi(qint32 sequentialFieldNumber) c
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldVbi(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().vbi;
     }
 
     return fields[fieldNumber].vbi;
@@ -1876,6 +1940,7 @@ const TbcMetaData::Ntsc &TbcMetaData::getFieldNtsc(qint32 sequentialFieldNumber)
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldNtsc(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().ntsc;
     }
 
     return fields[fieldNumber].ntsc;
@@ -1887,6 +1952,7 @@ const TbcMetaData::Vitc &TbcMetaData::getFieldVitc(qint32 sequentialFieldNumber)
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldVitc(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().vitc;
     }
 
     return fields[fieldNumber].vitc;
@@ -1898,6 +1964,7 @@ const TbcMetaData::ClosedCaption &TbcMetaData::getFieldClosedCaption(qint32 sequ
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldClosedCaption(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().closedCaption;
     }
 
     return fields[fieldNumber].closedCaption;
@@ -1909,6 +1976,7 @@ const DropOuts &TbcMetaData::getFieldDropOuts(qint32 sequentialFieldNumber) cons
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldDropOuts(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().dropOuts;
     }
 
     return fields[fieldNumber].dropOuts;
@@ -1919,7 +1987,8 @@ void TbcMetaData::updateField(const TbcMetaData::Field &field, qint32 sequential
 {
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
-        qCritical() << "TbcMetaData::updateFieldVitsMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        qCritical() << "TbcMetaData::updateField(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber] = field;
@@ -1931,6 +2000,7 @@ void TbcMetaData::updateFieldVitsMetrics(const TbcMetaData::VitsMetrics &vitsMet
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldVitsMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].vitsMetrics = vitsMetrics;
@@ -1942,6 +2012,7 @@ void TbcMetaData::updateFieldVbi(const TbcMetaData::Vbi &vbi, qint32 sequentialF
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldVbi(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].vbi = vbi;
@@ -1953,6 +2024,7 @@ void TbcMetaData::updateFieldNtsc(const TbcMetaData::Ntsc &ntsc, qint32 sequenti
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldNtsc(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].ntsc = ntsc;
@@ -1964,6 +2036,7 @@ void TbcMetaData::updateFieldVitc(const TbcMetaData::Vitc &vitc, qint32 sequenti
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldVitc(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].vitc = vitc;
@@ -1975,6 +2048,7 @@ void TbcMetaData::updateFieldClosedCaption(const TbcMetaData::ClosedCaption &clo
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldClosedCaption(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].closedCaption = closedCaption;
@@ -1986,6 +2060,7 @@ void TbcMetaData::updateFieldDropOuts(const DropOuts &dropOuts, qint32 sequentia
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldDropOuts(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].dropOuts = dropOuts;
@@ -1997,9 +2072,104 @@ void TbcMetaData::clearFieldDropOuts(qint32 sequentialFieldNumber)
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::clearFieldDropOuts(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].dropOuts.clear();
+}
+
+// One line describing how the field numbering is broken, for a log line or
+// an error dialog. Empty when the numbering is sound.
+QString TbcMetaData::FieldNumbering::summary() const
+{
+    if (isValid) return QString();
+
+    QStringList parts;
+    if (declaredFields != actualFields) {
+        parts << QStringLiteral("declares %1 fields but holds %2")
+                     .arg(declaredFields).arg(actualFields);
+    }
+    if (duplicates > 0) {
+        parts << QStringLiteral("%1 duplicate field number(s)").arg(duplicates);
+    }
+    if (gaps > 0) {
+        parts << QStringLiteral("%1 missing field number(s)").arg(gaps);
+    }
+    if (firstBadIndex >= 0) {
+        parts << QStringLiteral("first break at entry %1, numbered %2 rather than %3")
+                     .arg(firstBadIndex).arg(firstBadSeqNo).arg(firstBadIndex + 1);
+    }
+    return parts.join(QStringLiteral("; "));
+}
+
+// Does the field numbering hold up the assumption every consumer makes --
+// getField(n) == fields[n - 1], and numberOfSequentialFields fields in total?
+TbcMetaData::FieldNumbering TbcMetaData::checkFieldNumbering() const
+{
+    FieldNumbering report;
+    report.declaredFields = videoParameters.numberOfSequentialFields;
+    report.actualFields = static_cast<qint32>(fields.size());
+
+    QSet<qint32> seen;
+    seen.reserve(fields.size());
+    qint32 highestSeqNo = 0;
+
+    for (qint32 index = 0; index < report.actualFields; index++) {
+        const qint32 seqNo = fields[index].seqNo;
+        if (report.firstBadIndex < 0 && seqNo != index + 1) {
+            report.firstBadIndex = index;
+            report.firstBadSeqNo = seqNo;
+        }
+        if (seen.contains(seqNo)) {
+            report.duplicates++;
+        } else {
+            seen.insert(seqNo);
+        }
+        if (seqNo > highestSeqNo) highestSeqNo = seqNo;
+    }
+
+    // Field numbers run 1..highestSeqNo, so anything in that run that no field
+    // claims is a number the source never wrote.
+    const qint32 distinct = static_cast<qint32>(seen.size());
+    report.gaps = (highestSeqNo > distinct) ? highestSeqNo - distinct : 0;
+
+    report.isValid = report.declaredFields == report.actualFields
+            && report.duplicates == 0
+            && report.gaps == 0
+            && report.firstBadIndex < 0;
+    return report;
+}
+
+// Drop repeated field numbers, renumber what is left 1..N. See the header:
+// this cannot recover a field number the source never wrote, so everything
+// after a gap shifts down by one field.
+qint32 TbcMetaData::repairFieldNumbering()
+{
+    QSet<qint32> seen;
+    seen.reserve(fields.size());
+
+    QVector<Field> kept;
+    kept.reserve(fields.size());
+    for (const Field &field : fields) {
+        if (seen.contains(field.seqNo)) continue;
+        seen.insert(field.seqNo);
+        kept.append(field);
+    }
+
+    const qint32 dropped = static_cast<qint32>(fields.size() - kept.size());
+
+    for (qint32 index = 0; index < static_cast<qint32>(kept.size()); index++) {
+        kept[index].seqNo = index + 1;
+    }
+
+    fields = kept;
+    videoParameters.numberOfSequentialFields = static_cast<qint32>(fields.size());
+
+    // The PCM audio map is indexed by field position, so it has to follow the
+    // renumbering rather than keep pointing at where the fields used to be.
+    generatePcmAudioMap();
+
+    return dropped;
 }
 
 // This method appends a new field to the existing metadata
@@ -2067,6 +2237,7 @@ const TbcMetaData::PictureMetrics &TbcMetaData::getFieldPictureMetrics(qint32 se
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::getFieldPictureMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return outOfRangeField().pictureMetrics;
     }
 
     return fields[fieldNumber].pictureMetrics;
@@ -2077,6 +2248,7 @@ void TbcMetaData::updateFieldPictureMetrics(const TbcMetaData::PictureMetrics &p
     qint32 fieldNumber = sequentialFieldNumber - 1;
     if (fieldNumber < 0 || fieldNumber >= getNumberOfFields()) {
         qCritical() << "TbcMetaData::updateFieldPictureMetrics(): Requested field number" << sequentialFieldNumber << "out of bounds!";
+        return;
     }
 
     fields[fieldNumber].pictureMetrics = pictureMetrics;

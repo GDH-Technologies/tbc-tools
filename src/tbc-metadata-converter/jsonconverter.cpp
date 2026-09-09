@@ -13,8 +13,10 @@
 #include <QFile>
 #include <QFileInfo>
 
-JsonConverter::JsonConverter(const QString &inputFilename, const QString &outputFilename, Direction direction)
-    : m_direction(direction), m_inputFilename(inputFilename), m_outputFilename(outputFilename)
+JsonConverter::JsonConverter(const QString &inputFilename, const QString &outputFilename, Direction direction,
+                             bool repairFieldNumbering)
+    : m_direction(direction), m_inputFilename(inputFilename), m_outputFilename(outputFilename),
+      m_repairFieldNumbering(repairFieldNumbering)
 {
 
 }
@@ -53,10 +55,19 @@ bool JsonConverter::processJsonToSqlite()
     }
     
     qInfo() << "Successfully loaded JSON metadata";
-    
+
+    // Before anything is written: the SQLite side keys field_record on
+    // (capture_id, field_id) and writes it with INSERT OR REPLACE, so source
+    // metadata carrying a duplicate seqNo converts into a database that
+    // declares more fields than it holds. That database then crashes or
+    // mis-reads in every consumer, so the conversion stops here instead.
+    if (!ensureFieldNumbering(metaData)) {
+        return false;
+    }
+
     // Report on the contents
     reportMetadataContents(metaData);
-    
+
     qInfo() << "Metadata analysis complete. Output SQLite file will be:" << m_outputFilename;
 
     // Write through the library, the one owner of the SQLite schema: this
@@ -69,12 +80,65 @@ bool JsonConverter::processJsonToSqlite()
     }
     if (!metaData.write(m_outputFilename)) {
         qCritical() << "Failed to write SQLite file:" << m_outputFilename;
+        // A failed write leaves a database with the schema and no rows, plus
+        // its rollback journal. Left on disk it shadows the .tbc.json it was
+        // converted from -- consumers open the .tbc.db in preference -- so
+        // the asset would look broken rather than unconverted.
+        removePartialOutput();
         return false;
     }
 
     qInfo() << "SQLite database created successfully:" << m_outputFilename;
 
     return true;
+}
+
+// Refuse (or, with the repair opt-in, mend) metadata whose field numbering
+// will not survive conversion. See jsonconverter.h.
+bool JsonConverter::ensureFieldNumbering(TbcMetaData &metaData)
+{
+    const TbcMetaData::FieldNumbering numbering = metaData.checkFieldNumbering();
+    if (numbering.isValid) {
+        return true;
+    }
+
+    if (!m_repairFieldNumbering) {
+        qCritical().noquote() << "Field numbering in" << m_inputFilename << "is broken:"
+                              << numbering.summary();
+        qCritical() << "Refusing to convert: the SQLite output would declare more fields than it "
+                       "holds, which every consumer reads as a damaged file. Re-run with --repair "
+                       "to drop the repeated field numbers and renumber what is left (lossy: the "
+                       "fields after a gap shift down by one).";
+        return false;
+    }
+
+    const qint32 dropped = metaData.repairFieldNumbering();
+    qWarning().noquote() << "Repaired field numbering in" << m_inputFilename << ":"
+                         << numbering.summary();
+    qWarning() << "Dropped" << dropped << "repeated field(s); the metadata now describes"
+               << metaData.getNumberOfFields()
+               << "fields. Field numbers after the first break no longer line up with the source.";
+
+    const TbcMetaData::FieldNumbering afterRepair = metaData.checkFieldNumbering();
+    if (!afterRepair.isValid) {
+        qCritical().noquote() << "Repair did not produce sound field numbering:"
+                              << afterRepair.summary();
+        return false;
+    }
+
+    return true;
+}
+
+// Delete a half-written output file (and any rollback journal beside it).
+void JsonConverter::removePartialOutput()
+{
+    for (const QString &path : {m_outputFilename, m_outputFilename + QStringLiteral("-journal"),
+                                m_outputFilename + QStringLiteral("-wal"),
+                                m_outputFilename + QStringLiteral("-shm")}) {
+        if (QFileInfo::exists(path) && !QFile::remove(path)) {
+            qWarning() << "Could not remove the partially written file:" << path;
+        }
+    }
 }
 
 bool JsonConverter::processSqliteToJson()
