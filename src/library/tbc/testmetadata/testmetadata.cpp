@@ -30,6 +30,7 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QSqlRecord>
 #include <QTemporaryDir>
 #include <cmath>
 #include <cstdlib>
@@ -253,6 +254,26 @@ void execSql(const QString &dbPath, const QString &sql)
         db.close();
     }
     QSqlDatabase::removeDatabase(connection);
+}
+
+// The "detail" column of an EXPLAIN QUERY PLAN row, which names the index a
+// statement resolves to (or says SCAN when it resolves to none).
+QString queryPlanDetail(const QString &dbPath, const QString &sql)
+{
+    const QString connection = QStringLiteral("testmetadata_probe_plan");
+    QString detail;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(dbPath);
+        CHECK(db.open());
+        QSqlQuery query(db);
+        CHECK(query.exec(QStringLiteral("EXPLAIN QUERY PLAN ") + sql));
+        CHECK(query.next());
+        detail = query.value(query.record().count() - 1).toString();
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    return detail;
 }
 
 QString queryString(const QString &dbPath, const QString &sql)
@@ -859,6 +880,133 @@ void testSqliteFirstPaths()
     CHECK(fromDb.appendSegment(another) == 3);
 }
 
+// drop_outs carries no primary key and its FOREIGN KEY creates no index, so
+// every lookup against it used to scan the whole table -- which made writing a
+// capture quadratic in the field count. The index is applied on every writer
+// open, and the capture's rows are now cleared once per write rather than once
+// per field. Both properties are checked here, along with the rewrite semantics
+// the single delete has to preserve.
+void testDropoutIndexAndRewrite()
+{
+    std::cerr << "Testing dropout index and bulk rewrite\n";
+    QTemporaryDir dir;
+    CHECK(dir.isValid());
+
+    // A capture with dropouts spread over many fields, so a per-capture delete
+    // has to clear rows belonging to fields other than the one being written
+    const qint32 fieldCount = 200;
+    const QString dbPath = dir.filePath(QStringLiteral("dropouts.tbc.db"));
+
+    TbcMetaData original;
+    {
+        // TbcMetaData is non-copyable, so build it in place
+        TbcMetaData::VideoParameters vp;
+        vp.system = NTSC;
+        vp.fieldWidth = 910;
+        vp.fieldHeight = 263;
+        vp.sampleRate = 14318181.0;
+        vp.black16bIre = 16384;
+        vp.white16bIre = 54016;
+        vp.blanking16bIre = 16384;
+        vp.colourBurstStart = 78;
+        vp.colourBurstEnd = 110;
+        vp.activeVideoStart = 134;
+        vp.activeVideoEnd = 896;
+        vp.tapeFormat = QStringLiteral("VHS");
+        vp.numberOfSequentialFields = fieldCount;
+        vp.isValid = true;
+        original.setVideoParameters(vp);
+
+        for (qint32 i = 0; i < fieldCount; i++) {
+            TbcMetaData::Field field;
+            field.isFirstField = (i % 2) == 0;
+            field.syncConf = 45;
+            field.fileLoc = static_cast<qint64>(i) * 675840;
+            field.diskLoc = i;
+            field.decodeFaults = -1;
+            // two dropouts on every third field
+            if ((i % 3) == 0) {
+                field.dropOuts.append(100 + i, 120 + i, 10);
+                field.dropOuts.append(300 + i, 340 + i, 11);
+            }
+            original.appendField(field);
+        }
+    }
+    const int expectedDropouts = 2 * ((fieldCount + 2) / 3);
+
+    CHECK(original.write(dbPath));
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM field_record")) == fieldCount);
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM drop_outs")) == expectedDropouts);
+
+    // The index exists, and the per-field predicate resolves to it rather than
+    // scanning. This is the property that makes the write linear.
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+                                          "AND name='drop_outs_field'")) == 1);
+    const QString plan = queryPlanDetail(
+        dbPath, QStringLiteral("SELECT startx FROM drop_outs WHERE capture_id = 1 AND field_id = 3"));
+    CHECK(plan.contains(QStringLiteral("drop_outs_field")));
+    CHECK(!plan.startsWith(QStringLiteral("SCAN")));
+
+    // Rewriting the same metadata in place must not duplicate a single row
+    CHECK(original.write(dbPath));
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM drop_outs")) == expectedDropouts);
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM field_record")) == fieldCount);
+
+    // ...and the spans still belong to the right fields
+    TbcMetaData readBack;
+    CHECK(readBack.read(dbPath));
+    CHECK(readBack.getField(1).dropOuts.size() == 2);
+    CHECK(readBack.getField(1).dropOuts.startx(0) == 100);
+    CHECK(readBack.getField(1).dropOuts.endx(1) == 340);
+    CHECK(readBack.getField(2).dropOuts.size() == 0);
+    CHECK(readBack.getField(4).dropOuts.size() == 2);
+    CHECK(readBack.getField(4).dropOuts.startx(0) == 103);
+
+    // A rewrite that removes dropouts must actually clear the old rows, not
+    // leave them behind: this is what the delete is for.
+    TbcMetaData trimmed;
+    trimmed.setVideoParameters(readBack.getVideoParameters());
+    for (qint32 i = 0; i < fieldCount; i++) {
+        TbcMetaData::Field field = readBack.getField(i + 1);
+        field.dropOuts = DropOuts();
+        trimmed.appendField(field);
+    }
+    CHECK(trimmed.write(dbPath));
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM drop_outs")) == 0);
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM field_record")) == fieldCount);
+}
+
+// An existing .tbc.db predates the index, including the version-1 files
+// vhs-decode writes. It must gain it on the next write, with no version bump
+// needed and no rows disturbed.
+void testDropoutIndexAddedToExistingDatabase()
+{
+    std::cerr << "Testing dropout index migration onto an existing database\n";
+    QTemporaryDir dir;
+    CHECK(dir.isValid());
+    const QString dbPath = dir.filePath(QStringLiteral("old.tbc.db"));
+    createVhsDecodeV1Database(dbPath, 4);
+
+    // The v1 file has the table but not the index
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+                                          "AND name='drop_outs_field'")) == 0);
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM drop_outs")) == 1);
+
+    TbcMetaData metaData;
+    CHECK(metaData.read(dbPath));
+    CHECK(metaData.getField(3).dropOuts.size() == 1);
+    CHECK(metaData.write(dbPath));
+
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+                                          "AND name='drop_outs_field'")) == 1);
+    // the row survived the migration, and did not double
+    CHECK(queryInt(dbPath, QStringLiteral("SELECT COUNT(*) FROM drop_outs")) == 1);
+    TbcMetaData after;
+    CHECK(after.read(dbPath));
+    CHECK(after.getField(3).dropOuts.size() == 1);
+    CHECK(after.getField(3).dropOuts.startx(0) == 100);
+}
+
 int main(int argc, char *argv[])
 {
     // Initialise Qt. The library's handler writes to stderr directly; Qt's
@@ -906,6 +1054,8 @@ int main(int argc, char *argv[])
         testSqliteFirstPaths();
         testScopedSqliteWrite();
         testFieldNumberingIntegrity();
+        testDropoutIndexAndRewrite();
+        testDropoutIndexAddedToExistingDatabase();
         std::cout << "testmetadata: all checks passed\n";
         return 0;
     }

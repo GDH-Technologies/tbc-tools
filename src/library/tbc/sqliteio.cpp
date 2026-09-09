@@ -115,6 +115,21 @@ CREATE TABLE IF NOT EXISTS segment (
 CREATE INDEX IF NOT EXISTS segment_start ON segment(capture_id, start_field);
 )");
 
+// Indexes this library adds on top of the shared schema. Kept out of
+// SEGMENTATION_SCHEMA_SQL because that block is shared verbatim with
+// vhs-decode, and out of SCHEMA_SQL because that one only runs when a database
+// is created: these are applied on every writer open so an existing .tbc.db
+// gains them without a user_version bump.
+//
+// drop_outs is a child table whose FOREIGN KEY creates no index of its own, so
+// every lookup, and every ON DELETE CASCADE from field_record, scanned the whole
+// table. Writing a capture replaces each field's rows in turn, which made a
+// conversion quadratic in the field count: a 279k-field tape spent hours in
+// DELETE alone.
+static const QString LIBRARY_INDEX_SQL = QStringLiteral(R"(
+CREATE INDEX IF NOT EXISTS drop_outs_field ON drop_outs(capture_id, field_id);
+)");
+
 // SQL schema as per documentation
 static const QString SCHEMA_SQL = QStringLiteral(R"(
 PRAGMA user_version = 8;
@@ -764,6 +779,13 @@ static bool ensureFieldRecordColumns(QSqlDatabase &db)
     return true;
 }
 
+// Apply this library's own indexes. Called on every writer open, after the
+// tables are known to exist.
+static bool ensureLibraryIndexes(QSqlDatabase &db)
+{
+    return executeSchemaStatements(db, LIBRARY_INDEX_SQL, "library index");
+}
+
 // Ensure the schema-version-8 segmentation tables exist (picture_metrics,
 // decoder_event, segment) and the file carries the current version. The DDL
 // is all IF NOT EXISTS, so this is idempotent on any earlier .tbc.db,
@@ -1073,6 +1095,9 @@ bool SqliteWriter::createSchema()
     if (!ensureSegmentationTables(db)) {
         return false;
     }
+    if (!ensureLibraryIndexes(db)) {
+        return false;
+    }
 
     return true;
 }
@@ -1185,6 +1210,9 @@ bool SqliteWriter::updateCaptureMetadata(int captureId, const QString &system, c
         return false;
     }
     if (!ensureSegmentationTables(db)) {
+        return false;
+    }
+    if (!ensureLibraryIndexes(db)) {
         return false;
     }
     QSqlQuery query(db);
@@ -1390,6 +1418,27 @@ bool SqliteWriter::writeFieldClosedCaption(int captureId, int fieldId, int data0
     return true;
 }
 
+// Clear a capture's dropouts in one statement, the way deleteDecoderEvents and
+// deleteSegments clear theirs. writeFields calls this once before writing every
+// field, instead of deleting field by field inside the loop.
+bool SqliteWriter::deleteCaptureDropouts(int captureId)
+{
+    QSqlQuery query(db);
+    query.prepare("DELETE FROM drop_outs WHERE capture_id = ?");
+    query.addBindValue(captureId);
+
+    if (!query.exec()) {
+        tbcDebugStream() << "Failed to delete capture dropouts:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+// Retained for a caller that needs to replace one field's dropouts on their
+// own. TbcMetaData::writeFields uses deleteCaptureDropouts instead, so nothing
+// in the library calls this today; with drop_outs_field in place it is an index
+// seek rather than the table scan it used to be.
 bool SqliteWriter::deleteFieldDropouts(int captureId, int fieldId)
 {
     QSqlQuery query(db);

@@ -182,6 +182,7 @@ public:
     bool writeFieldVbi(int captureId, int fieldId, int vbi0, int vbi1, int vbi2);
     bool writeFieldVitc(int captureId, int fieldId, const int vitcData[8]);
     bool writeFieldClosedCaption(int captureId, int fieldId, int data0, int data1);
+    bool deleteCaptureDropouts(int captureId);
     bool deleteFieldDropouts(int captureId, int fieldId);
     bool writeFieldDropouts(int captureId, int fieldId, int startx, int endx, int fieldLine);
 

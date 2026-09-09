@@ -5,6 +5,8 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QStandardPaths>
+
+#include "gui/processprogressrunner.h"
 namespace {
 QString normalizeForPathParsing(const QString &path)
 {
@@ -155,16 +157,23 @@ QString defaultMetadataOutputPath(const QString &inputFilename, MetadataConversi
 bool runMetadataConverter(const QString &direction,
                           const QString &inputFilename,
                           const QString &outputFilename,
-                          QString *errorMessage)
+                          QString *errorMessage,
+                          QWidget *parent,
+                          bool *wasCancelled)
 {
-    return runMetadataConverter(metadataDirectionFromString(direction), inputFilename, outputFilename, errorMessage);
+    return runMetadataConverter(metadataDirectionFromString(direction), inputFilename, outputFilename,
+                                errorMessage, parent, wasCancelled);
 }
 
 bool runMetadataConverter(MetadataConversionDirection direction,
                           const QString &inputFilename,
                           const QString &outputFilename,
-                          QString *errorMessage)
+                          QString *errorMessage,
+                          QWidget *parent,
+                          bool *wasCancelled)
 {
+    if (wasCancelled) *wasCancelled = false;
+
     const QString converterPath = resolveMetadataConverterPath();
     if (converterPath.isEmpty()) {
         if (errorMessage) {
@@ -193,22 +202,32 @@ bool runMetadataConverter(MetadataConversionDirection direction,
                   << QStringLiteral("--output-json") << normalizedOutput;
     }
 
-    QProcess process;
-    process.start(converterPath, arguments);
-    if (!process.waitForFinished(-1)) {
+    const ProcessProgressRunner::Result result =
+        ProcessProgressRunner::run(converterPath, arguments, parent,
+                                   QObject::tr("Running tbc-metadata-converter..."));
+
+    if (result.status == ProcessProgressRunner::Result::Cancelled) {
+        if (wasCancelled) *wasCancelled = true;
+        if (errorMessage) {
+            *errorMessage = QObject::tr("tbc-metadata-converter was cancelled.");
+        }
+        return false;
+    }
+
+    if (result.status != ProcessProgressRunner::Result::Finished) {
         if (errorMessage) {
             *errorMessage = QObject::tr("tbc-metadata-converter did not finish.");
         }
         return false;
     }
 
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        const QString stdErr = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
-        const QString stdOut = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+    if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
+        const QString stdErr = QString::fromLocal8Bit(result.standardError).trimmed();
+        const QString stdOut = QString::fromLocal8Bit(result.standardOutput).trimmed();
         if (errorMessage) {
             *errorMessage = stdErr.isEmpty() ? stdOut : stdErr;
             if (errorMessage->isEmpty()) {
-                *errorMessage = QObject::tr("tbc-metadata-converter failed with exit code %1.").arg(process.exitCode());
+                *errorMessage = QObject::tr("tbc-metadata-converter failed with exit code %1.").arg(result.exitCode);
             }
         }
         return false;
