@@ -252,16 +252,37 @@ jobs:
               ;;
           esac
           echo "Installed store path: $STORE"
-          if [ ! -x "$STORE/bin/ld-analyse" ]; then
-            echo "Missing $STORE/bin/ld-analyse in the installed closure." >&2
+          # The GUI binary is laid out differently per platform, so check both
+          # rather than assume: Linux installs bin/ld-analyse, macOS installs a
+          # bundle at bin/ld-analyse.app/Contents/MacOS/ld-analyse. Asserting
+          # the Linux path failed every air0 deploy -- correctly reporting a
+          # file that genuinely is not there, for a build that was perfectly
+          # fine.
+          GUI=""
+          for candidate in \
+            "$STORE/bin/ld-analyse" \
+            "$STORE/bin/ld-analyse.app/Contents/MacOS/ld-analyse"; do
+            if [ -x "$candidate" ]; then
+              GUI="$candidate"
+              break
+            fi
+          done
+          if [ -z "$GUI" ]; then
+            echo "No ld-analyse in $STORE/bin (checked the plain and .app layouts):" >&2
+            ls -la "$STORE/bin" >&2 || true
             exit 1
           fi
+          echo "GUI binary: $GUI"
+
+          # tbc-video-export is a plain CLI binary on both platforms, so it is
+          # the one that can actually be executed here as a launch test.
           "$STORE/bin/tbc-video-export" --version
 
-          # Non-fatal: says whether an ordinary shell on this box would find
-          # the tools, which is what actually bit air0.
-          if ! command -v ld-analyse >/dev/null 2>&1; then
-            echo "::warning::ld-analyse is installed but not on PATH for this runner;" \
+          # Non-fatal, and probed with tbc-video-export rather than ld-analyse:
+          # on macOS the GUI is only ever a bundle, so its absence from PATH
+          # says nothing, whereas the CLI tool should be reachable on both.
+          if ! command -v tbc-video-export >/dev/null 2>&1; then
+            echo "::warning::tbc-tools is installed but not on PATH for this runner;" \
                  "add the nix profile's bin directory to the service environment."
           fi
           {
@@ -351,16 +372,37 @@ jobs:
               ;;
           esac
           echo "Installed store path: $STORE"
-          if [ ! -x "$STORE/bin/ld-analyse" ]; then
-            echo "Missing $STORE/bin/ld-analyse in the installed closure." >&2
+          # The GUI binary is laid out differently per platform, so check both
+          # rather than assume: Linux installs bin/ld-analyse, macOS installs a
+          # bundle at bin/ld-analyse.app/Contents/MacOS/ld-analyse. Asserting
+          # the Linux path failed every air0 deploy -- correctly reporting a
+          # file that genuinely is not there, for a build that was perfectly
+          # fine.
+          GUI=""
+          for candidate in \
+            "$STORE/bin/ld-analyse" \
+            "$STORE/bin/ld-analyse.app/Contents/MacOS/ld-analyse"; do
+            if [ -x "$candidate" ]; then
+              GUI="$candidate"
+              break
+            fi
+          done
+          if [ -z "$GUI" ]; then
+            echo "No ld-analyse in $STORE/bin (checked the plain and .app layouts):" >&2
+            ls -la "$STORE/bin" >&2 || true
             exit 1
           fi
+          echo "GUI binary: $GUI"
+
+          # tbc-video-export is a plain CLI binary on both platforms, so it is
+          # the one that can actually be executed here as a launch test.
           "$STORE/bin/tbc-video-export" --version
 
-          # Non-fatal: says whether an ordinary shell on this box would find
-          # the tools, which is what actually bit air0.
-          if ! command -v ld-analyse >/dev/null 2>&1; then
-            echo "::warning::ld-analyse is installed but not on PATH for this runner;" \
+          # Non-fatal, and probed with tbc-video-export rather than ld-analyse:
+          # on macOS the GUI is only ever a bundle, so its absence from PATH
+          # says nothing, whereas the CLI tool should be reachable on both.
+          if ! command -v tbc-video-export >/dev/null 2>&1; then
+            echo "::warning::tbc-tools is installed but not on PATH for this runner;" \
                  "add the nix profile's bin directory to the service environment."
           fi
           {
