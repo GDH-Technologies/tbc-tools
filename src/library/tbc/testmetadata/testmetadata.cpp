@@ -697,6 +697,106 @@ void testScopedSqliteWrite()
     CHECK(queryInt(dbPath, QStringLiteral("SELECT sync_conf FROM field_record WHERE field_id = 3")) == 45);
 }
 
+// A source whose fields carry a repeated field number converts into a
+// database that declares more fields than field_record holds: the table is
+// keyed on (capture_id, field_id) and written with INSERT OR REPLACE, so the
+// repeat overwrites its twin and takes a row with it. Nothing used to notice,
+// and every consumer then read past the end of the field vector.
+void testFieldNumberingIntegrity()
+{
+    std::cerr << "Testing field numbering integrity\n";
+
+    // Metadata built the normal way is sound
+    {
+        TbcMetaData metaData;
+        buildMetadata(metaData, 8, false);
+        const TbcMetaData::FieldNumbering numbering = metaData.checkFieldNumbering();
+        CHECK(numbering.isValid);
+        CHECK(numbering.summary().isEmpty());
+        CHECK(numbering.declaredFields == 8);
+        CHECK(numbering.actualFields == 8);
+        CHECK(numbering.duplicates == 0);
+        CHECK(numbering.gaps == 0);
+    }
+
+    // A repeated field number is caught, and the repair mends it
+    {
+        TbcMetaData metaData;
+        buildMetadata(metaData, 8, false);
+
+        // Make entry 4 a second copy of field 3, exactly as a resumed decode
+        // re-emitting an overlapping field does: field number 3 twice, and 4
+        // never written at all.
+        TbcMetaData::Field repeated = metaData.getField(3);
+        metaData.updateField(repeated, 4);
+
+        const TbcMetaData::FieldNumbering broken = metaData.checkFieldNumbering();
+        CHECK(!broken.isValid);
+        CHECK(broken.duplicates == 1);
+        CHECK(broken.gaps == 1);
+        CHECK(broken.firstBadIndex == 3);
+        CHECK(broken.firstBadSeqNo == 3);
+        CHECK(!broken.summary().isEmpty());
+
+        CHECK(metaData.repairFieldNumbering() == 1);
+        CHECK(metaData.getNumberOfFields() == 7);
+        CHECK(metaData.checkFieldNumbering().isValid);
+        for (qint32 fieldNumber = 1; fieldNumber <= 7; fieldNumber++) {
+            CHECK(metaData.getField(fieldNumber).seqNo == fieldNumber);
+        }
+    }
+
+    // A database whose rows do not match its declared count is refused, and
+    // says why
+    {
+        QTemporaryDir dir;
+        CHECK(dir.isValid());
+        const QString damagedPath = dir.filePath(QStringLiteral("damaged.tbc.db"));
+        const QString soundPath = dir.filePath(QStringLiteral("sound.tbc.db"));
+
+        TbcMetaData original;
+        buildMetadata(original, 8, true);
+        CHECK(original.write(damagedPath));
+        CHECK(original.write(soundPath));
+        CHECK(queryInt(damagedPath, QStringLiteral("SELECT COUNT(*) FROM field_record")) == 8);
+
+        // Lose one field row the way a repeated field number loses it, leaving
+        // capture.number_of_sequential_fields saying 8
+        execSql(damagedPath, QStringLiteral("DELETE FROM field_record WHERE field_id = 4"));
+        CHECK(queryInt(damagedPath, QStringLiteral("SELECT number_of_sequential_fields FROM capture")) == 8);
+
+        TbcMetaData loaded;
+        CHECK(!loaded.read(damagedPath));
+        CHECK(loaded.getLastReadError().contains(QStringLiteral("SQLite file invalid")));
+
+        // ...and a sound database still reads, clearing the error behind it
+        CHECK(loaded.read(soundPath));
+        CHECK(loaded.getLastReadError().isEmpty());
+        CHECK(loaded.getNumberOfFields() == 8);
+    }
+
+    // An out-of-range field number logs and hands back empty metadata. It used
+    // to log and then index the vector anyway, which is what crashed
+    // ld-analyse on a damaged database. The qCritical lines below are the
+    // expected output of this block, not a failure.
+    {
+        TbcMetaData metaData;
+        buildMetadata(metaData, 4, false);
+        CHECK(metaData.getField(5).seqNo == 0);
+        CHECK(metaData.getField(0).seqNo == 0);
+        CHECK(metaData.getField(-1).seqNo == 0);
+        CHECK(metaData.getFieldDropOuts(5).size() == 0);
+        CHECK(!metaData.getFieldVbi(5).inUse);
+
+        // A write past the end changes nothing rather than corrupting memory
+        TbcMetaData::Field field = metaData.getField(1);
+        field.syncConf = 99;
+        metaData.updateField(field, 5);
+        CHECK(metaData.getNumberOfFields() == 4);
+        CHECK(metaData.getField(4).syncConf == 45);
+    }
+}
+
 void testSqliteFirstPaths()
 {
     std::cerr << "Testing SQLite-first path resolution and projection\n";
@@ -805,6 +905,7 @@ int main(int argc, char *argv[])
         testMigrationFromVhsDecodeV1();
         testSqliteFirstPaths();
         testScopedSqliteWrite();
+        testFieldNumberingIntegrity();
         std::cout << "testmetadata: all checks passed\n";
         return 0;
     }

@@ -365,6 +365,11 @@ public:
 
     void clear();
     bool read(QString fileName);
+    // Why the last read() refused the file, when it refused for a reason a
+    // user can act on (metadata that is present but invalid, rather than a
+    // missing or unreadable file). Empty when the read succeeded, and after
+    // any failure the caller is expected to report generically.
+    const QString &getLastReadError() const;
     bool write(QString fileName) const;
     void readFields(JsonReader &reader);
     void writeFields(JsonWriter &writer) const;
@@ -436,6 +441,39 @@ public:
 
     void appendField(const Field &field);
 
+    // -- Field numbering integrity --
+    //
+    // Every consumer indexes fields by sequential field number: getField(n)
+    // returns fields[n - 1], which is only the right field while
+    // fields[i].seqNo == i + 1 and numberOfSequentialFields == fields.size().
+    // Metadata can break that. A decode that emitted a duplicate seqNo (a
+    // resumed decode re-writing an overlapping field) survives the JSON
+    // load, because the JSON check only compares the declared count with the
+    // array length -- but field_record is keyed on (capture_id, field_id),
+    // so the INSERT OR REPLACE that writes it silently drops the loser and
+    // the resulting database declares one more field than it stores. Every
+    // field after the break is then the wrong field, and the last one walks
+    // off the end of the vector.
+    struct FieldNumbering {
+        bool isValid = true;
+        qint32 declaredFields = 0;  // videoParameters.numberOfSequentialFields
+        qint32 actualFields = 0;    // fields.size()
+        qint32 duplicates = 0;      // fields whose seqNo repeats an earlier one
+        qint32 gaps = 0;            // seqNos absent from the 1..max run
+        qint32 firstBadIndex = -1;  // 0-based index of the first seqNo != index + 1
+        qint32 firstBadSeqNo = -1;
+        // One line naming the counts and the first break, for a log line or
+        // an error dialog. Empty when isValid.
+        QString summary() const;
+    };
+    FieldNumbering checkFieldNumbering() const;
+    // Drops every field whose seqNo repeats one already seen, renumbers the
+    // survivors 1..N and sets numberOfSequentialFields to match. Returns the
+    // number of fields dropped. Lossy by construction: a seqNo the source
+    // never wrote cannot be recovered, so every field after a gap shifts down
+    // by one. Only for an explicit operator-driven repair, never automatic.
+    qint32 repairFieldNumbering();
+
     void setNumberOfFields(qint32 numberOfFields);
     qint32 getNumberOfFields() const;
     qint32 getNumberOfFrames() const;
@@ -457,6 +495,7 @@ public:
 
 private:
     bool isFirstFieldFirst;
+    QString lastReadError;
     VideoParameters videoParameters;
     PcmAudioParameters pcmAudioParameters;
     QVector<Field> fields;

@@ -2654,6 +2654,11 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
 
     QString metadataFileName;
     QStringList failedMetadataCandidates;
+    // Why the last candidate was refused, when the library had something
+    // specific to say (metadata that is present but invalid). Without it the
+    // user sees only "could not load", which reads the same as a click that
+    // did nothing.
+    QString metadataReadError;
     for (const QString &candidate : metadataReadCandidates) {
         if (!QFileInfo::exists(candidate)) {
             continue;
@@ -2665,6 +2670,9 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
             break;
         }
         failedMetadataCandidates << resolvedCandidate;
+        if (!metaData.getLastReadError().isEmpty()) {
+            metadataReadError = metaData.getLastReadError();
+        }
     }
 
     if (metadataFileName.isEmpty()) {
@@ -2676,7 +2684,9 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
         currentSourceFilename.clear();
 
         // Show an error to the user and give up
-        lastIOError = "Could not load source TBC metadata file";
+        lastIOError = metadataReadError.isEmpty()
+                ? QStringLiteral("Could not load source TBC metadata file")
+                : QStringLiteral("Could not load source TBC metadata file.\n\n%1").arg(metadataReadError);
         return false;
     }
 
@@ -2759,7 +2769,9 @@ bool TbcSource::startBackgroundLoadMetadata(QString metadataFilename, QString di
     if (!metaData.read(metadataFilename)) {
         qWarning() << "Open metadata failed for filename" << metadataFilename;
         currentSourceFilename.clear();
-        lastIOError = "Could not load metadata file";
+        lastIOError = metaData.getLastReadError().isEmpty()
+                ? QStringLiteral("Could not load metadata file")
+                : QStringLiteral("Could not load metadata file.\n\n%1").arg(metaData.getLastReadError());
         return false;
     }
 
