@@ -359,10 +359,13 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     '".gdh-version"',
     "'.gdh-version'",
     # Resolve the smoke-test binaries from the store path just installed, not
-    # from PATH. The PATH form passed on wm and failed on air0 for a deploy
+    # from PATH: the PATH form passed on wm and failed on air0 for a deploy
     # that had entirely succeeded, because that runner has no nix profile bin
-    # on PATH.
-    "awk '/^Store paths:/ { print $3; exit }'",
+    # on PATH. Scoped to the tbc-tools record, because the first "Store paths:"
+    # line in `nix profile list` is whichever package sorts first -- decode-orc
+    # on wm -- which failed a good deploy just as surely.
+    "/^Name:[[:space:]]+tbc-tools$/",
+    "*/*-tbc-tools-*)",
     # The Windows swap must be atomic and must refuse a locked install dir.
     "Programs\\tbc-tools",
     "Refusing to deploy: tbc-tools is running from",
