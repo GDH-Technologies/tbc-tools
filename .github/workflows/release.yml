@@ -56,14 +56,19 @@ jobs:
         id: mode
         run: |
           SOURCE_COMMIT=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "workflow_call" ]; then
+          # NOTE: In a reusable (called) workflow the github context belongs to
+          # the CALLER, so github.event_name is the caller's event (e.g. push),
+          # never "workflow_call", and github.event.inputs is the caller's
+          # payload. Detect a call/dispatch invocation via the inputs context,
+          # which is populated for both workflow_call and workflow_dispatch.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -n "${{ inputs.create_release }}" ]; then
             SOURCE_COMMIT="${{ github.sha }}"
-            if [ "${{ github.event.inputs.create_release }}" = "true" ]; then
+            if [ "${{ inputs.create_release }}" = "true" ]; then
               if [ "${{ github.ref }}" != "refs/heads/main" ]; then
                 echo "Manual release mode is only allowed from refs/heads/main (current ref: ${{ github.ref }})." >&2
                 exit 1
               fi
-              RAW_INPUT="${{ github.event.inputs.version }}"
+              RAW_INPUT="${{ inputs.version }}"
               if [ -z "$RAW_INPUT" ]; then
                 echo "version is required when create_release is enabled."
                 exit 1
@@ -81,9 +86,14 @@ jobs:
               RELEASE_TAG=""
               MODE="build_only"
             fi
-          else
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             RELEASE_TAG="${{ github.ref_name }}"
             MODE="tag_push"
+          else
+            # Non-tag ref without release intent (e.g. the Tests workflow's
+            # workflow_call with create_release=false): build-only, no publish.
+            RELEASE_TAG=""
+            MODE="build_only"
           fi
 
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
@@ -103,7 +113,7 @@ jobs:
         if: ${{ steps.mode.outputs.mode == 'manual_release' }}
         env:
           RELEASE_TAG: ${{ steps.mode.outputs.release_tag }}
-          ALLOW_EXISTING_TAG_REBUILD: ${{ github.event.inputs.allow_existing_tag_rebuild }}
+          ALLOW_EXISTING_TAG_REBUILD: ${{ inputs.allow_existing_tag_rebuild }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           TAG_EXISTS=false
