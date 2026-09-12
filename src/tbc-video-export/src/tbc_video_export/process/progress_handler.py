@@ -71,7 +71,12 @@ class ProgressHandler:
         is set.
         """
         # number of procs that are running
-        max_line_length = os.get_terminal_size().columns
+        try:
+            max_line_length = os.get_terminal_size().columns
+        except OSError:
+            # stdout is not a terminal (piped/redirected); use the minimum
+            # terminal width rather than crashing with ENOTTY.
+            max_line_length = consts.MINIMUM_TERMINAL_WIDTH
         output_line = ""
 
         if not final_print:
@@ -115,7 +120,12 @@ class ProgressHandler:
         minimum height of at least 30 and increase/decrease the number of log lines
         based on that.
         """
-        terminal_height = os.get_terminal_size().lines
+        try:
+            terminal_height = os.get_terminal_size().lines
+        except OSError:
+            # stdout is not a terminal (piped/redirected); assume the minimum
+            # terminal height rather than crashing with ENOTTY.
+            terminal_height = consts.MINIMUM_TERMINAL_HEIGHT
         extra_lines = terminal_height - consts.MINIMUM_TERMINAL_HEIGHT
         max_message_lines = 5 + extra_lines
 

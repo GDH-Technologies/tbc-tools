@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tbc_video_export.common import consts, exceptions
+from tbc_video_export.common.enums import VideoSystem
 from tbc_video_export.common.utils import files
 from tbc_video_export.config.default import DEFAULT_CONFIG
 from tbc_video_export.config.profile import (
@@ -18,10 +19,7 @@ from tbc_video_export.config.profile import (
 )
 
 if TYPE_CHECKING:
-    from tbc_video_export.common.enums import (
-        HardwareAccelType,
-        VideoSystem,
-    )
+    from tbc_video_export.common.enums import HardwareAccelType
     from tbc_video_export.config.json import JsonConfig
 
 
@@ -360,7 +358,16 @@ class GetProfileFilter:
         ):
             return False
 
-        return not (
-            (self.video_system is not None and video_profile.video_system is not None)
-            and video_profile.video_system is not self.video_system
-        )
+        if self.video_system is None or video_profile.video_system is None:
+            return True
+
+        # SECAM/MESECAM share the 625-line/25fps geometry, so a single web
+        # video-profile variant (video_system: "secam") serves both systems.
+        secam_family = {VideoSystem.SECAM, VideoSystem.MESECAM}
+        if (
+            self.video_system in secam_family
+            and video_profile.video_system in secam_family
+        ):
+            return True
+
+        return video_profile.video_system is self.video_system

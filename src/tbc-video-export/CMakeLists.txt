@@ -6,7 +6,14 @@ set(TBC_VIDEO_EXPORT_WRAPPER_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/tbc-video-exp
 
 file(MAKE_DIRECTORY "${TBC_VIDEO_EXPORT_BUILD_SHARE_DIR}")
 file(MAKE_DIRECTORY "${TBC_VIDEO_EXPORT_BUILD_BIN_DIR}")
-file(COPY "${TBC_VIDEO_EXPORT_SOURCE_DIR}" DESTINATION "${TBC_VIDEO_EXPORT_BUILD_SHARE_DIR}")
+# Refresh the build-tree python copy on every build (configure-time file(COPY)
+# goes stale after source edits, so the build tree would keep running old
+# python via build/bin/tbc-video-export).
+add_custom_target(tbc-video-export-share-copy ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${TBC_VIDEO_EXPORT_SOURCE_DIR}"
+        "${TBC_VIDEO_EXPORT_BUILD_SHARE_DIR}/src"
+    COMMENT "Refreshing tbc-video-export python sources in build tree")
 configure_file("${TBC_VIDEO_EXPORT_WRAPPER_TEMPLATE}"
                "${TBC_VIDEO_EXPORT_BUILD_BIN}"
                @ONLY)

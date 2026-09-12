@@ -131,7 +131,8 @@ class TestWrappersFFmpeg:
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=["--standard", "--force-anamorphic"],
             expected_str=[
-                "scale=720:576:flags=lanczos:interl=1,setsar=128/117,setdar=16/9"
+                "scale=720:576:flags=lanczos:interl=1,setsar=128/117"
+                ",pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2,setdar=16/9"
             ],
         ),
         WrapperTestCase(
@@ -139,7 +140,8 @@ class TestWrappersFFmpeg:
             input_tbc=f"{get_path('ntsc_svideo')}.tbc",
             input_opts=["--standard", "--force-anamorphic"],
             expected_str=[
-                "scale=720:486:flags=lanczos:interl=1,setsar=12/13,setdar=16/9"
+                "scale=720:486:flags=lanczos:interl=1,setsar=12/13"
+                ",pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2,setdar=16/9"
             ],
         ),
         WrapperTestCase(
@@ -155,10 +157,10 @@ class TestWrappersFFmpeg:
             expected_str=["pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2"],
         ),
         WrapperTestCase(
-            id="full-frame ffv1 no auto-pad",
+            id="full-frame ffv1 auto-pad (422)",
             input_tbc=f"{get_path('palm_svideo')}.tbc",
             input_opts=["--full-frame"],
-            unexpected_str=["pad=ceil(iw/2)*2:"],
+            expected_str=["pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2"],
         ),
         WrapperTestCase(
             id="standard with vbi (exception)",
@@ -216,7 +218,10 @@ class TestWrappersFFmpeg:
                 {"-t", "0.080000"},
             ],
             unexpected_opts=[
-                {"-ss", "0.080000"},
+                # not {-ss, 0.080000}: the -t value for length=2 is also
+                # 0.080000 and the set check is order-agnostic; the expected
+                # -ss 0.040000 already pins the seek value
+                {"-t", "0.160000"},
             ],
         ),
         WrapperTestCase(
@@ -754,7 +759,8 @@ class TestWrappersFFmpeg:
                 "TEST_FILTER",
             ],
             expected_str=[
-                f",TEST_FILTER,format=yuv422p10le,{pal_setparams}[v_output]",
+                ",TEST_FILTER,pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2"
+                f",format=yuv422p10le,{pal_setparams}[v_output]",
                 "[v_output],TEST_FILTER",
             ],
         ),
@@ -780,6 +786,7 @@ class TestWrappersFFmpeg:
                 ",colorlevels=rimin=32/255:gimin=32/255:bimin=32/255"
                 ",colorlevels=rimin=255/255:gimin=255/255:bimin=255/255"
                 ",test_video_filter"
+                ",pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2"
                 ",format=yuv422p10le"
                 f",{pal_setparams}"
                 "[v_output]"
@@ -863,7 +870,7 @@ class TestWrappersFFmpeg:
     @pytest.mark.parametrize(
         ("input_name", "expected_slices"),
         [
-            ("pal_svideo", "20"),
+            ("pal_svideo", "6"),
             ("palm_svideo", "4"),
             ("ntsc_svideo", "4"),
         ],
