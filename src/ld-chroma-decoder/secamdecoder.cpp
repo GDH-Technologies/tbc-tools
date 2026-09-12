@@ -376,6 +376,18 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     // One-line hold: each line carries only one of the two components.
     fillChannel(work.dr, hasDr, fieldHeight, fieldWidth);
     fillChannel(work.db, hasDb, fieldHeight, fieldWidth);
+
+    // The hold fills invalid rows from the nearest valid ones, which drags
+    // picture colour into the last vertical-interval line. Blanking must
+    // stay strictly neutral, so re-zero it after the fill.
+    for (qint32 row = 0; row < firstLine; row++) {
+        double *drRow = &work.dr[static_cast<size_t>(row) * fieldWidth];
+        double *dbRow = &work.db[static_cast<size_t>(row) * fieldWidth];
+        for (qint32 x = 0; x < fieldWidth; x++) {
+            drRow[x] = 0.0;
+            dbRow[x] = 0.0;
+        }
+    }
 }
 
 void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,

@@ -314,6 +314,22 @@ void OutputWriter::convertLine(qint32 lineNumber, const ComponentFrame &componen
                && inputX < videoParameters.activeVideoEnd;
     };
 
+    // Chroma is only meaningful inside the active picture. Outside it the
+    // decoders have no colour reference -- no burst, or in SECAM's case a
+    // bare rest carrier -- so any value there is demodulated noise: the
+    // SECAM one-line hold drags picture colour into the last blanking
+    // line, and head-switching noise paints the blanking margins. Blanking
+    // must render as monochrome, so force neutral chroma there.
+    auto chromaInActiveArea = [&](qint32 x) -> bool {
+        if (config.trimToActiveRegion) {
+            return true;
+        }
+        const qint32 inputX = inputStartX + x;
+        return lineInActiveRegion
+               && inputX >= videoParameters.activeVideoStart
+               && inputX < videoParameters.activeVideoEnd;
+    };
+
     const double leveledYOffset = static_cast<double>(videoParameters.black16bIre);
     const double hybridBackgroundYOffset =
         ((videoParameters.system == PAL) || (videoParameters.system == PAL_M)
@@ -343,10 +359,11 @@ void OutputWriter::convertLine(qint32 lineNumber, const ComponentFrame &componen
                                            ? leveledYOffset
                                            : (hybridLevelWindowMode ? hybridBackgroundYOffset : 0.0);
                 const double yScale = leveledRange ? leveledYScale : 1.0;
+                const bool chromaActive = chromaInActiveArea(x);
                 // Scale Y'UV to 0-65535
                 const double rY = qBound(0.0, (inY[x] - yOffset) * yScale, 65535.0);
-                const double rU = inU[x] * uvScale;
-                const double rV = inV[x] * uvScale;
+                const double rU = chromaActive ? inU[x] * uvScale : 0.0;
+                const double rV = chromaActive ? inV[x] * uvScale : 0.0;
 
                 // Convert Y'UV to R'G'B'
                 const qint32 pos = x * 3;
@@ -374,9 +391,10 @@ void OutputWriter::convertLine(qint32 lineNumber, const ComponentFrame &componen
                                            ? leveledYOffset
                                            : (hybridLevelWindowMode ? hybridBackgroundYOffset : 0.0);
                 const double yScale = leveledRange ? leveledYScale : fullSignalYScale;
+                const bool chromaActive = chromaInActiveArea(x);
                 outY[x]  = static_cast<quint16>(qBound(Y_MIN, ((inY[x] - yOffset) * yScale)  + Y_ZERO, Y_MAX));
-                outCB[x] = static_cast<quint16>(qBound(C_MIN, (inU[x]             * cbScale) + C_ZERO, C_MAX));
-                outCR[x] = static_cast<quint16>(qBound(C_MIN, (inV[x]             * crScale) + C_ZERO, C_MAX));
+                outCB[x] = static_cast<quint16>(qBound(C_MIN, chromaActive ? (inU[x] * cbScale) + C_ZERO : C_ZERO, C_MAX));
+                outCR[x] = static_cast<quint16>(qBound(C_MIN, chromaActive ? (inV[x] * crScale) + C_ZERO : C_ZERO, C_MAX));
             }
 
             break;
