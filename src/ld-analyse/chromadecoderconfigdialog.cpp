@@ -377,9 +377,12 @@ void ChromaDecoderConfigDialog::updateDialog()
 
     if (isSourceSecam)
     {
-        // SECAM carries the colour difference signals as frequency, not as a
-        // subcarrier phase, so there is no chroma phase to shift for either
-        // SECAM decoder. Chroma gain still applies.
+        // SECAM carries the colour difference signals as frequency (FM), not
+        // as a subcarrier phase, so there is no burst-phase axis to shift.
+        // chromaPhase here is a post-demodulation hue rotation of the
+        // (D'B, D'R) colour-difference vector -- valid for the FM SECAM
+        // decoder. The pre-demod decoder has no such rotation, so its phase
+        // slider stays disabled. Chroma gain applies to both.
         switch (palConfiguration.chromaFilter) {
         case PalColour::mono:
             ui->secamMonoRadioButton->setChecked(true);
@@ -389,7 +392,7 @@ void ChromaDecoderConfigDialog::updateDialog()
         case PalColour::secam:
             ui->palFilterSecamRadioButton->setChecked(true);
             ui->chromaGainHorizontalSlider->setEnabled(true);
-            ui->chromaPhaseHorizontalSlider->setEnabled(false);
+            ui->chromaPhaseHorizontalSlider->setEnabled(true);
             break;
         case PalColour::secamPredemod:
             ui->palFilterSecamPredemodRadioButton->setChecked(true);

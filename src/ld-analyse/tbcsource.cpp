@@ -1882,6 +1882,7 @@ void TbcSource::configureChromaDecoder()
         // Its output covers the full line width regardless, so the full-frame
         // and hybrid preview modes still work.
         secamConfiguration.chromaGain = palConfiguration.chromaGain;
+        secamConfiguration.chromaPhase = palConfiguration.chromaPhase;
         secamDecoder.updateConfiguration(videoParameters, secamConfiguration);
         // The pre-demod SECAM decoder does no FM demodulation; it only needs
         // the line geometry plus the chroma gain and the live first-line
@@ -1939,6 +1940,7 @@ void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParamete
     if (videoParameters.chromaPhase != -1.0) {
         palConfiguration.chromaPhase = videoParameters.chromaPhase;
         ntscConfiguration.chromaPhase = videoParameters.chromaPhase;
+        secamConfiguration.chromaPhase = videoParameters.chromaPhase;
     }
 
     if (videoParameters.lumaNR >= 0.0) {

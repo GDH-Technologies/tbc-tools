@@ -490,6 +490,32 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     // One-line hold: each line carries only one of the two components.
     fillChannel(work.dr, hasDr, fieldHeight, fieldWidth);
     fillChannel(work.db, hasDb, fieldHeight, fieldWidth);
+
+    // Post-demodulation horizontal median (luma-dot reduction). On a combined
+    // luma+chroma source, luma transitions that fell inside the chroma block
+    // demodulate as sharp impulsive spikes in D'B/D'R -- the visible "luma
+    // dots". A 3-tap median clips single-sample spikes while preserving
+    // 2-sample-wide chroma detail and edges (unlike a lowpass, which would
+    // soften chroma for little gain since the residual is broadband in-band
+    // noise). Runs after the one-line hold so filled rows are cleaned too.
+    auto medianRow = [&](std::vector<double> &buffer) {
+        std::vector<double> cur(fieldWidth);
+        for (qint32 row = 0; row < fieldHeight; row++) {
+            double *src = &buffer[static_cast<size_t>(row) * fieldWidth];
+            // median of {src[x-1], src[x], src[x+1]} with edge clamp
+            for (qint32 x = 0; x < fieldWidth; x++) {
+                const double a = src[x == 0 ? 0 : x - 1];
+                const double b = src[x];
+                const double c = src[x == fieldWidth - 1 ? fieldWidth - 1 : x + 1];
+                const double lo = std::min(a, std::min(b, c));
+                const double hi = std::max(a, std::max(b, c));
+                cur[x] = a + b + c - lo - hi; // the median = sum - min - max
+            }
+            for (qint32 x = 0; x < fieldWidth; x++) src[x] = cur[x];
+        }
+    };
+    medianRow(work.dr);
+    medianRow(work.db);
 }
 
 void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,
