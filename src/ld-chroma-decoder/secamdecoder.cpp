@@ -51,10 +51,22 @@ constexpr double DB_HZ_PER_UNIT = 230.0e3 * 1.505;    // +346.15 kHz
 constexpr double DR_HZ_PER_UNIT = -280.0e3 * 1.902;   // -532.56 kHz
 
 // Quadrature demodulator lowpass. The legal subcarrier excursion is 3.900 to
-// 4.756 MHz (BT.470), i.e. +-428 kHz around the block centre, so this passes
-// the whole block while rejecting everything outside it.
-constexpr double DEMOD_LOWPASS_HZ = 600.0e3;
-constexpr qint32 DEMOD_NUM_TAPS = 25;
+// 4.756 MHz (BT.470), i.e. +-428 kHz around the block centre. The post-mix
+// lowpass at fc Hz around the block centre is equivalent to a pre-mix bandpass
+// of (centre+-fc), so fc is chosen to cover the block with a small margin while
+// rejecting out-of-block luma: 450 kHz => 3.878-4.778 MHz. A wider lowpass
+// (the previous 600 kHz => 3.728-4.928 MHz) let out-of-block luma HF through,
+// which the FM discriminator read as chroma -- the "luma dots" (cross-colour)
+// visible on combined luma+chroma sources. More taps sharpen the transition so
+// the block edges (+-428 kHz) are not attenuated.
+//
+// This only rejects OUT-of-block luma. Luma energy INSIDE the chroma block
+// (3.9-4.756 MHz) is indistinguishable from chroma by any filter and is
+// demodulated as dots; the fully clean path for a combined source is a split
+// chroma input (a separate _chroma.tbc, as vhs-decode's MESECAM/VHS path
+// produces), which carries only the chroma block and has no luma to leak.
+constexpr double DEMOD_LOWPASS_HZ = 450.0e3;
+constexpr qint32 DEMOD_NUM_TAPS = 41;
 
 // SECAM LF pre-emphasis A(f) = (1 + jf/f1) / (1 + jf/3f1), applied to the
 // colour difference signals before modulation at the studio; the tape path
