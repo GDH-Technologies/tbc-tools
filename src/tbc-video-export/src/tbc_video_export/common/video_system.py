@@ -41,9 +41,9 @@ class VideoSystemData:
                 return video_system_palm
 
             case VideoSystem.SECAM | VideoSystem.MESECAM:
-                # SECAM/MESECAM share PAL's 625-line geometry and 25 fps, but
-                # default to the mono chroma decoder (the SECAM decoders are
-                # opt-in). See the SECAM/PAL separation note in enums.py.
+                # SECAM/MESECAM share PAL's 625-line geometry and 25 fps but
+                # are FM-chroma systems: they default to the SECAM chroma
+                # decoder (see video_system_secam below). MONO is opt-in.
                 return video_system_secam
 
     @dataclass(frozen=True, slots=True)

@@ -62,6 +62,7 @@ public:
 
     struct SecamConfiguration {
         double chromaGain = 1.0;
+        double chromaPhase = 0.0;  // hue rotation of (D'B, D'R) in degrees
         TbcMetaData::VideoParameters videoParameters;
     };
 
@@ -96,6 +97,8 @@ private:
         double restMin = 0.0;
         double restMax = 0.0;
         double restMed = 0.0;
+        double redRestMed = 0.0;   // median rest carrier over D'R-voted picture lines
+        double blueRestMed = 0.0;  // median rest carrier over D'B-voted picture lines
 
         void resize(qint32 fieldHeight, qint32 fieldWidth);
     };

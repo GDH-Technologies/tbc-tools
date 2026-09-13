@@ -170,6 +170,7 @@ bool SecamDecoder::updateConfiguration(const TbcMetaData::VideoParameters &video
 {
     if (!configure(videoParameters)) return false;
     secamConfig.chromaGain = configuration.chromaGain;
+    secamConfig.chromaPhase = configuration.chromaPhase;
 
     return true;
 }
@@ -338,10 +339,33 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     // alternates strictly at line rate (BT.470), so rather than trusting each
     // line's own measurement, fit the better of the two possible parities:
     // a noisy line can land on the wrong side, the majority never does.
+    //
+    // The red/blue threshold is computed per field from the two rest-carrier
+    // clusters (lower-half median vs upper-half median), not from the fixed
+    // block centre: some sources (notably MESECAM) carry a global rest-carrier
+    // offset of ~+90 kHz, which pushes both clusters above the block centre and
+    // would make every line read "red" under an absolute threshold. The
+    // cluster-midpoint threshold tracks that offset and stays between the two
+    // clusters, so the vote stays decisive.
+    std::vector<double> picRest;
+    picRest.reserve(fieldHeight - firstLine);
+    for (qint32 row = firstLine; row < fieldHeight; row++) picRest.push_back(work.restCarrier[row]);
+    std::sort(picRest.begin(), picRest.end());
+    double loCenter = SECAM_FOB, hiCenter = SECAM_FOR;
+    const size_t n = picRest.size();
+    if (n >= 2) {
+        const size_t mid = n / 2;
+        loCenter = picRest[mid / 2];
+        hiCenter = picRest[mid + (n - mid) / 2];
+    } else if (n == 1) {
+        loCenter = hiCenter = picRest.front();
+    }
+    const double identityThreshold = 0.5 * (loCenter + hiCenter);
+
     qint32 evenIsRed = 0;
     qint32 picture = 0;
     for (qint32 row = firstLine; row < fieldHeight; row++) {
-        const bool measuredRed = work.restCarrier[row] > SECAM_BLOCK_CENTRE;
+        const bool measuredRed = work.restCarrier[row] > identityThreshold;
         if (measuredRed == ((row % 2) == 0)) evenIsRed++;
         picture++;
     }
@@ -351,31 +375,43 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
         work.lineIsRed[row] = ((row % 2) == 0) == drOnEven;
     }
 
+    // Per-identity rest-carrier references for the discriminator zero. Each
+    // line's own measured rest carrier is preferred when it is close to the
+    // nominal frequency; otherwise the per-identity field median is used. The
+    // median absorbs a global rest-carrier offset (e.g. MESECAM's ~+90 kHz)
+    // that the per-line REST_TOLERANCE would reject -- without it that offset
+    // leaks straight into D'B/D'R as a colour cast. Clamped to a sane window
+    // of the nominal frequency so a degenerate measurement cannot run away.
+    std::vector<double> redRest, blueRest;
+    for (qint32 row = firstLine; row < fieldHeight; row++) {
+        if (work.lineIsRed[row]) redRest.push_back(work.restCarrier[row]);
+        else blueRest.push_back(work.restCarrier[row]);
+    }
+    const double redRestMedRaw = redRest.empty() ? 0.0 : medianInPlace(redRest);
+    const double blueRestMedRaw = blueRest.empty() ? 0.0 : medianInPlace(blueRest);
+    constexpr double MAX_REF_DEV_HZ = 200.0e3;
+    const auto clampRef = [](double measured, double nominal, double maxDev) -> double {
+        if (measured <= 0.0 || std::fabs(measured - nominal) > maxDev) return nominal;
+        return measured;
+    };
+    const double redReference = clampRef(redRestMedRaw, SECAM_FOR, MAX_REF_DEV_HZ);
+    const double blueReference = clampRef(blueRestMedRaw, SECAM_FOB, MAX_REF_DEV_HZ);
+
     // TEMP diagnostic: capture vote tally + rest-carrier statistics.
     work.parityEvenIsRed = evenIsRed;
     work.parityPicture = picture;
     work.parityDrOnEven = drOnEven;
-    {
-        std::vector<double> picRest;
-        picRest.reserve(picture);
-        qint32 redCount = 0;
-        for (qint32 row = firstLine; row < fieldHeight; row++) {
-            const double v = work.restCarrier[row];
-            picRest.push_back(v);
-            if (v > SECAM_BLOCK_CENTRE) redCount++;
-        }
-        work.restRedCount = redCount;
-        if (!picRest.empty()) {
-            double mn = picRest.front();
-            double mx = picRest.front();
-            for (double v : picRest) { if (v < mn) mn = v; if (v > mx) mx = v; }
-            work.restMin = mn;
-            work.restMax = mx;
-            work.restMed = medianInPlace(picRest);
-        } else {
-            work.restMin = work.restMax = work.restMed = 0.0;
-        }
+    work.restRedCount = 0;
+    if (!picRest.empty()) {
+        work.restMin = picRest.front();
+        work.restMax = picRest.back();
+        work.restMed = picRest[n / 2];
+        for (double v : picRest) if (v > identityThreshold) work.restRedCount++;
+    } else {
+        work.restMin = work.restMax = work.restMed = 0.0;
     }
+    work.redRestMed = redRestMedRaw;
+    work.blueRestMed = blueRestMedRaw;
 
     // Demodulate to colour difference values, using each line's own measured
     // rest carrier as the discriminator zero where it is trustworthy. This
@@ -417,7 +453,8 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
 
         const double nominal = isRed ? SECAM_FOR : SECAM_FOB;
         const double reference = (std::fabs(work.restCarrier[row] - nominal) < REST_TOLERANCE_HZ)
-                                 ? work.restCarrier[row] : nominal;
+                                 ? work.restCarrier[row]
+                                 : (isRed ? redReference : blueReference);
         const double perHz = 1.0 / (isRed ? DR_HZ_PER_UNIT : DB_HZ_PER_UNIT);
 
         const double *freqLine = &work.frequency[static_cast<size_t>(row) * fieldWidth];
@@ -461,6 +498,15 @@ void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,
     // colour difference signals demodulate to.
     const double yRange = static_cast<double>(videoParameters.white16bIre - videoParameters.black16bIre);
 
+    // Optional hue rotation (--chroma-phase): rotate the (D'B, D'R) colour-
+    // difference vector. (D'B, D'R) are proportional to (B'-Y', R'-Y') with a
+    // common factor (the OutputWriter matrix scales them back by
+    // DB_TO_U_SCALE / DR_TO_V_SCALE), so a 2D rotation here is a true hue
+    // rotation. Default 0 degrees is the identity (no change to the output).
+    const double phaseRad = secamConfig.chromaPhase * M_PI / 180.0;
+    const double cosPhase = std::cos(phaseRad);
+    const double sinPhase = std::sin(phaseRad);
+
     FieldWork work[2];
     work[0].resize(fieldHeight, fieldWidth);
     work[1].resize(fieldHeight, fieldWidth);
@@ -475,11 +521,12 @@ void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,
         // to the absolute field seqNo so frames can be ordered across threads.
         for (int half = 0; half < 2; half++) {
             const auto &sf = inputFields[fieldIndex + half].field;
-            std::fprintf(stderr, "SECAMDIAG seqNo=%d isFirst=%d secamFLIR=%d half=%d evenIsRed=%d picture=%d drOnEven=%d redCount=%d restMed=%.1f restMin=%.1f restMax=%.1f\n",
+            std::fprintf(stderr, "SECAMDIAG seqNo=%d isFirst=%d secamFLIR=%d half=%d evenIsRed=%d picture=%d drOnEven=%d redCount=%d restMed=%.1f restMin=%.1f restMax=%.1f redRestMed=%.1f blueRestMed=%.1f\n",
                          sf.seqNo, sf.isFirstField ? 1 : 0, sf.secamFirstLineIsRed ? 1 : 0, half,
                          work[half].parityEvenIsRed, work[half].parityPicture,
                          work[half].parityDrOnEven ? 1 : 0, work[half].restRedCount,
-                         work[half].restMed, work[half].restMin, work[half].restMax);
+                         work[half].restMed, work[half].restMin, work[half].restMax,
+                         work[half].redRestMed, work[half].blueRestMed);
         }
 
         for (qint32 y = 0; y < frameHeight; y++) {
@@ -500,8 +547,12 @@ void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,
                 // the separate luma TBC), and keeps the decoder sane if it is
                 // ever run on a combined source.
                 outY[x] = inputLine[x];
-                outV[x] = (drRow[x] * yRange) / DR_TO_V_SCALE;
-                outU[x] = (dbRow[x] * yRange) / DB_TO_U_SCALE;
+                const double dbVal = dbRow[x];
+                const double drVal = drRow[x];
+                const double dbRot = dbVal * cosPhase - drVal * sinPhase;
+                const double drRot = dbVal * sinPhase + drVal * cosPhase;
+                outV[x] = (drRot * yRange) / DR_TO_V_SCALE;
+                outU[x] = (dbRot * yRange) / DB_TO_U_SCALE;
             }
         }
     }
