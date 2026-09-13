@@ -87,6 +87,15 @@ private:
         std::vector<double> db;          // (B'-Y'), filled to every line
         std::vector<bool> lineIsRed;
         std::vector<double> scratch;
+        // TEMP diagnostic (SECAM flicker investigation)
+        std::vector<double> restCarrier;
+        qint32 parityEvenIsRed = 0;
+        qint32 parityPicture = 0;
+        bool parityDrOnEven = false;
+        qint32 restRedCount = 0;
+        double restMin = 0.0;
+        double restMax = 0.0;
+        double restMed = 0.0;
 
         void resize(qint32 fieldHeight, qint32 fieldWidth);
     };

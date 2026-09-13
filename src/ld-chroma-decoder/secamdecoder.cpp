@@ -29,6 +29,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio> // TEMP diagnostic
+#include <atomic> // TEMP diagnostic
 
 namespace {
 
@@ -147,6 +149,7 @@ void SecamDecoder::FieldWork::resize(qint32 fieldHeight, qint32 fieldWidth)
     dr.assign(size, 0.0);
     db.assign(size, 0.0);
     lineIsRed.assign(fieldHeight, false);
+    restCarrier.assign(fieldHeight, 0.0);
     scratch.clear();
     scratch.reserve(fieldWidth);
 }
@@ -205,17 +208,39 @@ bool SecamDecoder::configure(const TbcMetaData::VideoParameters &videoParameters
     // burst gate keeps the sync area out, and stopping short of active video
     // keeps the picture's own colour turn-on strip out. On a real method 1
     // capture this measures foB to under 100 Hz and foR to under 300 Hz.
+    //
+    // The window is anchored on colourBurstStart and (normally) the start of
+    // active video. Full-frame (--4fsc) output widening moves activeVideoStart
+    // out to the horizontal margin, which would collapse this window onto the
+    // sync tip -- the discriminator then reads sync noise instead of the rest
+    // carrier, and the per-field D'R/D'B line-identity vote becomes a coin
+    // flip, producing the SECAM chroma flicker. colourBurstStart/End describe
+    // the input signal and are left untouched by that widening, so when the
+    // activeVideoStart-anchored window underflows, fall back to a window just
+    // past colourBurstEnd (the back-porch rest carrier) instead of the sync.
     restStart = videoParameters.colourBurstStart;
     restEnd = std::min(videoParameters.activeVideoStart - 10, videoParameters.fieldWidth);
     if (restEnd <= restStart) {
+        const qint32 burstWidth = videoParameters.colourBurstEnd - videoParameters.colourBurstStart;
+        restEnd = std::min(videoParameters.colourBurstEnd + burstWidth / 2,
+                           videoParameters.fieldWidth);
+    }
+    if (restEnd <= restStart) {
         // Fall back to the first half of the blanking interval.
-        restStart = videoParameters.activeVideoStart / 4;
-        restEnd = videoParameters.activeVideoStart / 2;
+        restStart = videoParameters.colourBurstStart / 4;
+        restEnd = videoParameters.colourBurstStart / 2;
     }
     if (restStart < 0 || restEnd <= restStart || videoParameters.fieldWidth < 2) {
         qCritical() << "SECAM decoder: no usable rest-carrier window in these video parameters";
         return false;
     }
+
+    // TEMP diagnostic: confirm rest-window bounds vs blanking layout.
+    std::fprintf(stderr, "SECAMCFG sampleRate=%.1f fieldWidth=%d colourBurstStart=%d colourBurstEnd=%d activeVideoStart=%d activeVideoEnd=%d firstActiveFieldLine=%d -> restStart=%d restEnd=%d (len=%d)\n",
+                 videoParameters.sampleRate, videoParameters.fieldWidth,
+                 videoParameters.colourBurstStart, videoParameters.colourBurstEnd,
+                 videoParameters.activeVideoStart, videoParameters.activeVideoEnd,
+                 videoParameters.firstActiveFieldLine, restStart, restEnd, restEnd - restStart);
 
     return true;
 }
@@ -287,12 +312,26 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
 
     demodulateField(data, work);
 
+    // TEMP diagnostic: one-shot per-sample frequency profile across the
+    // blanking/front-porch of one picture line, to locate the rest carrier.
+    static std::atomic<bool> dumped{false};
+    if (!dumped.exchange(true)) {
+        const qint32 probeRow = 30; // a picture line in both trimmed and full-frame
+        if (probeRow < fieldHeight) {
+            const double *fl = &work.frequency[static_cast<size_t>(probeRow) * fieldWidth];
+            std::fprintf(stderr, "SECAMPROBE row=%d firstActiveFieldLine=%d restStart=%d restEnd=%d\n",
+                         probeRow, firstLine, restStart, restEnd);
+            for (qint32 x = 0; x <= 210; x += 2) {
+                std::fprintf(stderr, "PROBE x=%d freq=%.1f\n", x, fl[x]);
+            }
+        }
+    }
+
     // Read each line's rest carrier out of the regenerated blanking interval.
-    std::vector<double> restCarrier(fieldHeight, 0.0);
     for (qint32 row = 0; row < fieldHeight; row++) {
         const double *freqLine = &work.frequency[static_cast<size_t>(row) * fieldWidth];
         work.scratch.assign(freqLine + restStart, freqLine + restEnd);
-        restCarrier[row] = medianInPlace(work.scratch);
+        work.restCarrier[row] = medianInPlace(work.scratch);
     }
 
     // D'R sits on the upper rest carrier, D'B on the lower. The sequence
@@ -302,7 +341,7 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     qint32 evenIsRed = 0;
     qint32 picture = 0;
     for (qint32 row = firstLine; row < fieldHeight; row++) {
-        const bool measuredRed = restCarrier[row] > SECAM_BLOCK_CENTRE;
+        const bool measuredRed = work.restCarrier[row] > SECAM_BLOCK_CENTRE;
         if (measuredRed == ((row % 2) == 0)) evenIsRed++;
         picture++;
     }
@@ -310,6 +349,32 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
 
     for (qint32 row = 0; row < fieldHeight; row++) {
         work.lineIsRed[row] = ((row % 2) == 0) == drOnEven;
+    }
+
+    // TEMP diagnostic: capture vote tally + rest-carrier statistics.
+    work.parityEvenIsRed = evenIsRed;
+    work.parityPicture = picture;
+    work.parityDrOnEven = drOnEven;
+    {
+        std::vector<double> picRest;
+        picRest.reserve(picture);
+        qint32 redCount = 0;
+        for (qint32 row = firstLine; row < fieldHeight; row++) {
+            const double v = work.restCarrier[row];
+            picRest.push_back(v);
+            if (v > SECAM_BLOCK_CENTRE) redCount++;
+        }
+        work.restRedCount = redCount;
+        if (!picRest.empty()) {
+            double mn = picRest.front();
+            double mx = picRest.front();
+            for (double v : picRest) { if (v < mn) mn = v; if (v > mx) mx = v; }
+            work.restMin = mn;
+            work.restMax = mx;
+            work.restMed = medianInPlace(picRest);
+        } else {
+            work.restMin = work.restMax = work.restMed = 0.0;
+        }
     }
 
     // Demodulate to colour difference values, using each line's own measured
@@ -351,8 +416,8 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
         }
 
         const double nominal = isRed ? SECAM_FOR : SECAM_FOB;
-        const double reference = (std::fabs(restCarrier[row] - nominal) < REST_TOLERANCE_HZ)
-                                 ? restCarrier[row] : nominal;
+        const double reference = (std::fabs(work.restCarrier[row] - nominal) < REST_TOLERANCE_HZ)
+                                 ? work.restCarrier[row] : nominal;
         const double perHz = 1.0 / (isRed ? DR_HZ_PER_UNIT : DB_HZ_PER_UNIT);
 
         const double *freqLine = &work.frequency[static_cast<size_t>(row) * fieldWidth];
@@ -376,18 +441,6 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     // One-line hold: each line carries only one of the two components.
     fillChannel(work.dr, hasDr, fieldHeight, fieldWidth);
     fillChannel(work.db, hasDb, fieldHeight, fieldWidth);
-
-    // The hold fills invalid rows from the nearest valid ones, which drags
-    // picture colour into the last vertical-interval line. Blanking must
-    // stay strictly neutral, so re-zero it after the fill.
-    for (qint32 row = 0; row < firstLine; row++) {
-        double *drRow = &work.dr[static_cast<size_t>(row) * fieldWidth];
-        double *dbRow = &work.db[static_cast<size_t>(row) * fieldWidth];
-        for (qint32 x = 0; x < fieldWidth; x++) {
-            drRow[x] = 0.0;
-            dbRow[x] = 0.0;
-        }
-    }
 }
 
 void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,
@@ -417,6 +470,17 @@ void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,
 
         decodeField(inputFields[fieldIndex].data, work[0]);
         decodeField(inputFields[fieldIndex + 1].data, work[1]);
+
+        // TEMP diagnostic: per-field parity vote + rest-carrier stats, keyed
+        // to the absolute field seqNo so frames can be ordered across threads.
+        for (int half = 0; half < 2; half++) {
+            const auto &sf = inputFields[fieldIndex + half].field;
+            std::fprintf(stderr, "SECAMDIAG seqNo=%d isFirst=%d secamFLIR=%d half=%d evenIsRed=%d picture=%d drOnEven=%d redCount=%d restMed=%.1f restMin=%.1f restMax=%.1f\n",
+                         sf.seqNo, sf.isFirstField ? 1 : 0, sf.secamFirstLineIsRed ? 1 : 0, half,
+                         work[half].parityEvenIsRed, work[half].parityPicture,
+                         work[half].parityDrOnEven ? 1 : 0, work[half].restRedCount,
+                         work[half].restMed, work[half].restMin, work[half].restMax);
+        }
 
         for (qint32 y = 0; y < frameHeight; y++) {
             const qint32 half = y % 2;
