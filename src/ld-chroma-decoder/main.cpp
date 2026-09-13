@@ -344,6 +344,12 @@ int main(int argc, char *argv[])
                                       QCoreApplication::translate("main", "auto|true|false"));
     parser.addOption(secamFirstLineIsRedOption);
 
+    // Option to set the SECAM FM click ("SECAM fire") concealment level
+    QCommandLineOption secamClickNrOption(QStringList() << "secam-click-nr",
+                                      QCoreApplication::translate("main", "SECAM: FM click concealment level (0 bypasses; default 1.0, higher = more aggressive)"),
+                                      QCoreApplication::translate("main", "number"));
+    parser.addOption(secamClickNrOption);
+
     // -- Positional arguments --
 
     // Positional argument to specify input video file
@@ -444,6 +450,15 @@ int main(int argc, char *argv[])
         palConfig.chromaPhase = value;
         combConfig.chromaPhase = value;
         secamConfig.chromaPhase = value;
+    }
+
+    if (parser.isSet(secamClickNrOption)) {
+        const double value = parser.value(secamClickNrOption).toDouble();
+        if (value < 0.0) {
+            qCritical("SECAM click NR level cannot be negative");
+            return -1;
+        }
+        secamConfig.clickNrLevel = value;
     }
 
     bool bwMode = parser.isSet(setBwModeOption);
@@ -608,6 +623,11 @@ int main(int argc, char *argv[])
     if (!parser.isSet(transformThresholdOption) && videoParameters.palTransformThreshold >= 0.0) {
         palConfig.transformThreshold = videoParameters.palTransformThreshold;
     }
+
+    // SECAM: capture the original first active field line before any
+    // full-frame widening (which happens later in DecoderPool::process).
+    // The decoder uses it to zero V-interval chroma in full-frame mode.
+    secamConfig.nominalFirstActiveFieldLine = videoParameters.firstActiveFieldLine;
 
     // Work out which decoder to use
     QString decoderName;

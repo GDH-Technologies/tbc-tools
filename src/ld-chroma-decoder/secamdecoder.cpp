@@ -50,23 +50,35 @@ constexpr double SECAM_BLOCK_CENTRE = (SECAM_FOR + SECAM_FOB) / 2.0;
 constexpr double DB_HZ_PER_UNIT = 230.0e3 * 1.505;    // +346.15 kHz
 constexpr double DR_HZ_PER_UNIT = -280.0e3 * 1.902;   // -532.56 kHz
 
-// Quadrature demodulator lowpass. The legal subcarrier excursion is 3.900 to
-// 4.756 MHz (BT.470), i.e. +-428 kHz around the block centre. The post-mix
-// lowpass at fc Hz around the block centre is equivalent to a pre-mix bandpass
-// of (centre+-fc), so fc is chosen to cover the block with a small margin while
-// rejecting out-of-block luma: 450 kHz => 3.878-4.778 MHz. A wider lowpass
-// (the previous 600 kHz => 3.728-4.928 MHz) let out-of-block luma HF through,
-// which the FM discriminator read as chroma -- the "luma dots" (cross-colour)
-// visible on combined luma+chroma sources. More taps sharpen the transition so
-// the block edges (+-428 kHz) are not attenuated.
+// Quadrature demodulator lowpass. The post-mix lowpass at fc Hz around the
+// block centre is equivalent to a pre-mix bandpass of (centre+-fc). The legal
+// subcarrier excursion is +-428 kHz (BT.470), so 450 kHz (3.878-4.778 MHz)
+// covers the block with a small margin while rejecting out-of-block luma HF,
+// which is what produces the "luma dots" (cross-colour) on a combined
+// luma+chroma source. A wider band (e.g. 800 kHz) lets out-of-block luma and
+// sync/V-interval noise through and shows as coloured garbage in the margins
+// in full-frame mode; the libchromadec reference uses the wide band but
+// assumes a split chroma input, which has no luma to leak.
 //
 // This only rejects OUT-of-block luma. Luma energy INSIDE the chroma block
-// (3.9-4.756 MHz) is indistinguishable from chroma by any filter and is
-// demodulated as dots; the fully clean path for a combined source is a split
-// chroma input (a separate _chroma.tbc, as vhs-decode's MESECAM/VHS path
-// produces), which carries only the chroma block and has no luma to leak.
+// (3.9-4.756 MHz) is spectrally identical to chroma and demodulates as dots
+// that no filter can remove without desaturating; the fully clean path for a
+// combined source is a split chroma input (_chroma.tbc, as vhs-decode's
+// MESECAM/VHS path produces). More taps sharpen the transition so the block
+// edges (+-428 kHz) are not attenuated.
 constexpr double DEMOD_LOWPASS_HZ = 450.0e3;
 constexpr qint32 DEMOD_NUM_TAPS = 41;
+
+// BT.470-6 Table 4 maximum frequency deviations (asymmetric). The transmitter
+// clips the pre-corrected signal to these, so demodulated excursions beyond
+// them are never legitimate signal -- they are FM clicks (luma-transition
+// spikes, dropout noise). The deviation rail clamps to these before
+// de-emphasis; the click concealment flags samples overshooting them by a
+// multiple.
+constexpr double DB_MAX_DEV_LO_HZ = -350.0e3;  // D'B minimum deviation
+constexpr double DB_MAX_DEV_HI_HZ =  506.0e3;  // D'B maximum deviation
+constexpr double DR_MAX_DEV_LO_HZ = -506.0e3;  // D'R minimum deviation
+constexpr double DR_MAX_DEV_HI_HZ =  350.0e3;  // D'R maximum deviation
 
 // SECAM LF pre-emphasis A(f) = (1 + jf/f1) / (1 + jf/3f1), applied to the
 // colour difference signals before modulation at the studio; the tape path
@@ -80,7 +92,10 @@ constexpr double DEEMPHASIS_F1 = 85.0e3;
 constexpr double REST_TOLERANCE_HZ = 60.0e3;
 
 // Colour killer: below this fraction of the field's median carrier envelope
-// there is no carrier to read a frequency from, so the reading is noise.
+// there is no carrier to read a frequency from, so the reading is noise. This
+// zeroes the sync/V-interval and dropout samples before the deviation rail can
+// clamp them to a coloured value -- without it, full-frame mode shows coloured
+// garbage in the margins where there is no carrier.
 constexpr double COLOUR_KILLER_RATIO = 0.25;
 
 // The chroma TBC is written centred on this value. Only the residual matters
@@ -160,6 +175,7 @@ void SecamDecoder::FieldWork::resize(qint32 fieldHeight, qint32 fieldWidth)
     envelope.assign(size, 0.0);
     dr.assign(size, 0.0);
     db.assign(size, 0.0);
+    demod.assign(size, 0.0);
     lineIsRed.assign(fieldHeight, false);
     restCarrier.assign(fieldHeight, 0.0);
     scratch.clear();
@@ -183,6 +199,7 @@ bool SecamDecoder::updateConfiguration(const TbcMetaData::VideoParameters &video
     if (!configure(videoParameters)) return false;
     secamConfig.chromaGain = configuration.chromaGain;
     secamConfig.chromaPhase = configuration.chromaPhase;
+    secamConfig.clickNrLevel = configuration.clickNrLevel;
 
     return true;
 }
@@ -322,6 +339,14 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     const qint32 fieldWidth = videoParameters.fieldWidth;
     const qint32 fieldHeight = videoParameters.fieldHeight;
     const qint32 firstLine = videoParameters.firstActiveFieldLine;
+    // The V-interval cutoff for chroma output: the original first active
+    // field line before any full-frame widening. Rows below this are
+    // V-interval (bottles/test-signal lines) that carry real carrier but are
+    // not picture, so their chroma must render neutral even in full-frame
+    // mode. They are still demodulated and read for rest-carrier/parity.
+    const qint32 chromaFirstLine = (secamConfig.nominalFirstActiveFieldLine >= 0)
+                                    ? secamConfig.nominalFirstActiveFieldLine
+                                    : firstLine;
 
     demodulateField(data, work);
 
@@ -425,9 +450,18 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     work.redRestMed = redRestMedRaw;
     work.blueRestMed = blueRestMedRaw;
 
-    // Demodulate to colour difference values, using each line's own measured
-    // rest carrier as the discriminator zero where it is trustworthy. This
-    // absorbs any residual carrier offset left by the tape path.
+    // Per-row reference (discriminator zero). Each line's own measured rest
+    // carrier is preferred when within tolerance; otherwise the per-identity
+    // field median. Absorbs residual carrier offset from the tape path.
+    std::vector<double> rowReference(fieldHeight, 0.0);
+    for (qint32 row = 0; row < fieldHeight; row++) {
+        const bool isRed = work.lineIsRed[row];
+        const double nominal = isRed ? SECAM_FOR : SECAM_FOB;
+        rowReference[row] = (std::fabs(work.restCarrier[row] - nominal) < REST_TOLERANCE_HZ)
+                            ? work.restCarrier[row]
+                            : (isRed ? redReference : blueReference);
+    }
+
     std::vector<bool> hasDr(fieldHeight, false);
     std::vector<bool> hasDb(fieldHeight, false);
 
@@ -441,7 +475,135 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
     }
     const double killerLevel = COLOUR_KILLER_RATIO * medianInPlace(work.scratch);
 
-    // De-emphasis H(f) = (1 + jf/3f1) / (1 + jf/f1), bilinear-transformed.
+    // Phase A: raw per-sample frequency deviation (Hz) into work.demod. One
+    // component per line, matching the SECAM line sequence; the other
+    // component's slot is left for the one-line hold. No de-emphasis yet --
+    // click concealment and the deviation rail run on the raw deviation so a
+    // spike is bounded before the LF boost can amplify it. The colour killer
+    // zeroes samples with no carrier (sync/V-interval, dropouts) so the
+    // deviation rail does not clamp that noise to a coloured value. Rows
+    // below the nominal first active line (V-interval bottles/test lines)
+    // are zeroed too: they carry carrier but are not picture, so their
+    // demodulated deviation would render as coloured garbage in full-frame.
+    for (qint32 row = 0; row < fieldHeight; row++) {
+        double *demodLine = &work.demod[static_cast<size_t>(row) * fieldWidth];
+        if (row < chromaFirstLine) {
+            for (qint32 x = 0; x < fieldWidth; x++) demodLine[x] = 0.0;
+            hasDr[row] = work.lineIsRed[row];
+            hasDb[row] = !work.lineIsRed[row];
+            continue;
+        }
+        const double *freqLine = &work.frequency[static_cast<size_t>(row) * fieldWidth];
+        const double *envLine = &work.envelope[static_cast<size_t>(row) * fieldWidth];
+        const double ref = rowReference[row];
+        for (qint32 x = 0; x < fieldWidth; x++) {
+            demodLine[x] = (envLine[x] < killerLevel) ? 0.0 : (freqLine[x] - ref);
+        }
+        hasDr[row] = work.lineIsRed[row];
+        hasDb[row] = !work.lineIsRed[row];
+    }
+
+    // Phase B: FM click concealment ("SECAM fire" suppression). On a combined
+    // luma+chroma source a luma transition inside the chroma block makes the
+    // discriminator spike (deviation overshoot) or the carrier envelope
+    // collapse, and that sample reads as a bright dot. Detect those samples
+    // and conceal them: short spans are linearly interpolated across, wider
+    // spans borrow the previous same-component line (row-2, already concealed
+    // since rows run top-down). Ported from libchromadec's SecamDecoder. Level
+    // 0 bypasses the stage entirely.
+    if (secamConfig.clickNrLevel > 0.0) {
+        const double level = qBound(0.0, secamConfig.clickNrLevel, 2.0);
+        // Envelope dip threshold: the carrier envelope collapses to this fraction
+        // of the row's median over the active region.
+        const double dipDb = 12.0 - 6.0 * level;
+        const double envRatio = std::pow(10.0, -dipDb / 20.0);
+        // Deviation overshoot: a real sample never exceeds the Table 4 maxima,
+        // so anything beyond them by this factor is a click.
+        const double overshoot = std::max(2.6 - 1.6 * level, 1.15);
+        const qint32 detectStart = std::max<qint32>(0, videoParameters.activeVideoStart - 8);
+        const qint32 detectEnd = std::min<qint32>(fieldWidth, videoParameters.activeVideoEnd + 8);
+
+        std::vector<double> rowEnv;
+        std::vector<char> flagged(fieldWidth, 0);
+        for (qint32 row = firstLine; row < fieldHeight; row++) {
+            double *demodLine = &work.demod[static_cast<size_t>(row) * fieldWidth];
+            const double *envLine = &work.envelope[static_cast<size_t>(row) * fieldWidth];
+            const bool isRed = work.lineIsRed[row];
+            const double loBound = isRed ? DR_MAX_DEV_LO_HZ : DB_MAX_DEV_LO_HZ;
+            const double hiBound = isRed ? DR_MAX_DEV_HI_HZ : DB_MAX_DEV_HI_HZ;
+            const double flagLo = loBound * overshoot;
+            const double flagHi = hiBound * overshoot;
+
+            // Row median envelope over the detect region is the reference for
+            // the dip test; the band filter keeps even a dead carrier's
+            // leakage near a quarter of nominal, so a deeper dip is needed to
+            // catch real holes.
+            rowEnv.clear();
+            for (qint32 x = detectStart; x < detectEnd; x++) rowEnv.push_back(envLine[x]);
+            if (rowEnv.empty()) continue;
+            std::sort(rowEnv.begin(), rowEnv.end());
+            const double envRef = rowEnv[rowEnv.size() / 2];
+            if (envRef <= 0.0) continue;
+            const double envFloor = envRef * envRatio;
+
+            std::fill(flagged.begin(), flagged.end(), 0);
+            bool any = false;
+            for (qint32 x = detectStart; x < detectEnd; x++) {
+                if (demodLine[x] < flagLo || demodLine[x] > flagHi || envLine[x] < envFloor) {
+                    flagged[x] = 1;
+                    any = true;
+                }
+            }
+            if (!any) continue;
+
+            qint32 x = detectStart;
+            while (x < detectEnd) {
+                if (!flagged[x]) { x++; continue; }
+                qint32 runEnd = x;
+                while (runEnd < detectEnd && flagged[runEnd]) runEnd++;
+                const qint32 spanStart = std::max<qint32>(0, x - 3);
+                const qint32 spanEnd = std::min<qint32>(fieldWidth, runEnd + 3);
+
+                if (spanEnd - spanStart <= 48 && spanStart > 0 && spanEnd < fieldWidth) {
+                    // Short span: linearly interpolate across the click.
+                    const double before = demodLine[spanStart - 1];
+                    const double after = demodLine[spanEnd];
+                    const qint32 n = spanEnd - spanStart + 1;
+                    for (qint32 i = spanStart; i < spanEnd; i++) {
+                        demodLine[i] = before + (after - before) * (i - spanStart + 1) / n;
+                    }
+                } else if (row >= 2) {
+                    // Wide span: borrow the previous same-component line
+                    // (row-2). It was already concealed if it needed to be.
+                    const double *prev = &work.demod[static_cast<size_t>(row - 2) * fieldWidth];
+                    for (qint32 i = spanStart; i < spanEnd; i++) demodLine[i] = prev[i];
+                } else {
+                    for (qint32 i = spanStart; i < spanEnd; i++) demodLine[i] = 0.0;
+                }
+                x = spanEnd;
+            }
+        }
+    }
+
+    // Phase C: deviation rail. Clamp every sample to the BT.470 Table 4 maxima
+    // before de-emphasis. Whatever clicks the concealment missed (or all of
+    // them when it is bypassed) is bounded here so the LF boost cannot blow a
+    // residual spike up into a visible streak.
+    for (qint32 row = 0; row < fieldHeight; row++) {
+        if (row < chromaFirstLine) continue;
+        double *demodLine = &work.demod[static_cast<size_t>(row) * fieldWidth];
+        const bool isRed = work.lineIsRed[row];
+        const double loBound = isRed ? DR_MAX_DEV_LO_HZ : DB_MAX_DEV_LO_HZ;
+        const double hiBound = isRed ? DR_MAX_DEV_HI_HZ : DB_MAX_DEV_HI_HZ;
+        for (qint32 x = 0; x < fieldWidth; x++) {
+            demodLine[x] = std::clamp(demodLine[x], loBound, hiBound);
+        }
+    }
+
+    // Phase D: de-emphasis + scale to D'B/D'R. H(f) = (1 + jf/3f1)/(1 + jf/f1),
+    // bilinear-transformed; the IIR commutes with the per-Hz scale, so the LF
+    // boost is applied to the Hz deviation and the result is scaled. V-interval
+    // rows are zeroed.
     const double w1 = 2.0 * M_PI * DEEMPHASIS_F1;
     const double w3 = 3.0 * w1;
     const double k = 2.0 * videoParameters.sampleRate;
@@ -454,68 +616,27 @@ void SecamDecoder::decodeField(const SourceVideo::Data &data, FieldWork &work) c
         const bool isRed = work.lineIsRed[row];
         double *dst = isRed ? &work.dr[static_cast<size_t>(row) * fieldWidth]
                             : &work.db[static_cast<size_t>(row) * fieldWidth];
-
-        if (row < firstLine) {
-            // Vertical interval: no picture, no colour.
+        if (row < chromaFirstLine) {
             for (qint32 x = 0; x < fieldWidth; x++) dst[x] = 0.0;
-            hasDr[row] = isRed;
-            hasDb[row] = !isRed;
             continue;
         }
-
-        const double nominal = isRed ? SECAM_FOR : SECAM_FOB;
-        const double reference = (std::fabs(work.restCarrier[row] - nominal) < REST_TOLERANCE_HZ)
-                                 ? work.restCarrier[row]
-                                 : (isRed ? redReference : blueReference);
         const double perHz = 1.0 / (isRed ? DR_HZ_PER_UNIT : DB_HZ_PER_UNIT);
-
-        const double *freqLine = &work.frequency[static_cast<size_t>(row) * fieldWidth];
-        const double *envLine = &work.envelope[static_cast<size_t>(row) * fieldWidth];
-
+        const double *demodLine = &work.demod[static_cast<size_t>(row) * fieldWidth];
         double prevIn = 0.0;
         double prevOut = 0.0;
         for (qint32 x = 0; x < fieldWidth; x++) {
-            double value = (envLine[x] < killerLevel) ? 0.0
-                                                      : (freqLine[x] - reference) * perHz;
+            const double value = demodLine[x];
             const double out = b0 * value + b1 * prevIn - a1 * prevOut;
             prevIn = value;
             prevOut = out;
-            dst[x] = out * secamConfig.chromaGain;
+            dst[x] = out * perHz * secamConfig.chromaGain;
         }
-
-        hasDr[row] = isRed;
-        hasDb[row] = !isRed;
     }
 
-    // One-line hold: each line carries only one of the two components.
+    // Phase E: one-line hold. Each line carries only one component; fill the
+    // other from the nearest same-component lines.
     fillChannel(work.dr, hasDr, fieldHeight, fieldWidth);
     fillChannel(work.db, hasDb, fieldHeight, fieldWidth);
-
-    // Post-demodulation horizontal median (luma-dot reduction). On a combined
-    // luma+chroma source, luma transitions that fell inside the chroma block
-    // demodulate as sharp impulsive spikes in D'B/D'R -- the visible "luma
-    // dots". A 3-tap median clips single-sample spikes while preserving
-    // 2-sample-wide chroma detail and edges (unlike a lowpass, which would
-    // soften chroma for little gain since the residual is broadband in-band
-    // noise). Runs after the one-line hold so filled rows are cleaned too.
-    auto medianRow = [&](std::vector<double> &buffer) {
-        std::vector<double> cur(fieldWidth);
-        for (qint32 row = 0; row < fieldHeight; row++) {
-            double *src = &buffer[static_cast<size_t>(row) * fieldWidth];
-            // median of {src[x-1], src[x], src[x+1]} with edge clamp
-            for (qint32 x = 0; x < fieldWidth; x++) {
-                const double a = src[x == 0 ? 0 : x - 1];
-                const double b = src[x];
-                const double c = src[x == fieldWidth - 1 ? fieldWidth - 1 : x + 1];
-                const double lo = std::min(a, std::min(b, c));
-                const double hi = std::max(a, std::max(b, c));
-                cur[x] = a + b + c - lo - hi; // the median = sum - min - max
-            }
-            for (qint32 x = 0; x < fieldWidth; x++) src[x] = cur[x];
-        }
-    };
-    medianRow(work.dr);
-    medianRow(work.db);
 }
 
 void SecamDecoder::decodeFrames(const QVector<SourceField>& inputFields,

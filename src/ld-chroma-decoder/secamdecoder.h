@@ -63,6 +63,14 @@ public:
     struct SecamConfiguration {
         double chromaGain = 1.0;
         double chromaPhase = 0.0;  // hue rotation of (D'B, D'R) in degrees
+        // FM click ("SECAM fire") concealment level. 0 bypasses the stage;
+        // 1.0 is the default. Higher = more aggressive detection.
+        double clickNrLevel = 1.0;
+        // Original first active field line before any full-frame widening.
+        // Rows below this are V-interval (bottles/test lines) and must
+        // render neutral in full-frame mode even though they carry carrier;
+        // -1 means use videoParameters.firstActiveFieldLine as-is.
+        qint32 nominalFirstActiveFieldLine = -1;
         TbcMetaData::VideoParameters videoParameters;
     };
 
@@ -86,6 +94,7 @@ private:
         std::vector<double> envelope;    // carrier envelope
         std::vector<double> dr;          // (R'-Y'), filled to every line
         std::vector<double> db;          // (B'-Y'), filled to every line
+        std::vector<double> demod;       // raw per-sample freq deviation (Hz), pre-concealment
         std::vector<bool> lineIsRed;
         std::vector<double> scratch;
         // TEMP diagnostic (SECAM flicker investigation)

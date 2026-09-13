@@ -1883,6 +1883,10 @@ void TbcSource::configureChromaDecoder()
         // and hybrid preview modes still work.
         secamConfiguration.chromaGain = palConfiguration.chromaGain;
         secamConfiguration.chromaPhase = palConfiguration.chromaPhase;
+        // Original first active field line (videoParameters here is the
+        // un-widened metadata). The decoder zeroes V-interval chroma below
+        // this in full-frame/hybrid mode.
+        secamConfiguration.nominalFirstActiveFieldLine = videoParameters.firstActiveFieldLine;
         secamDecoder.updateConfiguration(videoParameters, secamConfiguration);
         // The pre-demod SECAM decoder does no FM demodulation; it only needs
         // the line geometry plus the chroma gain and the live first-line
