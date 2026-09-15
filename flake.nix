@@ -119,10 +119,22 @@
         # time) is the only thing here that knows it. Before the first bump the
         # file does not exist and this falls back to upstream's own declared
         # version, which is exactly what CMakeLists.txt would resolve anyway.
-        packageVersion =
+        #
+        # Same rule as CMakeLists.txt's gdh-version block: a file naming a
+        # different upstream base is stale (upstream moved, so the GDH counters
+        # reset) and is ignored, as is a malformed one. Without this check, an
+        # upstream sync that bumps vcpkg.json builds the new upstream's code
+        # under the previous GDH version until the next bump.
+        upstreamVersion = (builtins.fromJSON (builtins.readFile ./vcpkg.json)).version;
+        gdhVersionFile =
           if builtins.pathExists ./.gdh-version
           then pkgs.lib.removeSuffix "\n" (builtins.readFile ./.gdh-version)
-          else (builtins.fromJSON (builtins.readFile ./vcpkg.json)).version;
+          else "";
+        gdhVersionMatch = builtins.match "([0-9]+(\\.[0-9]+)*)-gdh-[0-9]+\\.[0-9]+" gdhVersionFile;
+        packageVersion =
+          if gdhVersionMatch != null && builtins.head gdhVersionMatch == upstreamVersion
+          then gdhVersionFile
+          else upstreamVersion;
         rev = if self ? rev then self.rev else "";
         shortRev = if self ? shortRev then self.shortRev else (if rev != "" then builtins.substring 0 7 rev else "unknown");
         dirtySuffix = if self ? dirtyRev then "-dirty" else "";

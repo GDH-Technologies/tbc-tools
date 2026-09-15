@@ -351,28 +351,30 @@ class TestWrappersChromaDecoder:
             tbc_type=TBCType.COMBINED,
         ),
         WrapperTestCase(
-            id="secam composite defaults to mono opts",
+            id="secam composite defaults to secam opts",
             input_tbc=f"{get_path('pal_composite')}.tbc",
             input_opts=[
                 "--input-tbc-json",
                 str(get_path("secam_composite.tbc.json")),
             ],
             expected_opts=[
-                {"-f", "mono"},
+                # MONO cannot decode the chroma pass (no U/V planes); the
+                # SECAM default is the secam decoder, not mono.
+                {"-f", "secam"},
                 {"--input-json", str(get_path("secam_composite.tbc.json"))},
                 {"PIPE_IN", "PIPE_OUT"},
             ],
             tbc_type=TBCType.COMBINED,
         ),
         WrapperTestCase(
-            id="mesecam composite defaults to mono opts",
+            id="mesecam composite defaults to secam opts",
             input_tbc=f"{get_path('pal_composite')}.tbc",
             input_opts=[
                 "--input-tbc-json",
                 str(get_path("mesecam_composite.tbc.json")),
             ],
             expected_opts=[
-                {"-f", "mono"},
+                {"-f", "secam"},
                 {"--input-json", str(get_path("mesecam_composite.tbc.json"))},
                 {"PIPE_IN", "PIPE_OUT"},
             ],

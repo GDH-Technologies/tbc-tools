@@ -85,6 +85,15 @@ class WrapperLDChromaDecoder(Wrapper):
             else self._state.decoder_luma
         )
 
+        # MONO cannot decode a chroma-only TBC: it emits GRAY16, and the
+        # merged export needs U/V planes from this pass (ffmpeg
+        # extractplanes=u+v), which fails and leaves an empty output file.
+        if self.tbc_type is TBCType.CHROMA and decoder is ChromaDecoder.MONO:
+            raise exceptions.InvalidChromaDecoderError(
+                "MONO is not valid for the chroma pass of a separated (Y+C) "
+                "export; choose a chroma decoder (--chroma-decoder)."
+            )
+
         match self._state.video_system:
             case VideoSystem.PAL | VideoSystem.PAL_M:
                 if decoder not in {

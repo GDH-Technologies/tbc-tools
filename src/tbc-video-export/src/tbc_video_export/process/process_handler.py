@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import shutil
+import subprocess
 from contextlib import AsyncExitStack
 from datetime import datetime
+from fractions import Fraction
 from functools import partial
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from tbc_video_export.common.enums import ExportMode, FlagHelper, ProcessName, TBCType
 from tbc_video_export.common.utils import ansi, strings
@@ -14,8 +20,6 @@ from tbc_video_export.process.progress_handler import ProgressHandler
 from tbc_video_export.process.wrapper import WrapperGroup
 
 if TYPE_CHECKING:
-    from typing import Any
-
     from tbc_video_export.process.process_state import ProcessState
     from tbc_video_export.program_state import ProgramState
 
@@ -41,7 +45,7 @@ class ProcessHandler:
 
     @property
     def completed_successfully(self) -> bool:
-        """Return True if the handler has run and all processes finished without error."""
+        """Return True if the handler ran and all processes finished without error."""
         return (
             self._has_run
             and not self._proc_error_event.is_set()
@@ -65,6 +69,7 @@ class ProcessHandler:
             await asyncio.wait(pending)
 
         if self._has_run:
+            self._normalize_mkv_display_aspect()
             self._print_completion_message()
 
     async def stop(self, cancelled_by_user: bool = False) -> None:
@@ -80,6 +85,135 @@ class ProcessHandler:
             self._user_cancellation_event.set()
 
         self._stop_event.set()
+
+    def _normalize_mkv_display_aspect(self) -> None:
+        """Normalize anamorphic MKV display dimensions to whole-pixel units.
+
+        FFmpeg's Matroska muxer always stores anamorphic content with
+        DisplayUnit=aspect-ratio and quantized ratio values, which VLC's
+        demuxer misreads as a vertical picture. Rewriting the track header
+        with pixel-unit display dimensions (and no DisplayUnit element)
+        matches a reference remux that every player reads correctly. The
+        stream-copy remux with mkvmerge is lossless, and nanosecond
+        timestamp scaling removes FFmpeg's 1ms timestamp quantization.
+        """
+        output_file = self._state.file_helper.output_video_file
+
+        if output_file.suffix.lower() != ".mkv" or not output_file.is_file():
+            return
+
+        if (video_stream := self._probe_video_stream(output_file)) is None:
+            return
+
+        sar = video_stream.get("sample_aspect_ratio")
+
+        # square pixels need no normalization
+        if sar in (None, "N/A", "0:1", "1:1"):
+            return
+
+        try:
+            num, den = (int(value) for value in sar.split(":"))
+            display_width = round(video_stream["width"] * Fraction(num, den))
+        except (ValueError, ZeroDivisionError, KeyError, TypeError, AttributeError):
+            return
+
+        if display_width <= 0:
+            return
+
+        if (mkvmerge := shutil.which("mkvmerge")) is None:
+            self._state.export.append_message(
+                ansi.error_color(
+                    "mkvmerge not found, unable to normalize MKV display "
+                    "dimensions (VLC may show the wrong aspect ratio)."
+                )
+            )
+            return
+
+        temp_file = output_file.with_name(f"{output_file.stem}.remux-{os.getpid()}.mkv")
+
+        # mkvmerge exit code 1 means warnings, 2 means error
+        result = subprocess.run(  # noqa: S603
+            [
+                mkvmerge,
+                "--quiet",
+                "--timestamp-scale",
+                "1",
+                "--output",
+                str(temp_file),
+                "--display-dimensions",
+                f"{video_stream['index']}:{display_width}x{video_stream['height']}",
+                str(output_file),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode in (0, 1) and temp_file.is_file():
+            temp_file.replace(output_file)
+            self._state.export.append_message(
+                ansi.success_color(
+                    "Normalized MKV display dimensions to "
+                    f"{display_width}x{video_stream['height']} (pixel units)."
+                )
+            )
+        else:
+            temp_file.unlink(missing_ok=True)
+            self._state.export.append_message(
+                ansi.error_color(
+                    "mkvmerge failed to normalize MKV display dimensions "
+                    f"(exit {result.returncode})."
+                )
+            )
+
+    def _probe_video_stream(self, video_file: Path) -> dict[str, Any] | None:
+        """Return the first video stream from ffprobe of video_file."""
+        if (ffprobe := self._resolve_ffprobe()) is None:
+            return None
+
+        result = subprocess.run(  # noqa: S603
+            [
+                str(ffprobe),
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=index,width,height,sample_aspect_ratio",
+                "-of",
+                "json",
+                str(video_file),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        try:
+            return json.loads(result.stdout)["streams"][0]
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            return None
+
+    def _resolve_ffprobe(self) -> Path | None:
+        """Return path to ffprobe, preferring the location of the ffmpeg binary."""
+        ffmpeg_tool = self._state.file_helper.tools.get(ProcessName.FFMPEG)
+
+        candidates: list[Path | str] = (
+            ffmpeg_tool
+            if isinstance(ffmpeg_tool, list)
+            else [ffmpeg_tool]
+            if ffmpeg_tool is not None
+            else []
+        )
+
+        for candidate in candidates:
+            if (ffprobe := Path(candidate).with_name("ffprobe")).is_file():
+                return ffprobe
+
+        if (ffprobe := shutil.which("ffprobe")) is not None:
+            return Path(ffprobe)
+
+        return None
 
     def _create_wrapper_groups(self) -> None:
         """Create wrappers and runs processes based off export mode."""
@@ -210,7 +344,7 @@ class ProcessHandler:
             running = [proc for proc in procs if proc.state.running]
             has_run_count = sum(1 for proc in procs if proc.state.has_run)
 
-            if not len(running):
+            if not running:
                 break
 
             if not has_run_count:

@@ -63,6 +63,7 @@ async def _run(argv: list[str]) -> None:
                 sys.exit(1)
     except Exception as e:  # noqa: BLE001
         exceptions.handle_exceptions(e)
+        sys.exit(1)
     finally:
         logging.shutdown()
 

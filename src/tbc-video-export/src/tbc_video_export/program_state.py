@@ -132,8 +132,6 @@ class ProgramState:
     def decoder_chroma(self) -> ChromaDecoder:
         """Chroma decoder for Chroma/Combined TBCs."""
         if self.opts.chroma_decoder is None:
-            if self.tbc_json.is_secam_system:
-                return ChromaDecoder.MONO
             return self.video_system_data.chroma_decoder[self.export_mode]
 
         return self.opts.chroma_decoder

@@ -344,6 +344,12 @@ int main(int argc, char *argv[])
                                       QCoreApplication::translate("main", "auto|true|false"));
     parser.addOption(secamFirstLineIsRedOption);
 
+    // Option to set the SECAM FM click ("SECAM fire") concealment level
+    QCommandLineOption secamClickNrOption(QStringList() << "secam-click-nr",
+                                      QCoreApplication::translate("main", "SECAM: FM click concealment level (0 bypasses; default 1.0, higher = more aggressive)"),
+                                      QCoreApplication::translate("main", "number"));
+    parser.addOption(secamClickNrOption);
+
     // -- Positional arguments --
 
     // Positional argument to specify input video file
@@ -443,6 +449,16 @@ int main(int argc, char *argv[])
         const double value = parser.value(chromaPhaseOption).toDouble();
         palConfig.chromaPhase = value;
         combConfig.chromaPhase = value;
+        secamConfig.chromaPhase = value;
+    }
+
+    if (parser.isSet(secamClickNrOption)) {
+        const double value = parser.value(secamClickNrOption).toDouble();
+        if (value < 0.0) {
+            qCritical("SECAM click NR level cannot be negative");
+            return -1;
+        }
+        secamConfig.clickNrLevel = value;
     }
 
     bool bwMode = parser.isSet(setBwModeOption);
@@ -585,6 +601,7 @@ int main(int argc, char *argv[])
     if (!parser.isSet(chromaPhaseOption) && videoParameters.chromaPhase != -1.0) {
         palConfig.chromaPhase = videoParameters.chromaPhase;
         combConfig.chromaPhase = videoParameters.chromaPhase;
+        secamConfig.chromaPhase = videoParameters.chromaPhase;
     }
     if (!parser.isSet(lumaNROption) && videoParameters.lumaNR >= 0.0) {
         palConfig.yNRLevel = videoParameters.lumaNR;
@@ -607,6 +624,11 @@ int main(int argc, char *argv[])
         palConfig.transformThreshold = videoParameters.palTransformThreshold;
     }
 
+    // SECAM: capture the original first active field line before any
+    // full-frame widening (which happens later in DecoderPool::process).
+    // The decoder uses it to zero V-interval chroma in full-frame mode.
+    secamConfig.nominalFirstActiveFieldLine = videoParameters.firstActiveFieldLine;
+
     // Work out which decoder to use
     QString decoderName;
     if (parser.isSet(decoderOption)) {
@@ -622,8 +644,16 @@ int main(int argc, char *argv[])
     } else {
         // Check if video parameters are valid before accessing them
         try {
-            if (metaData.getVideoParameters().system == NTSC) {
+            const VideoSystem system = metaData.getVideoParameters().system;
+            if (system == NTSC) {
                 decoderName = "ntsc2d";
+            } else if (system == SECAM || system == MESECAM) {
+                // SECAM/MESECAM carry an FM chroma block that the PAL/NTSC
+                // QAM decoders cannot read -- they emit neutral chroma (i.e.
+                // mono output). Default to the SECAM FM decoder so a source
+                // whose metadata has no chromaDecoder string still decodes in
+                // colour. Matches tbc-video-export's video_system_secam default.
+                decoderName = "secam";
             } else {
                 decoderName = "pal2d";
             }

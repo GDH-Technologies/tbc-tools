@@ -96,8 +96,10 @@ class VideoBasePAL(VideoBase):  # noqa D101
 class VideoBasePALM(VideoBase):  # noqa D101
     width: int = field(default=760)
     height: int = field(default=488)
-    pixel_aspect_ratio: str = field(default="0.852")
-    display_aspect_ratio: str = field(default="1.327")
+    # MKV outputs are normalized to whole-pixel display dimensions
+    # (648x488) after muxing, which rounds the SAR up slightly
+    pixel_aspect_ratio: str = field(default="0.853")
+    display_aspect_ratio: str = field(default="1.328")
     framerate_num: str = field(default="30000")
     framerate_den: str = field(default="1001")
     scan_type: str = field(default="Interlaced")
@@ -108,8 +110,10 @@ class VideoBasePALM(VideoBase):  # noqa D101
 class VideoBaseNTSC(VideoBase):  # noqa D101
     width: int = field(default=760)
     height: int = field(default=488)
-    pixel_aspect_ratio: str = field(default="0.852")
-    display_aspect_ratio: str = field(default="1.327")
+    # MKV outputs are normalized to whole-pixel display dimensions
+    # (648x488) after muxing, which rounds the SAR up slightly
+    pixel_aspect_ratio: str = field(default="0.853")
+    display_aspect_ratio: str = field(default="1.328")
     framerate_num: str = field(default="30000")
     framerate_den: str = field(default="1001")
     scan_type: str = field(default="Interlaced")
@@ -135,7 +139,8 @@ class VideoColorPAL(VideoColor):  # noqa: D101
     chroma_subsampling: str | None = field(default=None)
     color_range: str | None = field(default="Limited")
     color_primaries: str = field(default="BT.601 PAL")
-    transfer_characteristics: str = field(default="BT.709")
+    # 625-line systems export with the BT.470 2.8-gamma transfer (bt470bg)
+    transfer_characteristics: str = field(default="BT.470 System B/G")
     matrix_coefficients: str = field(default="BT.470 System B/G")
     matrix_coefficients_original: str | None = field(default=None)
 

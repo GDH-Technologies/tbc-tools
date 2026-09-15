@@ -41,9 +41,9 @@ class VideoSystemData:
                 return video_system_palm
 
             case VideoSystem.SECAM | VideoSystem.MESECAM:
-                # SECAM/MESECAM share PAL's 625-line geometry and 25 fps, but
-                # default to the mono chroma decoder (the SECAM decoders are
-                # opt-in). See the SECAM/PAL separation note in enums.py.
+                # SECAM/MESECAM share PAL's 625-line geometry and 25 fps but
+                # are FM-chroma systems: they default to the SECAM chroma
+                # decoder (see video_system_secam below). MONO is opt-in.
                 return video_system_secam
 
     @dataclass(frozen=True, slots=True)
@@ -98,6 +98,10 @@ video_system_pal = VideoSystemData(
         "letterbox": VideoSystemData.AspectRatio(16, 9),
     },
     chroma_decoder={
+        # LUMA mode (luma-only export of an S-Video pair) never decodes
+        # chroma, but the table must be total: decoder_chroma is evaluated
+        # unconditionally in some code paths and a missing key would raise.
+        ExportMode.LUMA: ChromaDecoder.MONO,
         ExportMode.LUMA_EXTRACTED: ChromaDecoder.MONO,
         ExportMode.CHROMA_MERGE: ChromaDecoder.PAL2D,
         ExportMode.CHROMA_COMBINED: ChromaDecoder.TRANSFORM3D,
@@ -107,7 +111,7 @@ video_system_pal = VideoSystemData(
         "tv",
         "bt470bg",
         "bt470bg",
-        "bt709",
+        "bt470bg",  # BT.470 2.8-gamma transfer (gamma28) for 625-line systems
         "pal",
     ),
     fps_fraction=Fraction(25),
@@ -130,6 +134,7 @@ video_system_ntsc = VideoSystemData(
         "letterbox": VideoSystemData.AspectRatio(16, 9),
     },
     chroma_decoder={
+        ExportMode.LUMA: ChromaDecoder.MONO,
         ExportMode.LUMA_EXTRACTED: ChromaDecoder.MONO,
         ExportMode.CHROMA_MERGE: ChromaDecoder.NTSC2D,
         ExportMode.CHROMA_COMBINED: ChromaDecoder.NTSC3D,
@@ -162,6 +167,7 @@ video_system_palm = VideoSystemData(
         "letterbox": VideoSystemData.AspectRatio(16, 9),
     },
     chroma_decoder={
+        ExportMode.LUMA: ChromaDecoder.MONO,
         ExportMode.LUMA_EXTRACTED: ChromaDecoder.MONO,
         ExportMode.CHROMA_MERGE: ChromaDecoder.PAL2D,
         ExportMode.CHROMA_COMBINED: ChromaDecoder.TRANSFORM3D,
@@ -184,19 +190,22 @@ VideoActiveLinesType: TypeAlias = Literal[
 VideoAspectRatioType: TypeAlias = Literal["default", "widescreen", "letterbox"]
 
 # SECAM/MESECAM: 625-line FM-chroma systems. They share PAL's line geometry,
-# aspect ratios, active-line ranges, and ffmpeg colour config, but default the
-# chroma decoder to MONO (the SECAM / SECAM_PREDEMOD decoders are opt-in). Kept
-# as a distinct VideoSystemData instance so VideoSystemData.get() can return it
+# aspect ratios, active-line ranges, and ffmpeg colour config. Chroma modes
+# default to the SECAM decoder — MONO cannot decode chroma (the merged export
+# needs U/V planes from the chroma pass, and MONO emits GRAY16, which fails
+# the merge and leaves an empty output file). Kept as a distinct
+# VideoSystemData instance so VideoSystemData.get() can return it
 # without special-casing, while still reflecting that SECAM is its own system.
 video_system_secam = VideoSystemData(
     size=video_system_pal.size,
     active_lines=video_system_pal.active_lines,
     aspect_ratio=video_system_pal.aspect_ratio,
     chroma_decoder={
+        ExportMode.LUMA: ChromaDecoder.MONO,
         ExportMode.LUMA_EXTRACTED: ChromaDecoder.MONO,
-        ExportMode.CHROMA_MERGE: ChromaDecoder.MONO,
-        ExportMode.CHROMA_COMBINED: ChromaDecoder.MONO,
-        ExportMode.CHROMA_COMBINED_LD: ChromaDecoder.MONO,
+        ExportMode.CHROMA_MERGE: ChromaDecoder.SECAM,
+        ExportMode.CHROMA_COMBINED: ChromaDecoder.SECAM,
+        ExportMode.CHROMA_COMBINED_LD: ChromaDecoder.SECAM,
     },
     ffmpeg_config=video_system_pal.ffmpeg_config,
     fps_fraction=video_system_pal.fps_fraction,

@@ -319,8 +319,11 @@ class WrapperFFmpeg(Wrapper):
         if (chroma_alignment_filter := self._get_chroma_alignment_filter()) is not None:
             video_filters.append(chroma_alignment_filter)
         if (aspect_ratio_filter := self._get_aspect_ratio_filter()) is not None:
-            # Keep DAR/SAR adjustments near the end so earlier scale/pad filters
-            # cannot override them.
+            # Keep DAR adjustments near the end so earlier scale/pad filters
+            # cannot override them. Note: anamorphic Matroska outputs get their
+            # display dimensions normalized to pixel units after muxing (see
+            # ProcessHandler._normalize_mkv_display_aspect) as FFmpeg's MKV
+            # muxer always stores DisplayUnit=aspect-ratio, which VLC misreads.
             video_filters.append(aspect_ratio_filter)
 
         video_filters.append(f"format={self._get_profile_video_format()}")
@@ -491,6 +494,8 @@ class WrapperFFmpeg(Wrapper):
             or codec.startswith("h264_")
             or codec.startswith("libx265")
             or codec.startswith("hevc_")
+            or codec.startswith("prores")
+            or codec == "ffv1"
             or codec in {"libsvtav1", "libaom-av1"}
         ):
             return None
@@ -574,9 +579,8 @@ class WrapperFFmpeg(Wrapper):
         if not compatible_slices:
             return opts
 
-        recommended_slices = self._get_recommended_ffv1_full_frame_slices()
-        if recommended_slices not in compatible_slices:
-            recommended_slices = compatible_slices[0]
+        # Smallest compatible count: extra slices cost compression for no gain.
+        recommended_slices = compatible_slices[0]
 
         adjusted_opts = list(opts.data)
         current_slices, slices_value_index = self._get_ffv1_slices_opt(adjusted_opts)
@@ -603,17 +607,15 @@ class WrapperFFmpeg(Wrapper):
     def _get_ffv1_full_frame_compatible_slices(self) -> list[int]:
         """Return FFV1 slices known to be compatible with full-frame dimensions."""
         match self._state.video_system:
-            case VideoSystem.PAL:
+            # 625-line systems share the odd 625-line full-frame height,
+            # which rules out slice counts like 4 (625 % 4 != 0).
+            case VideoSystem.PAL | VideoSystem.SECAM | VideoSystem.MESECAM:
                 return [6, 9, 15, 20, 25, 28]
             case VideoSystem.PAL_M:
                 return [4, 6, 9]
             case VideoSystem.NTSC:
                 return [4, 6, 9, 12, 15, 16, 20, 24, 25, 28, 30]
         return [4]
-
-    def _get_recommended_ffv1_full_frame_slices(self) -> int:
-        """Return recommended FFV1 slices value for full-frame exports."""
-        return 20 if self._state.video_system is VideoSystem.PAL else 4
 
     def _get_ffv1_slices_opt(self, opts: list[str]) -> tuple[int | None, int | None]:
         """Return tuple containing current -slices value and its value index in opts."""

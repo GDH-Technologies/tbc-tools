@@ -285,7 +285,9 @@ class TBCJsonHelper:
             return "00:00:00:00"
 
         is_valid = True
-        is_30_frame = self.video_system is not VideoSystem.PAL
+        # Only the 525-line/30fps systems (NTSC, PAL-M) use 30-frame timecode;
+        # PAL, SECAM and MESECAM are 25fps (frames 0-24, never drop-frame).
+        is_30_frame = self.video_system in {VideoSystem.NTSC, VideoSystem.PAL_M}
         vitc_data = self._json_data["fields"][0]["vitc"]["vitcData"]
 
         def decode_bcd(tens: int, units: int) -> int:
