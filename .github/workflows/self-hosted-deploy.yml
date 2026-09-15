@@ -438,7 +438,12 @@ jobs:
     # derivation the PR run built from its checkout. !cancelled() is needed
     # because a skipped dependency otherwise skips this job too.
     if: ${{ !cancelled() && (needs.detect.outputs.macos == 'reuse' || (needs.detect.outputs.macos == 'build' && needs.build-macos.result == 'success')) }}
-    runs-on: [self-hosted, macOS, ARM64, air0]
+    # air0-light: air0's second runner, for short jobs. On the main `air0`
+    # runner this install (about 15 s of work) queued behind other repositories'
+    # builds: five minutes behind vhs-decode's on the #28 merge. It runs on the
+    # same box as the same user, so it upgrades the same nix profile and store
+    # the PR run's build is already in.
+    runs-on: [self-hosted, macOS, ARM64, air0-light]
     env:
       # air0 installs from the public fork rather than a local checkout.
       FLAKE_URL: github:GDH-Technologies/tbc-tools

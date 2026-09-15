@@ -407,11 +407,15 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     # install, the version bump), so they never queue behind a wm build.
     "- wm-light",
     "- air0",
+    "- air0-light",
     "- win0",
 )
 # The light jobs are pinned to wm-light. On the main `wm` runner, a seven-second
 # guardrails run queued for minutes behind the PR's own build.
 WM_LIGHT_RUNS_ON = "runs-on: [self-hosted, Linux, X64, wm-light]"
+# The macOS install is pinned to air0-light, air0's second runner. On the shared
+# `air0` runner it waited about five minutes behind another repository's build.
+AIR0_LIGHT_RUNS_ON = "runs-on: [self-hosted, macOS, ARM64, air0-light]"
 
 
 # A version bump must ask for the deploy, not rely on its push to cause one.
@@ -468,6 +472,7 @@ SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS = (
     "PLATFORMS: ${{ inputs.platforms }}",
     'selected() { [[ ",${PLATFORMS// /}," == *",$1,"* ]]; }',
     WM_LIGHT_RUNS_ON,
+    AIR0_LIGHT_RUNS_ON,
 )
 
 

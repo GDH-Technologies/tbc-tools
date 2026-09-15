@@ -7,11 +7,13 @@
 #   wm       -> workflow-master (Fedora, x86_64): builds
 #   wm-light -> workflow-master-light (same box): short jobs -- guardrails,
 #               deploy detect, the Linux install, the version bump
-#   air0     -> air-0 (Apple Silicon macOS)
+#   air0       -> air-0 (Apple Silicon macOS): builds
+#   air0-light -> air-0-light (same box): the macOS install
 #   win0     -> WIN-NODE-0 (Windows x86_64)
 self-hosted-runner:
   labels:
     - wm
     - wm-light
     - air0
+    - air0-light
     - win0
