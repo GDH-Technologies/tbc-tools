@@ -107,15 +107,11 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("skippedVersion", settings.updateCheck.skippedVersion);
     configuration->endGroup();
 
-    // CUDA plugin registry
-    configuration->beginGroup("cudaPlugin");
-    configuration->setValue("installedVersion", settings.cudaPlugin.installedVersion);
-    configuration->setValue("releaseTag", settings.cudaPlugin.releaseTag);
-    configuration->setValue("sha256", settings.cudaPlugin.sha256);
-    configuration->setValue("enabled", settings.cudaPlugin.enabled);
-    configuration->setValue("trusted", settings.cudaPlugin.trusted);
-    configuration->setValue("installPath", settings.cudaPlugin.installPath);
-    configuration->endGroup();
+    // The CUDA plugin registry is not written here. Its setters write through
+    // (see writeCudaPluginKey), so only the Configuration that changed a key
+    // ever writes it. MainWindow's long-lived instance is loaded at startup and
+    // written on every settings change and at exit; writing the group here let
+    // its stale copy erase an install or removal the Plugin Manager recorded.
 
     // VBI processing options
     configuration->beginGroup("vbiProcessing");
@@ -266,13 +262,10 @@ void Configuration::setDefault(void)
     settings.updateCheck.lastCheckTimestamp = QString();
     settings.updateCheck.skippedVersion = QString();
 
-    // CUDA plugin registry
-    settings.cudaPlugin.installedVersion = QString();
-    settings.cudaPlugin.releaseTag = QString();
-    settings.cudaPlugin.sha256 = QString();
-    settings.cudaPlugin.enabled = false;
-    settings.cudaPlugin.trusted = false;
-    settings.cudaPlugin.installPath = QString();
+    // CUDA plugin registry: deliberately not reset. It records plugin files
+    // that are still installed on disk, writeConfiguration() no longer writes
+    // it, and the constructor has just read it, so a settings-format reset
+    // keeps the plugin known instead of orphaning its files.
 
     // VBI processing options (defaults match ld-process-vbi CLI defaults)
     settings.vbiProcessing.vbiCore = true;
@@ -591,10 +584,19 @@ QString Configuration::getSkippedUpdateVersion(void)
     return settings.updateCheck.skippedVersion;
 }
 
-// CUDA plugin registry
+// CUDA plugin registry. Each setter writes its key straight to the settings
+// file, and writeConfiguration() leaves the group alone; see the note there.
+static void writeCudaPluginKey(QSettings *configuration, const char *key, const QVariant &value)
+{
+    configuration->beginGroup("cudaPlugin");
+    configuration->setValue(key, value);
+    configuration->endGroup();
+}
+
 void Configuration::setCudaPluginInstalledVersion(QString version)
 {
     settings.cudaPlugin.installedVersion = version;
+    writeCudaPluginKey(configuration, "installedVersion", version);
 }
 
 QString Configuration::getCudaPluginInstalledVersion(void)
@@ -605,6 +607,7 @@ QString Configuration::getCudaPluginInstalledVersion(void)
 void Configuration::setCudaPluginReleaseTag(QString tag)
 {
     settings.cudaPlugin.releaseTag = tag;
+    writeCudaPluginKey(configuration, "releaseTag", tag);
 }
 
 QString Configuration::getCudaPluginReleaseTag(void)
@@ -615,6 +618,7 @@ QString Configuration::getCudaPluginReleaseTag(void)
 void Configuration::setCudaPluginSha256(QString sha256)
 {
     settings.cudaPlugin.sha256 = sha256;
+    writeCudaPluginKey(configuration, "sha256", sha256);
 }
 
 QString Configuration::getCudaPluginSha256(void)
@@ -625,6 +629,7 @@ QString Configuration::getCudaPluginSha256(void)
 void Configuration::setCudaPluginEnabled(bool enabled)
 {
     settings.cudaPlugin.enabled = enabled;
+    writeCudaPluginKey(configuration, "enabled", enabled);
 }
 
 bool Configuration::getCudaPluginEnabled(void)
@@ -635,6 +640,7 @@ bool Configuration::getCudaPluginEnabled(void)
 void Configuration::setCudaPluginTrusted(bool trusted)
 {
     settings.cudaPlugin.trusted = trusted;
+    writeCudaPluginKey(configuration, "trusted", trusted);
 }
 
 bool Configuration::getCudaPluginTrusted(void)
@@ -645,6 +651,7 @@ bool Configuration::getCudaPluginTrusted(void)
 void Configuration::setCudaPluginInstallPath(QString path)
 {
     settings.cudaPlugin.installPath = path;
+    writeCudaPluginKey(configuration, "installPath", path);
 }
 
 QString Configuration::getCudaPluginInstallPath(void)
