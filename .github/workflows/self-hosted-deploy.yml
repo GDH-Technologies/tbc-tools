@@ -1,8 +1,10 @@
 name: "Self-hosted build and deploy"
 
-# Fork-exclusive. On a merge to main that touches build-relevant paths: rebuild
-# on each of the three GDH boxes and install the result locally on that same
-# box. This is the ONLY entry point in the repository that installs anything.
+# Fork-exclusive. On a merge to main that touches build-relevant paths, install
+# on each of the three GDH boxes. If a successful run in this repository (in
+# practice, the PR's own checks) already built and tested this exact source
+# tree, that build is reused. Otherwise the box rebuilds first. This is the ONLY
+# entry point in the repository that installs anything.
 #
 # The three platform workflows also trigger on `push: branches: [main]`, but
 # each of their jobs stands down unless called with from_deploy=true, so a
@@ -57,20 +59,29 @@ env:
 
 jobs:
   detect:
-    name: Detect changed areas
+    name: Plan the deploy
     # wm-light: wm's second runner, for short jobs, so this never queues behind
     # a PR build that is occupying the main `wm` runner.
     runs-on: [self-hosted, Linux, X64, wm-light]
+    permissions:
+      contents: read
+      # To find a reusable build: other runs' artifacts and conclusions.
+      actions: read
     outputs:
-      linux: ${{ steps.decide.outputs.linux }}
-      macos: ${{ steps.decide.outputs.macos }}
-      windows: ${{ steps.decide.outputs.windows }}
+      # Per platform: "reuse" (a successful same-repo run already built and
+      # tested this exact source tree), "build", or "skip".
+      linux: ${{ steps.plan.outputs.linux }}
+      macos: ${{ steps.plan.outputs.macos }}
+      windows: ${{ steps.plan.outputs.windows }}
+      # The run whose Windows artifact deploy-windows installs when reusing.
+      windows_run: ${{ steps.plan.outputs.windows_run }}
+      # The git tree of the commit being deployed.
+      tree: ${{ steps.plan.outputs.tree }}
     steps:
       - uses: actions/checkout@v5
-        if: ${{ github.event_name == 'push' }}
         with:
           # dorny/paths-filter diffs against github.event.before on a push, so
-          # it needs the history to reach it.
+          # it needs the history to reach it. Every event needs HEAD's tree.
           fetch-depth: 0
       # v4 declares the node24 runtime. v3 targets the deprecated node20, which
       # FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 then forces onto node24 with a
@@ -119,8 +130,8 @@ jobs:
               # file. A version bump arrives as a dispatch, which selects its
               # platforms explicitly.
               - '.github/workflows/self-hosted-windows.yml'
-      - name: Decide platforms
-        id: decide
+      - name: Plan each platform
+        id: plan
         # Untrusted-by-default inputs go through env, never into the script text.
         env:
           EVENT: ${{ github.event_name }}
@@ -128,42 +139,83 @@ jobs:
           F_LINUX: ${{ steps.filter.outputs.linux }}
           F_MACOS: ${{ steps.filter.outputs.macos }}
           F_WINDOWS: ${{ steps.filter.outputs.windows }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
-          # A push rebuilds what its diff touches. A dispatch rebuilds exactly
-          # the platforms named in its input (all three by default, which the
-          # version bump relies on), matched as whole comma-separated names.
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          # Dispatch platforms are matched as whole comma-separated names.
           selected() { [[ ",${PLATFORMS// /}," == *",$1,"* ]]; }
-          decide() {
-            local platform="$1" filtered="$2"
-            if [ "$EVENT" = "workflow_dispatch" ]; then
-              if selected "$platform"; then echo true; else echo false; fi
-            else
-              if [ "$filtered" = "true" ]; then echo true; else echo false; fi
-            fi
+
+          # A build of exactly this source that can be installed instead of
+          # rebuilt. That means an unexpired artifact named for this full tree
+          # hash, from a run in THIS repository that concluded successfully. The
+          # platform workflows upload it as a job's last step, so such a run built
+          # and passed ctest on this tree. head_repository_id rules out anything
+          # a fork could have produced (fork PRs never run on the fleet anyway).
+          # Prints the newest such run id, or nothing.
+          reusable_run() {
+            local name="$1-$TREE" ids id
+            ids="$(gh api -X GET "repos/$REPO/actions/artifacts" -f name="$name" -f per_page=50 \
+              --jq "[.artifacts[] | select(.expired == false
+                       and .workflow_run.repository_id == $REPO_ID
+                       and .workflow_run.head_repository_id == $REPO_ID)]
+                    | sort_by(.created_at) | reverse | .[].workflow_run.id")" || return 0
+            for id in $ids; do
+              if [ "$(gh api "repos/$REPO/actions/runs/$id" --jq .conclusion)" = "success" ]; then
+                echo "$id"
+                return 0
+              fi
+            done
           }
-          LINUX="$(decide linux "$F_LINUX")"
-          MACOS="$(decide macos "$F_MACOS")"
-          WINDOWS="$(decide windows "$F_WINDOWS")"
+
+          # On a push, the diff decides whether a platform is affected at all. An
+          # affected platform reuses a matching build when one exists, and
+          # otherwise builds. On a dispatch, the named platforms rebuild and the
+          # rest skip: a dispatch is an explicit request, and the version bump's
+          # tree is new anyway. All three are named by default, which the bump
+          # relies on.
+          plan() {
+            local platform="$1" filtered="$2" artifact="$3" run
+            if [ "$EVENT" = "workflow_dispatch" ]; then
+              if selected "$platform"; then echo "build -"; else echo "skip -"; fi
+              return
+            fi
+            if [ "$filtered" != "true" ]; then echo "skip -"; return; fi
+            run="$(reusable_run "$artifact")"
+            if [ -n "$run" ]; then echo "reuse $run"; else echo "build -"; fi
+          }
+
+          read -r LINUX LINUX_RUN <<<"$(plan linux "$F_LINUX" selfhosted_tbc-tools_linux_x86_64)"
+          read -r MACOS MACOS_RUN <<<"$(plan macos "$F_MACOS" selfhosted_tbc-tools_macos_arm64)"
+          read -r WINDOWS WINDOWS_RUN <<<"$(plan windows "$F_WINDOWS" selfhosted_tbc-tools_windows_x86_64)"
+          [ "$WINDOWS_RUN" = "-" ] && WINDOWS_RUN=""
           {
+            echo "tree=$TREE"
             echo "linux=$LINUX"
             echo "macos=$MACOS"
             echo "windows=$WINDOWS"
+            echo "windows_run=$WINDOWS_RUN"
           } >> "$GITHUB_OUTPUT"
           {
-            echo "## Platforms to rebuild for ${GITHUB_SHA} (${EVENT})"
+            echo "## Deploy plan for ${GITHUB_SHA} (${EVENT})"
             echo ""
-            echo "| platform | rebuild |"
-            echo "| --- | --- |"
-            echo "| linux (wm)     | ${LINUX} |"
-            echo "| macos (air0)   | ${MACOS} |"
-            echo "| windows (win0) | ${WINDOWS} |"
+            echo "Source tree \`${TREE}\`."
+            echo ""
+            echo "| platform | plan | build reused from run |"
+            echo "| --- | --- | --- |"
+            echo "| linux (wm)     | ${LINUX} | ${LINUX_RUN} |"
+            echo "| macos (air0)   | ${MACOS} | ${MACOS_RUN} |"
+            echo "| windows (win0) | ${WINDOWS} | ${WINDOWS_RUN:--} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The build jobs run only when the plan found no reusable build of this tree.
+  # On "reuse", the matching run already built it and passed ctest on it.
   build-linux:
     name: Build (wm)
     needs: detect
-    if: ${{ needs.detect.outputs.linux == 'true' }}
+    if: ${{ needs.detect.outputs.linux == 'build' }}
     uses: ./.github/workflows/self-hosted-linux.yml
     with:
       # Pin every box to the exact merged commit, so another merge landing
@@ -174,7 +226,7 @@ jobs:
   build-macos:
     name: Build (air0)
     needs: detect
-    if: ${{ needs.detect.outputs.macos == 'true' }}
+    if: ${{ needs.detect.outputs.macos == 'build' }}
     uses: ./.github/workflows/self-hosted-macos.yml
     with:
       checkout_ref: ${{ github.sha }}
@@ -183,7 +235,7 @@ jobs:
   build-windows:
     name: Build (win0)
     needs: detect
-    if: ${{ needs.detect.outputs.windows == 'true' }}
+    if: ${{ needs.detect.outputs.windows == 'build' }}
     uses: ./.github/workflows/self-hosted-windows.yml
     with:
       checkout_ref: ${{ github.sha }}
@@ -192,7 +244,11 @@ jobs:
   deploy-linux:
     name: Deploy to wm
     needs: [detect, build-linux]
-    if: ${{ needs.detect.outputs.linux == 'true' }}
+    # On "reuse", build-linux is skipped and this install is a store hit: tree
+    # identity makes this tree's derivation the one the PR run already built on
+    # this box. !cancelled() is needed because a skipped dependency otherwise
+    # skips this job too.
+    if: ${{ !cancelled() && (needs.detect.outputs.linux == 'reuse' || (needs.detect.outputs.linux == 'build' && needs.build-linux.result == 'success')) }}
     # Same box as the build, so the store path the build job just produced is
     # right here. It runs on wm's light runner so the install never queues
     # behind a PR build on the main `wm` runner.
@@ -377,7 +433,11 @@ jobs:
   deploy-macos:
     name: Deploy to air0
     needs: [detect, build-macos]
-    if: ${{ needs.detect.outputs.macos == 'true' }}
+    # On "reuse", build-macos is skipped and the github: install below is a
+    # store hit, since the flake's src filter makes it evaluate to the
+    # derivation the PR run built from its checkout. !cancelled() is needed
+    # because a skipped dependency otherwise skips this job too.
+    if: ${{ !cancelled() && (needs.detect.outputs.macos == 'reuse' || (needs.detect.outputs.macos == 'build' && needs.build-macos.result == 'success')) }}
     runs-on: [self-hosted, macOS, ARM64, air0]
     env:
       # air0 installs from the public fork rather than a local checkout.
@@ -497,26 +557,36 @@ jobs:
   deploy-windows:
     name: Deploy to win0
     needs: [detect, build-windows]
-    if: ${{ needs.detect.outputs.windows == 'true' }}
+    # On "reuse", build-windows is skipped and this installs the release the
+    # reused run built. !cancelled() is needed because a skipped dependency
+    # otherwise skips this job too.
+    if: ${{ !cancelled() && (needs.detect.outputs.windows == 'reuse' || (needs.detect.outputs.windows == 'build' && needs.build-windows.result == 'success')) }}
     runs-on: [self-hosted, Windows, X64, win0]
+    permissions:
+      contents: read
+      # To download a reused build's artifact from the run that made it.
+      actions: read
     defaults:
       run:
         shell: pwsh
     steps:
       - name: Locate the packaged tree
         id: locate
-        # Prefer the build job's own output: it is on this machine already, and
-        # round-tripping a few hundred megabytes through the artifact store on
-        # every merge is pure waste. The .build-sha stamp is what makes that
-        # safe -- a workspace that was cleaned, or left over from a different
-        # commit, falls through to the artifact instead of installing the wrong
-        # binaries.
+        # Prefer a release already in this workspace. It is on this machine,
+        # and round-tripping a few hundred megabytes through the artifact store
+        # is pure waste. That release is this run's build output, or on "reuse"
+        # often the PR run's own output, left in the same workspace. The
+        # .build-tree stamp is what makes this safe: a workspace that was
+        # cleaned, or holds a build of a different tree, falls through to the
+        # artifact instead of installing the wrong binaries.
+        env:
+          DEPLOY_TREE: ${{ needs.detect.outputs.tree }}
         run: |
           $ErrorActionPreference = 'Stop'
           $ws = Join-Path $env:GITHUB_WORKSPACE 'release'
-          $stamp = Join-Path $ws '.build-sha'
-          if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $env:GITHUB_SHA)) {
-            Write-Host "Using the build job's workspace tree at $ws"
+          $stamp = Join-Path $ws '.build-tree'
+          if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $env:DEPLOY_TREE)) {
+            Write-Host "Using the release already in the workspace at $ws"
             "source=workspace" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             "dir=$ws"          | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           } else {
@@ -525,17 +595,21 @@ jobs:
             "dir=incoming"    | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
 
-      - name: Download the packaged release (fallback)
+      - name: Download the packaged release
         if: steps.locate.outputs.source == 'artifact'
         uses: actions/download-artifact@v8
         with:
-          name: selfhosted_tbc-tools_windows_x86_64
+          name: selfhosted_tbc-tools_windows_x86_64-${{ needs.detect.outputs.tree }}
           path: incoming
+          # On "reuse", from the run that built this tree; otherwise, this run.
+          run-id: ${{ needs.detect.outputs.windows_run || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Swap the installed tree
         env:
           SRC_DIR: ${{ steps.locate.outputs.dir }}
           SRC_KIND: ${{ steps.locate.outputs.source }}
+          DEPLOY_TREE: ${{ needs.detect.outputs.tree }}
         run: |
           $ErrorActionPreference = 'Stop'
           $src     = $env:SRC_DIR
@@ -545,6 +619,12 @@ jobs:
 
           if (-not (Test-Path (Join-Path $src 'ld-analyse.exe'))) {
             throw "Source tree does not look like a tbc-tools release: $src"
+          }
+          # Whatever the source, workspace or artifact, it must have been built
+          # from exactly the tree being deployed.
+          $treeStamp = Join-Path $src '.build-tree'
+          if (-not (Test-Path $treeStamp) -or ((Get-Content $treeStamp -Raw).Trim() -ne $env:DEPLOY_TREE)) {
+            throw "Refusing to deploy: $src was not built from tree $env:DEPLOY_TREE"
           }
 
           # Clear debris from an interrupted previous deploy before staging.

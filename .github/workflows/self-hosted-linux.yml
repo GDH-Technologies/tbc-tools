@@ -134,6 +134,13 @@ jobs:
           submodules: true
           ref: ${{ inputs.checkout_ref || github.ref }}
 
+      - name: Record the source tree
+        # Artifacts are named for the tree they were built from, not the commit.
+        # self-hosted-deploy.yml's plan job reuses a same-repo run's build when
+        # the tree being deployed is identical. For a pull_request run this is
+        # the tree of refs/pull/N/merge, which is what was built and tested.
+        run: echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
+
       - name: Refresh tags
         # If the workspace persisted, a tag deleted or moved on the remote can
         # linger locally and poison `git describe`. Same reasoning as
@@ -747,7 +754,9 @@ jobs:
         if: ${{ !inputs.from_deploy }}
         uses: actions/upload-artifact@v7
         with:
-          name: selfhosted_tbc-tools_linux_x86_64
+          # Named for the full source tree, so the deploy's plan job can find a
+          # build of exactly this source by name.
+          name: selfhosted_tbc-tools_linux_x86_64-${{ env.SOURCE_TREE }}
           path: tbc-tools_linux_x86_64.tar.xz
           if-no-files-found: error
           retention-days: 7
