@@ -18,6 +18,7 @@
 #include "processvbidialog.h"
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
+#include "tbc/buildinfo.h"
 
 int main(int argc, char *argv[])
 {
@@ -34,7 +35,7 @@ int main(int argc, char *argv[])
 
     QCoreApplication::setApplicationName("tbc-process-vbi");
     QCoreApplication::setApplicationVersion(
-        QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+        TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("github.com");
 
     QCommandLineParser parser;

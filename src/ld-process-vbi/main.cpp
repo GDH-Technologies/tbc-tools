@@ -37,6 +37,7 @@
 #include "decoderpool.h"
 #include "processingpool.h"
 #include "teletextintegration.h"
+#include "tbc/buildinfo.h"
 namespace {
 void appendMetadataCandidate(QStringList &candidates, const QString &candidate)
 {
@@ -121,7 +122,7 @@ int main(int argc, char *argv[])
 
     // Set application name and version
     QCoreApplication::setApplicationName("ld-process-vbi");
-    QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser

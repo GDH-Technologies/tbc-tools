@@ -39,6 +39,7 @@
 #include "segments.h"
 #include "tbc/logging.h"
 #include "tbcmetadata.h"
+#include "tbc/buildinfo.h"
 
 namespace {
 
@@ -172,9 +173,9 @@ double verifyStored(const FieldMetrics &stored, const FieldMetrics &walked, QStr
 }
 
 // Two decoder events are the same record if everything but their provenance
-// matches. detailJson carries the build's APP_COMMIT, which changes between
-// builds (and gains a "-dirty" suffix on a dirty tree), so comparing the text
-// would report a difference on every rebuild and force a needless rewrite.
+// matches. detailJson carries the build's TbcBuildInfo::commit(), which changes
+// whenever the source does, so comparing the text would report a difference on
+// every rebuild and force a needless rewrite.
 bool sameEvent(const TbcMetaData::DecoderEvent &a, const TbcMetaData::DecoderEvent &b)
 {
     if (a.kind != b.kind || a.field != b.field || a.fileLoc != b.fileLoc
@@ -207,7 +208,7 @@ bool reconstructEvents(TbcMetaData &metaData, const SegmentsAnalysis &analysis)
         if (event.source != QLatin1String("tbc-segments")) kept.append(event);
     }
     const double nominal = analysis.nominalSamplesPerField;
-    const QString detailTail = QStringLiteral(",\"reconstructed\":true,\"tool\":\"tbc-segments\",\"commit\":\"%1\"}").arg(QStringLiteral(APP_COMMIT));
+    const QString detailTail = QStringLiteral(",\"reconstructed\":true,\"tool\":\"tbc-segments\",\"commit\":\"%1\"}").arg(TbcBuildInfo::commit());
     for (const SegmentEvent &ev : analysis.events) {
         TbcMetaData::DecoderEvent de;
         de.source = QStringLiteral("tbc-segments");
@@ -253,7 +254,7 @@ int main(int argc, char *argv[])
 
     QCoreApplication a(argc, argv);
     QCoreApplication::setApplicationName("tbc-segments");
-    QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     QCommandLineParser parser;

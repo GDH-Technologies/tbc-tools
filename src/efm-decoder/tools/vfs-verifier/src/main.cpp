@@ -31,6 +31,7 @@
 
 #include "tbc/logging.h"
 #include "adfs_verifier.h"
+#include "tbc/buildinfo.h"
 
 int main(int argc, char *argv[])
 {
@@ -50,7 +51,7 @@ int main(int argc, char *argv[])
     // Set application name and version
     QCoreApplication::setApplicationName("vfs-verifier");
     QCoreApplication::setApplicationVersion(
-            QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+            TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser

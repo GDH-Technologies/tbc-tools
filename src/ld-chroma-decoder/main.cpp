@@ -48,6 +48,7 @@
 #include "palcolour.h"
 #include "paldecoder.h"
 #include "transformpal.h"
+#include "tbc/buildinfo.h"
 
 // Load the thresholds file for the Transform decoders, if specified. We must
 // do this after PalColour has been configured, so we know how many values to
@@ -156,7 +157,7 @@ int main(int argc, char *argv[])
 
     // Set application name and version
     QCoreApplication::setApplicationName("ld-chroma-decoder");
-    QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser

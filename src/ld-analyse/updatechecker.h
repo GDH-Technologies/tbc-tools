@@ -10,7 +10,7 @@
  * UpdateChecker performs an asynchronous HTTP GET against the GitHub
  * "latest release" REST endpoint for the tbc-tools repository, parses the
  * JSON response (tag_name / html_url / name) and compares the published
- * tag against the compiled-in APP_VERSION.
+ * tag against the compiled-in TbcBuildInfo::version().
  ******************************************************************************/
 
 #ifndef UPDATECHECKER_H

@@ -23,6 +23,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
+#include "tbc/buildinfo.h"
 
 const QString PluginCatalog::repositoryOwner = QStringLiteral("harrypm");
 const QString PluginCatalog::repositoryName = QStringLiteral("tbc-tools");
@@ -108,7 +109,7 @@ void PluginCatalog::fetchRemote()
     QNetworkRequest request{QUrl(m_fetchUrls.at(m_fetchAttempt))};
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("tbc-tools/%1 (ld-analyse plugin catalog)")
-                          .arg(QString::fromUtf8(APP_VERSION)));
+                          .arg(TbcBuildInfo::version()));
     request.setRawHeader("Accept", "application/json");
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -137,7 +138,7 @@ void PluginCatalog::handleReply(QNetworkReply *reply)
             QNetworkRequest request{QUrl(m_fetchUrls.at(m_fetchAttempt))};
             request.setHeader(QNetworkRequest::UserAgentHeader,
                               QStringLiteral("tbc-tools/%1 (ld-analyse plugin catalog)")
-                                  .arg(QString::fromUtf8(APP_VERSION)));
+                                  .arg(TbcBuildInfo::version()));
             request.setRawHeader("Accept", "application/json");
             request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                                  QNetworkRequest::NoLessSafeRedirectPolicy);

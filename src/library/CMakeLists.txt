@@ -1,4 +1,5 @@
 add_library(tbc-library STATIC
+    tbc/buildinfo.cpp
     tbc/dropouts.cpp
     tbc/filters.cpp
     tbc/jsonio.cpp
@@ -31,6 +32,14 @@ add_library(tbc-library STATIC
 if(WIN32)
     target_compile_definitions(tbc-library PRIVATE NOMINMAX)
 endif()
+
+# Only this one file sees the build identity (see the note in the top-level
+# CMakeLists.txt). A new commit, branch or version recompiles buildinfo.cpp and
+# relinks, instead of recompiling every translation unit.
+set_property(SOURCE tbc/buildinfo.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    "APP_BRANCH=\"${APP_BRANCH}\""
+    "APP_COMMIT=\"${APP_COMMIT}\""
+    "APP_VERSION=\"${APP_VERSION}\"")
 
 target_include_directories(tbc-library PUBLIC filter tbc tbc/vbi)
 target_include_directories(tbc-library PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

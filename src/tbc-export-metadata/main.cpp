@@ -40,6 +40,7 @@
 #include "metadataconverter.h"
 #include "metadataexportdialog.h"
 
+#include "tbc/buildinfo.h"
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
 #include "tbcmetadata.h"
@@ -247,7 +248,7 @@ int main(int argc, char *argv[])
 
         // Set application name and version
         QCoreApplication::setApplicationName("tbc-export-metadata");
-        QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+        QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
         QCoreApplication::setOrganizationDomain("domesday86.com");
 
         // Set up the command line parser
@@ -325,7 +326,7 @@ int main(int argc, char *argv[])
 
     // Set application name and version
     QCoreApplication::setApplicationName("tbc-export-metadata");
-    QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser

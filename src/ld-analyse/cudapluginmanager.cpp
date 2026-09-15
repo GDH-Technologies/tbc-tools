@@ -28,6 +28,7 @@
 #include <QTemporaryFile>
 #include <QStandardPaths>
 #include <QRegularExpression>
+#include "tbc/buildinfo.h"
 namespace {
 QString archiveStem(const QString &fileName)
 {
@@ -174,7 +175,7 @@ void CudaPluginManager::checkForUpdate()
     QNetworkRequest request{QUrl(apiUrl)};
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("tbc-tools/%1 (ld-analyse CUDA plugin manager)")
-                          .arg(QString::fromUtf8(APP_VERSION)));
+                          .arg(TbcBuildInfo::version()));
     request.setRawHeader("Accept", "application/vnd.github+json");
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -323,7 +324,7 @@ void CudaPluginManager::downloadAndInstall(const QString &installDirectory)
         QNetworkRequest request{QUrl(url)};
         request.setHeader(QNetworkRequest::UserAgentHeader,
                           QStringLiteral("tbc-tools/%1 (ld-analyse CUDA plugin manager)")
-                              .arg(QString::fromUtf8(APP_VERSION)));
+                              .arg(TbcBuildInfo::version()));
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                              QNetworkRequest::NoLessSafeRedirectPolicy);
         return request;

@@ -22,6 +22,7 @@
 
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
+#include "tbc/buildinfo.h"
 namespace {
 QIcon bundledApplicationIcon()
 {
@@ -171,7 +172,7 @@ int main(int argc, char *argv[])
     // name on Windows, so reading the UI scale below with the name still unset
     // would silently look in the wrong directory there.
     QCoreApplication::setApplicationName("ld-analyse");
-    QCoreApplication::setApplicationVersion(QString(APP_VERSION));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::version());
     QCoreApplication::setOrganizationDomain("github.com");
 
     // Apply the saved UI scale. Qt has no runtime API for a manual global scale

@@ -10,14 +10,15 @@
 
 #include "aboutdialog.h"
 #include "ui_aboutdialog.h"
+#include "tbc/buildinfo.h"
 
 AboutDialog::AboutDialog(QWidget *parent) :
     QDialog(parent),
     ui(new Ui::AboutDialog)
 {
     ui->setupUi(this);
-    ui->gitVersionLabel->setText(QString("TBC-Tools · Version %1").arg(APP_VERSION));
-    ui->gitVersionLabel->setToolTip(QString("Build metadata: %1 / %2").arg(APP_BRANCH, APP_COMMIT));
+    ui->gitVersionLabel->setText(QString("TBC-Tools · Version %1").arg(TbcBuildInfo::version()));
+    ui->gitVersionLabel->setToolTip(QString("Build metadata: %1 / %2").arg(TbcBuildInfo::branch(), TbcBuildInfo::commit()));
 }
 
 AboutDialog::~AboutDialog()
