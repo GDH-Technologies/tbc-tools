@@ -548,7 +548,7 @@ class ContractCoverageTests(unittest.TestCase):
         # actionlint knows only the GitHub-hosted labels plus the generic
         # self-hosted ones, so an undeclared fleet label fails the guardrails
         # job for every workflow that uses it.
-        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- air0", "- win0"}
+        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- air0", "- air0-light", "- win0"}
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.ACTIONLINT_CONFIG_REQUIRED_SNIPPETS))
         )
@@ -696,6 +696,19 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS,
         ):
             self.assertIn(check_ci_contracts.WM_LIGHT_RUNS_ON, snippets)
+
+    def test_mac_install_is_pinned_to_air0_light(self) -> None:
+        # The air0 install is about 15 seconds of work. On the shared air0
+        # runner it queued behind another repository's build for about five
+        # minutes; air0-light is air0's second runner for it.
+        self.assertEqual(
+            check_ci_contracts.AIR0_LIGHT_RUNS_ON,
+            "runs-on: [self-hosted, macOS, ARM64, air0-light]",
+        )
+        self.assertIn(
+            check_ci_contracts.AIR0_LIGHT_RUNS_ON,
+            check_ci_contracts.SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS,
+        )
 
     def test_deploy_gate_forbids_negated_filter_patterns(self) -> None:
         # Under dorny's default quantifier, '!ci/tests/**' matches every file
