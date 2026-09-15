@@ -548,7 +548,7 @@ class ContractCoverageTests(unittest.TestCase):
         # actionlint knows only the GitHub-hosted labels plus the generic
         # self-hosted ones, so an undeclared fleet label fails the guardrails
         # job for every workflow that uses it.
-        expected = {"self-hosted-runner:", "- wm", "- air0", "- win0"}
+        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- air0", "- win0"}
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.ACTIONLINT_CONFIG_REQUIRED_SNIPPETS))
         )
@@ -680,6 +680,40 @@ class ContractCoverageTests(unittest.TestCase):
         self.assertTrue(
             check_ci_contracts.GDH_VERSION_BUMP_WORKFLOW.exists(),
             "gdh-version-bump.yml is a required contract file",
+        )
+
+    def test_light_jobs_are_pinned_to_wm_light(self) -> None:
+        # Guardrails, the version bump, deploy detect and the Linux install are
+        # short. On the main `wm` runner they queued behind builds; wm-light is
+        # wm's second runner for exactly these jobs.
+        self.assertEqual(
+            check_ci_contracts.WM_LIGHT_RUNS_ON,
+            "runs-on: [self-hosted, Linux, X64, wm-light]",
+        )
+        for snippets in (
+            check_ci_contracts.GDH_VERSION_BUMP_REQUIRED_SNIPPETS,
+            check_ci_contracts.SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS,
+            check_ci_contracts.SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS,
+        ):
+            self.assertIn(check_ci_contracts.WM_LIGHT_RUNS_ON, snippets)
+
+    def test_deploy_gate_forbids_negated_filter_patterns(self) -> None:
+        # Under dorny's default quantifier, '!ci/tests/**' matches every file
+        # outside ci/tests, so any negation turns every platform on for every
+        # change -- which is how the gate stopped filtering anything.
+        self.assertIn("- '!", check_ci_contracts.SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS)
+        content = check_ci_contracts.SELF_HOSTED_DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("- '!", content)
+
+    def test_deploy_dispatch_selects_platforms_by_whole_name(self) -> None:
+        # The bump relies on the default selecting all three platforms. The
+        # input must reach the script through env, never interpolated.
+        expected = {
+            'default: "linux,macos,windows"',
+            "PLATFORMS: ${{ inputs.platforms }}",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS))
         )
 
     def test_agents_hard_rules_include_self_hosted_guards(self) -> None:

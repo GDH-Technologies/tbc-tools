@@ -157,6 +157,7 @@ jobs:
           df -h "$GITHUB_WORKSPACE" /nix | cat
 
       - name: Provision packaging tools from nixpkgs
+        if: ${{ !inputs.from_deploy }}
         # wm has mono but no patchelf, no msbuild and no xbuild, and its
         # system python3 is 3.14 under PEP 668. --out-link rather than
         # --no-link is load-bearing: /etc/nix/nix.conf has min-free/max-free
@@ -190,11 +191,18 @@ jobs:
         run: bash ci/run_local_ci_parity.sh --build-test-only
 
       - name: Create release directory
+        if: ${{ !inputs.from_deploy }}
         run: mkdir -p release
 
       - name: Build with Nix
+        # Not gated: on the deploy path wm's install (`nix profile upgrade`)
+        # reuses this exact store path, so building it here costs the deploy
+        # nothing extra. Only the packaging below is skipped there.
+        run: nix build .#
+
+      - name: Stage AppDir from the Nix build
+        if: ${{ !inputs.from_deploy }}
         run: |
-          nix build .#
           mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share
           SKIP_LIB_REGEX='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libresolv\.so\.2|ld-linux-.*\.so\..*|libnss_.*|libutil\.so\..*|libanl\.so\..*)$'
           for wrapped in result/bin/.*-wrapped; do
@@ -335,6 +343,7 @@ jobs:
           done
 
       - name: Build self-contained tbc-video-export (PyInstaller)
+        if: ${{ !inputs.from_deploy }}
         # Replace the CMake bash wrapper (which execs a *host* Python with host
         # site-packages) with a PyInstaller --onefile ELF that bundles the
         # interpreter and all deps. The hosted job uses the container's system
@@ -366,6 +375,7 @@ jobs:
           echo "Bundled self-contained tbc-video-export PyInstaller binary"
 
       - name: Build and package native AAA AppImage from vendored source
+        if: ${{ !inputs.from_deploy }}
         # Compile VhsDecodeAutoAudioAlign from the vendored C# source with
         # msbuild, then package it plus a bundled Mono runtime into a
         # self-contained AppImage, so the bundle needs no host Mono at runtime.
@@ -387,6 +397,7 @@ jobs:
           echo "Bundled self-contained native AAA AppImage (built from source)"
 
       - name: Fetch AppImage tooling
+        if: ${{ !inputs.from_deploy }}
         # Cached outside the workspace so checkout's `git clean -ffdx` cannot
         # delete it, then copied in -- the invocations below are AppImage
         # relative and the hosted job's form is kept unchanged.
@@ -410,6 +421,7 @@ jobs:
           fetch "${APPIMAGETOOL_FILE}" "${APPIMAGETOOL_URL}"
 
       - name: Assemble and build AppImage
+        if: ${{ !inputs.from_deploy }}
         run: |
           export APPIMAGE_EXTRACT_AND_RUN=1
           SKIP_LIB_REGEX='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libresolv\.so\.2|ld-linux-.*\.so\..*|libnss_.*|libutil\.so\..*|libanl\.so\..*)$'
@@ -717,18 +729,22 @@ jobs:
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "./${APPIMAGETOOL_FILE}" AppDir release/tbc-tools-x86_64.AppImage
 
       - name: Validate x86_64 AppImage bundle
+        if: ${{ !inputs.from_deploy }}
         run: |
           PYTHON_RUNTIME="$(nix build nixpkgs#python311 --no-link --print-out-paths | tail -n 1)"
           export PATH="$PYTHON_RUNTIME/bin:$PATH"
           bash ci/verify_linux_bundle.sh x86-appimage release/tbc-tools-x86_64.AppImage
 
       - name: Copy scripts
+        if: ${{ !inputs.from_deploy }}
         run: find scripts -maxdepth 1 -type f -executable -exec cp {} release/ \; || true
 
       - name: Create release archive
+        if: ${{ !inputs.from_deploy }}
         run: tar -cvJSf tbc-tools_linux_x86_64.tar.xz --transform s/release/tbc-tools/ release/
 
       - name: Upload binary artifact
+        if: ${{ !inputs.from_deploy }}
         uses: actions/upload-artifact@v7
         with:
           name: selfhosted_tbc-tools_linux_x86_64

@@ -96,9 +96,11 @@ permissions:
   contents: read
 
 concurrency:
-  # Machine-scoped: there is exactly one win0 box. github.workflow resolves to
-  # the CALLER's name under workflow_call, so a deploy-driven build lands in
-  # its own group and can never be cancelled by a PR run.
+  # Not machine-scoped by itself: the key includes the workflow and the ref.
+  # What actually serialises win0's jobs is that it has exactly one runner.
+  # github.workflow resolves to the CALLER's name under workflow_call, so a
+  # deploy-driven build lands in its own group and can never be cancelled by
+  # a PR run.
   group: tbc-tools-win0-windows-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -478,8 +480,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
       - name: Build
+        env:
+          # MSVC reads CL and prepends it to every cl.exe invocation, so /MP makes
+          # each project compile its sources in parallel. --parallel 2 lets
+          # MSBuild build two projects at once. win0 has 4 logical CPUs and 12 GB
+          # of RAM, so this caps the box at 8 concurrent compilers rather than the
+          # 16 that a bare --parallel (one MSBuild node per CPU) with /MP could
+          # reach. Before this, the build ran on one core (about 12m47s).
+          CL: /MP
         run: |
-          cmake --build --preset vcpkg --config Release
+          cmake --build --preset vcpkg --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
       - name: Run ctest

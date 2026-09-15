@@ -159,8 +159,18 @@
               filter = path: type:
                 let
                   base = builtins.baseNameOf path;
+                  # The two submodule mount points. A git+file source omits a
+                  # gitlink entirely, but a github: tarball can carry it as an
+                  # empty directory -- air0's Determinate Nix does. Then the same
+                  # commit gets a different src and a different derivation, and the
+                  # deploy rebuilds what the build job already built. Neither path
+                  # is used by the Nix build (ezpwd comes from ezpwdSrc, and no
+                  # CMake file references cc_decoder), so they are always dropped.
+                  isSubmoduleMount = type == "directory"
+                    && (pkgs.lib.hasSuffix "/src/efm-decoder/libs/ezpwd" path
+                        || pkgs.lib.hasSuffix "/src/ld-process-vbi/vendor/cc_decoder" path);
                 in
-                  !(base == ".git" || base == "build" || base == "result");
+                  !(base == ".git" || base == "build" || base == "result" || isSubmoduleMount);
             };
 
             nativeBuildInputs = with pkgs; [

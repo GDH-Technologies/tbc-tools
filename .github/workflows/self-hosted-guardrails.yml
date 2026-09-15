@@ -41,7 +41,9 @@ env:
 jobs:
   guardrails:
     name: CI guardrails
-    runs-on: [self-hosted, Linux, X64, wm]
+    # wm-light: wm's second runner, for short jobs. On the main `wm` runner
+    # this seven-second check queued for minutes behind the PR's own build.
+    runs-on: [self-hosted, Linux, X64, wm-light]
     timeout-minutes: 20
     # A forked PR must never execute on a workstation -- this repository is
     # public. There is deliberately no from_deploy guard here, unlike the

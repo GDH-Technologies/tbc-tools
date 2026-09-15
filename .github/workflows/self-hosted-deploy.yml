@@ -33,6 +33,12 @@ on:
       - ".gdh-version"
       - ".github/workflows/self-hosted-*.yml"
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to rebuild and deploy, comma-separated (linux, macos, windows)"
+        required: false
+        default: "linux,macos,windows"
+        type: string
 
 permissions:
   contents: read
@@ -40,7 +46,9 @@ permissions:
 concurrency:
   # One group for the whole fleet, and NEVER cancel. A cancelled run can
   # interrupt `nix profile upgrade` or the Windows directory swap halfway
-  # through. Back-to-back merges queue and deploy in order.
+  # through. GitHub keeps at most ONE pending run per group: a newer run
+  # replaces an older one that is still waiting. Back-to-back merges therefore
+  # deploy the running commit and then the newest, not every commit in between.
   group: tbc-tools-self-hosted-deploy
   cancel-in-progress: false
 
@@ -50,59 +58,103 @@ env:
 jobs:
   detect:
     name: Detect changed areas
-    runs-on: [self-hosted, Linux, X64, wm]
+    # wm-light: wm's second runner, for short jobs, so this never queues behind
+    # a PR build that is occupying the main `wm` runner.
+    runs-on: [self-hosted, Linux, X64, wm-light]
     outputs:
-      linux: ${{ steps.filter.outputs.linux == 'true' || github.event_name == 'workflow_dispatch' }}
-      macos: ${{ steps.filter.outputs.macos == 'true' || github.event_name == 'workflow_dispatch' }}
-      windows: ${{ steps.filter.outputs.windows == 'true' || github.event_name == 'workflow_dispatch' }}
+      linux: ${{ steps.decide.outputs.linux }}
+      macos: ${{ steps.decide.outputs.macos }}
+      windows: ${{ steps.decide.outputs.windows }}
     steps:
       - uses: actions/checkout@v5
+        if: ${{ github.event_name == 'push' }}
         with:
           # dorny/paths-filter diffs against github.event.before on a push, so
           # it needs the history to reach it.
           fetch-depth: 0
       - uses: dorny/paths-filter@v3
         id: filter
+        # A dispatch names its platforms explicitly; the diff decides only for a push.
+        if: ${{ github.event_name == 'push' }}
         with:
+          # No '!' patterns anywhere in these lists. Under the default
+          # predicate-quantifier ('some'), a file matches a filter when it matches
+          # ANY pattern, and '!ci/tests/**' matches every file outside ci/tests.
+          # So a negation here silently turned every platform on for every change.
+          # List what each platform actually consumes instead. The guardrail-only
+          # files (ci/tests/**, ci/check_ci_contracts.py) are simply not listed.
           filters: |
             common: &common
               - 'src/**'
-              - 'ci/**'
-              # Guardrail-only files cannot change an artifact; see the push
-              # gate above. dorny/paths-filter honours '!' the same way.
-              - '!ci/tests/**'
-              - '!ci/check_ci_contracts.py'
               - 'scripts/**'
               - 'CMakeLists.txt'
-              # In the shared anchor, so a version bump rebuilds and reinstalls
-              # on all three boxes rather than none of them.
-              - '.gdh-version'
               - '.github/workflows/self-hosted-deploy.yml'
             linux:
               - *common
               - 'flake.nix'
               - 'flake.lock'
+              # The flake derives the Nix build's version from these two.
+              - 'vcpkg.json'
+              - '.gdh-version'
+              - 'ci/run_local_ci_parity.sh'
+              - 'ci/verify_linux_bundle.sh'
               - '.github/workflows/self-hosted-linux.yml'
             macos:
               - *common
               - 'flake.nix'
               - 'flake.lock'
+              - 'vcpkg.json'
+              - '.gdh-version'
+              - 'ci/run_local_ci_parity.sh'
               - '.github/workflows/self-hosted-macos.yml'
             windows:
               - *common
               - 'vcpkg.json'
               - 'CMakePresets.json'
+              # .gdh-version is deliberately absent: with .git present, CMake's
+              # git-describe tier sets the Windows version from the tag, not the
+              # file. A version bump arrives as a dispatch, which selects its
+              # platforms explicitly.
               - '.github/workflows/self-hosted-windows.yml'
-      - name: Summarise
+      - name: Decide platforms
+        id: decide
+        # Untrusted-by-default inputs go through env, never into the script text.
+        env:
+          EVENT: ${{ github.event_name }}
+          PLATFORMS: ${{ inputs.platforms }}
+          F_LINUX: ${{ steps.filter.outputs.linux }}
+          F_MACOS: ${{ steps.filter.outputs.macos }}
+          F_WINDOWS: ${{ steps.filter.outputs.windows }}
         run: |
+          set -euo pipefail
+          # A push rebuilds what its diff touches. A dispatch rebuilds exactly
+          # the platforms named in its input (all three by default, which the
+          # version bump relies on), matched as whole comma-separated names.
+          selected() { [[ ",${PLATFORMS// /}," == *",$1,"* ]]; }
+          decide() {
+            local platform="$1" filtered="$2"
+            if [ "$EVENT" = "workflow_dispatch" ]; then
+              if selected "$platform"; then echo true; else echo false; fi
+            else
+              if [ "$filtered" = "true" ]; then echo true; else echo false; fi
+            fi
+          }
+          LINUX="$(decide linux "$F_LINUX")"
+          MACOS="$(decide macos "$F_MACOS")"
+          WINDOWS="$(decide windows "$F_WINDOWS")"
           {
-            echo "## Changed areas for ${GITHUB_SHA}"
+            echo "linux=$LINUX"
+            echo "macos=$MACOS"
+            echo "windows=$WINDOWS"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Platforms to rebuild for ${GITHUB_SHA} (${EVENT})"
             echo ""
             echo "| platform | rebuild |"
             echo "| --- | --- |"
-            echo "| linux (wm)     | ${{ steps.filter.outputs.linux }} |"
-            echo "| macos (air0)   | ${{ steps.filter.outputs.macos }} |"
-            echo "| windows (win0) | ${{ steps.filter.outputs.windows }} |"
+            echo "| linux (wm)     | ${LINUX} |"
+            echo "| macos (air0)   | ${MACOS} |"
+            echo "| windows (win0) | ${WINDOWS} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-linux:
@@ -138,7 +190,10 @@ jobs:
     name: Deploy to wm
     needs: [detect, build-linux]
     if: ${{ needs.detect.outputs.linux == 'true' }}
-    runs-on: [self-hosted, Linux, X64, wm]
+    # Same box as the build, so the store path the build job just produced is
+    # right here. It runs on wm's light runner so the install never queues
+    # behind a PR build on the main `wm` runner.
+    runs-on: [self-hosted, Linux, X64, wm-light]
     env:
       # wm installs from a local flake rather than from GitHub, so the deploy
       # is: fast-forward the developer's real checkout, then upgrade. The
