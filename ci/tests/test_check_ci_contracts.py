@@ -716,6 +716,27 @@ class ContractCoverageTests(unittest.TestCase):
             expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS))
         )
 
+    def test_build_identity_is_one_unit_and_a_tree_id(self) -> None:
+        # Global APP_* definitions recompiled every file on every commit, and a
+        # commit-derived -DAPP_COMMIT made identical trees different Nix
+        # derivations, so a merge rebuilt what its PR had already built.
+        self.assertIn(
+            "add_compile_definitions(APP_",
+            check_ci_contracts.TOP_CMAKELISTS_FORBIDDEN_SNIPPETS,
+        )
+        self.assertNotIn(
+            "add_compile_definitions(APP_",
+            check_ci_contracts.TOP_CMAKELISTS.read_text(encoding="utf-8"),
+        )
+        library = check_ci_contracts.LIBRARY_CMAKELISTS.read_text(encoding="utf-8")
+        for snippet in check_ci_contracts.LIBRARY_CMAKELISTS_REQUIRED_SNIPPETS:
+            self.assertIn(snippet, library)
+        flake = check_ci_contracts.FLAKE_NIX.read_text(encoding="utf-8")
+        for snippet in check_ci_contracts.FLAKE_BUILD_IDENTITY_REQUIRED_SNIPPETS:
+            self.assertIn(snippet, flake)
+        for snippet in check_ci_contracts.FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS:
+            self.assertNotIn(snippet, flake)
+
     def test_agents_hard_rules_include_self_hosted_guards(self) -> None:
         expected = {
             "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",

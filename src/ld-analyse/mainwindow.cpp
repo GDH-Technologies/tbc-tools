@@ -85,6 +85,7 @@
 #include "../audio-align/audioalignmentdialog.h"
 #include "../tbc-export-metadata/metadataexportdialog.h"
 #include "tbc/uistyle.h"
+#include "tbc/buildinfo.h"
 namespace {
 QString chromaDecoderNameFromConfig(VideoSystem system,
                                     const PalColour::Configuration &palConfig,
@@ -5991,7 +5992,7 @@ void MainWindow::maybePerformWeeklyUpdateCheck()
 
     // Skip the automatic check for unversioned/dev builds to avoid noisy prompts,
     // and for GDH fork builds, whose releases are not on the feed this polls.
-    const QString currentVersion = QString::fromUtf8(APP_VERSION);
+    const QString currentVersion = TbcBuildInfo::version();
     if (currentVersion.isEmpty() || currentVersion == QStringLiteral("0.0.0")
         || currentVersion.contains(QStringLiteral("-gdh-"))) {
         return;
@@ -6094,7 +6095,7 @@ void MainWindow::onUpdateCheckFailed(const QString &errorString)
 
 void MainWindow::showUpdateAvailableDialog(const QString &latestVersion, const QString &releaseUrl, const QString &releaseName)
 {
-    const QString currentVersion = QString::fromUtf8(APP_VERSION);
+    const QString currentVersion = TbcBuildInfo::version();
 
     QMessageBox box(this);
     box.setIcon(QMessageBox::Information);

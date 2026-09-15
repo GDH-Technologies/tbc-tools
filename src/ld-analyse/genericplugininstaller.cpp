@@ -25,6 +25,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QStandardPaths>
+#include "tbc/buildinfo.h"
 
 GenericPluginInstaller::GenericPluginInstaller(QObject *parent)
     : QObject(parent),
@@ -89,7 +90,7 @@ void GenericPluginInstaller::install(const PluginCatalogEntry &entry)
     QNetworkRequest request{QUrl(packageUrl)};
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("tbc-tools/%1 (ld-analyse generic plugin installer)")
-                          .arg(QString::fromUtf8(APP_VERSION)));
+                          .arg(TbcBuildInfo::version()));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
 

@@ -34,6 +34,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include "tbc/buildinfo.h"
 
 namespace {
 
@@ -779,8 +780,8 @@ QJsonObject buildReport(const TbcMetaData &metaData,
     report.insert("schemaVersion", 1);
     QJsonObject tool;
     tool.insert("name", QStringLiteral("tbc-segments"));
-    tool.insert("branch", QStringLiteral(APP_BRANCH));
-    tool.insert("commit", QStringLiteral(APP_COMMIT));
+    tool.insert("branch", TbcBuildInfo::branch());
+    tool.insert("commit", TbcBuildInfo::commit());
     report.insert("tool", tool);
 
     QJsonObject input;

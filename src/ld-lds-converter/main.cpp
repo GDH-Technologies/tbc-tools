@@ -46,6 +46,7 @@
 #include "tbc/uistyle.h"
 #include "converterdialog.h"
 #include "dataconverter.h"
+#include "tbc/buildinfo.h"
 
 namespace {
 void ldLdsConverterMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
@@ -429,7 +430,7 @@ int main(int argc, char *argv[])
         tbc::ui::ThemedApplication a(argc, argv);
 
         QCoreApplication::setApplicationName("ld-lds-converter");
-        QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+        QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
         QCoreApplication::setOrganizationDomain("domesday86.com");
 
         QCommandLineParser parser;
@@ -510,7 +511,7 @@ int main(int argc, char *argv[])
 
     // Set application name and version
     QCoreApplication::setApplicationName("ld-lds-converter");
-    QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser

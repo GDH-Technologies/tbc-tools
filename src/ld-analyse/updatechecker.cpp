@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QUrl>
 #include <QVersionNumber>
+#include "tbc/buildinfo.h"
 
 const QString UpdateChecker::repositoryOwner = QStringLiteral("harrypm");
 const QString UpdateChecker::repositoryName = QStringLiteral("tbc-tools");
@@ -49,7 +50,7 @@ void UpdateChecker::checkForUpdates()
 
     QNetworkRequest request{QUrl(apiUrl)};
     request.setHeader(QNetworkRequest::UserAgentHeader,
-                      QStringLiteral("tbc-tools/%1 (ld-analyse update checker)").arg(QString::fromUtf8(APP_VERSION)));
+                      QStringLiteral("tbc-tools/%1 (ld-analyse update checker)").arg(TbcBuildInfo::version()));
     request.setRawHeader("Accept", "application/vnd.github+json");
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -135,7 +136,7 @@ void UpdateChecker::handleReply(QNetworkReply *reply)
     }
 
     const QString latestVersion = normalizeVersionTag(tagName);
-    const QString currentVersion = QString::fromUtf8(APP_VERSION);
+    const QString currentVersion = TbcBuildInfo::version();
     const QString effectiveReleaseUrl = htmlUrl.isEmpty() ? releasesUrl() : htmlUrl;
 
     tbcDebugStream() << "UpdateChecker::handleReply(): latest =" << tagName

@@ -31,6 +31,7 @@
 
 #include "tbc/logging.h"
 #include "discmapper.h"
+#include "tbc/buildinfo.h"
 namespace {
 void appendMetadataCandidate(QStringList &candidates, const QString &candidate)
 {
@@ -90,7 +91,7 @@ int main(int argc, char *argv[])
 
     // Set application name and version
     QCoreApplication::setApplicationName("ld-discmap");
-    QCoreApplication::setApplicationVersion(QString("ld-decode-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
+    QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser

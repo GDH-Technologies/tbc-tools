@@ -504,9 +504,11 @@ endif()
 # --- gdh-version block: end ---
 set(APP_VERSION "${APP_VERSION}" CACHE STRING "Release version identifier")
 
-add_compile_definitions(APP_BRANCH=\"${APP_BRANCH}\")
-add_compile_definitions(APP_COMMIT=\"${APP_COMMIT}\")
-add_compile_definitions(APP_VERSION=\"${APP_VERSION}\")
+# APP_BRANCH, APP_COMMIT and APP_VERSION are NOT global compile definitions.
+# Only src/library/tbc/buildinfo.cpp receives them (see src/library/CMakeLists.txt),
+# and every tool reads them through TbcBuildInfo. As global flags they changed
+# every translation unit's command line on every commit, so an identical source
+# tree still recompiled everything.
 
 # Subdirectories
 

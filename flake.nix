@@ -135,11 +135,40 @@
           if gdhVersionMatch != null && builtins.head gdhVersionMatch == upstreamVersion
           then gdhVersionFile
           else upstreamVersion;
-        rev = if self ? rev then self.rev else "";
-        shortRev = if self ? shortRev then self.shortRev else (if rev != "" then builtins.substring 0 7 rev else "unknown");
-        dirtySuffix = if self ? dirtyRev then "-dirty" else "";
-        branch = if self ? ref then self.ref else "nix";
-        nixCommit = "${shortRev}${dirtySuffix}";
+        # The source the package is built from. Its store path depends only on
+        # the filtered CONTENT, so the same tree gives the same path whether it
+        # arrives as a git+file checkout, a PR's merge ref or a github: tarball.
+        tbcSrc = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            let
+              base = builtins.baseNameOf path;
+              # The two submodule mount points. A git+file source omits a
+              # gitlink entirely, but a github: tarball can carry it as an
+              # empty directory -- air0's Determinate Nix does. Then the same
+              # commit gets a different src and a different derivation, and the
+              # deploy rebuilds what the build job already built. Neither path
+              # is used by the Nix build (ezpwd comes from ezpwdSrc, and no
+              # CMake file references cc_decoder), so they are always dropped.
+              isSubmoduleMount = type == "directory"
+                && (pkgs.lib.hasSuffix "/src/efm-decoder/libs/ezpwd" path
+                    || pkgs.lib.hasSuffix "/src/ld-process-vbi/vendor/cc_decoder" path);
+            in
+              !(base == ".git" || base == "build" || base == "result" || isSubmoduleMount);
+        };
+        # The build identity comes from that content, not from the commit.
+        #
+        # The commit id (shortRev) and the flake ref (self.ref) used to feed
+        # -DAPP_COMMIT and -DAPP_BRANCH. That made every commit a new
+        # derivation, even one whose tree was byte-identical: a PR's merge ref
+        # and the merge commit on main, or a version-bump commit that changes
+        # only .gdh-version (which does still change the version, and so still
+        # rebuilds). With a tree id, the merge deploy evaluates the derivation
+        # the PR run already built, and wm and air0 install it from their local
+        # store instead of recompiling.
+        treeId = builtins.substring 0 12 (builtins.baseNameOf (toString tbcSrc));
+        nixCommit = "src-${treeId}";
+        branch = "nix";
         # mkTbcTools: single derivation factory. withCuda=false (default release,
         # CI test/release jobs) builds CPU-only - no nvcc, no CUDA buildInputs,
         # -DLDCHROMA_ENABLE_CUDA=OFF - so default `nix build .#` skips CUDA kernel
@@ -154,24 +183,7 @@
           pkgs.stdenv.mkDerivation {
             pname = "tbc-tools";
             version = packageVersion;
-            src = pkgs.lib.cleanSourceWith {
-              src = ./.;
-              filter = path: type:
-                let
-                  base = builtins.baseNameOf path;
-                  # The two submodule mount points. A git+file source omits a
-                  # gitlink entirely, but a github: tarball can carry it as an
-                  # empty directory -- air0's Determinate Nix does. Then the same
-                  # commit gets a different src and a different derivation, and the
-                  # deploy rebuilds what the build job already built. Neither path
-                  # is used by the Nix build (ezpwd comes from ezpwdSrc, and no
-                  # CMake file references cc_decoder), so they are always dropped.
-                  isSubmoduleMount = type == "directory"
-                    && (pkgs.lib.hasSuffix "/src/efm-decoder/libs/ezpwd" path
-                        || pkgs.lib.hasSuffix "/src/ld-process-vbi/vendor/cc_decoder" path);
-                in
-                  !(base == ".git" || base == "build" || base == "result" || isSubmoduleMount);
-            };
+            src = tbcSrc;
 
             nativeBuildInputs = with pkgs; [
               cmake
