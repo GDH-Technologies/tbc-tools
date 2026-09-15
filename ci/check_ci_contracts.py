@@ -322,10 +322,16 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # BUILD_TESTING is ON here (hosted uses OFF) so ctest runs; the POSIX shell
     # tests are excluded and the test binaries are kept out of release\.
     "-DBUILD_TESTING=ON",
-    'ctest --test-dir build -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"',
-    # The deploy job installs from this workspace and uses the stamp to prove
-    # the tree belongs to the commit being deployed.
-    "release\\.build-sha",
+    # The build directory is persistent and outside the workspace, keyed by
+    # the toolchain; see "Choose the persistent build directory".
+    'ctest --test-dir "$env:BUILD_DIR" -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"',
+    "Choose the persistent build directory",
+    # The deploy job installs from this workspace when this stamp matches the
+    # tree being deployed, and otherwise downloads the tree-named artifact.
+    "release\\.build-tree",
+    # Named for the full source tree, which is how the deploy's plan job finds
+    # a reusable build of exactly that source.
+    "selfhosted_tbc-tools_windows_x86_64-${{ env.SOURCE_TREE }}",
 )
 SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     "uses: ./.github/workflows/self-hosted-linux.yml",
@@ -491,6 +497,39 @@ FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS = (
     "self ? shortRev",
     "self ? ref",
     "self ? dirtyRev",
+)
+# The Nix source leaves out what the build never reads (CI config, docs, logs,
+# notes), so a docs-only or workflow-only merge is not a new derivation.
+FLAKE_SRC_FILTER_REQUIRED_SNIPPETS = (
+    "notBuildInput",
+    '".github" "docs" "development-logs" "dev-notes" "notes"',
+)
+
+
+# Tree-verified reuse. The deploy may install a build it did not make itself
+# only under all of these conditions:
+#   - the artifact is named for the full tree hash being deployed;
+#   - it has not expired;
+#   - it came from a run in this repository, never from a fork;
+#   - that run succeeded, which means it built and passed ctest on this tree.
+# win0 also re-checks the .build-tree stamp inside what it installs, before
+# the swap.
+SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS = (
+    "TREE=\"$(git rev-parse 'HEAD^{tree}')\"",
+    ".expired == false",
+    ".workflow_run.repository_id == $REPO_ID",
+    ".workflow_run.head_repository_id == $REPO_ID",
+    '--jq .conclusion)" = "success"',
+    "actions: read",
+    "github-token: ${{ github.token }}",
+    ".build-tree",
+)
+# Every platform names its artifact for the tree it built, which is what the
+# plan job looks up.
+SELF_HOSTED_TREE_NAMED_ARTIFACTS = (
+    (SELF_HOSTED_LINUX_WORKFLOW, "selfhosted_tbc-tools_linux_x86_64-${{ env.SOURCE_TREE }}"),
+    (SELF_HOSTED_MACOS_WORKFLOW, "selfhosted_tbc-tools_macos_arm64-${{ env.SOURCE_TREE }}"),
+    (SELF_HOSTED_WINDOWS_WORKFLOW, "selfhosted_tbc-tools_windows_x86_64-${{ env.SOURCE_TREE }}"),
 )
 
 
@@ -749,6 +788,12 @@ def main() -> int:
         check_contains(FLAKE_NIX, snippet, errors)
     for snippet in FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS:
         check_not_contains(FLAKE_NIX, snippet, errors)
+    for snippet in FLAKE_SRC_FILTER_REQUIRED_SNIPPETS:
+        check_contains(FLAKE_NIX, snippet, errors)
+    for snippet in SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for workflow, snippet in SELF_HOSTED_TREE_NAMED_ARTIFACTS:
+        check_contains(workflow, snippet, errors)
     for workflow in (
         SELF_HOSTED_LINUX_WORKFLOW,
         SELF_HOSTED_MACOS_WORKFLOW,

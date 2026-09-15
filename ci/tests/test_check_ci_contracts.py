@@ -737,6 +737,38 @@ class ContractCoverageTests(unittest.TestCase):
         for snippet in check_ci_contracts.FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS:
             self.assertNotIn(snippet, flake)
 
+    def test_flake_src_leaves_out_non_build_inputs(self) -> None:
+        # Docs, CI config and logs in the Nix src made every docs-only or
+        # workflow-only merge a new derivation, and so a rebuild on wm and air0.
+        flake = check_ci_contracts.FLAKE_NIX.read_text(encoding="utf-8")
+        for snippet in check_ci_contracts.FLAKE_SRC_FILTER_REQUIRED_SNIPPETS:
+            self.assertIn(snippet, flake)
+
+    def test_deploy_reuse_is_tree_verified_and_same_repo_only(self) -> None:
+        # Installing a build the deploy did not make is safe only if it is of
+        # exactly this tree, from a successful, unexpired run in this
+        # repository. A fork's artifact must never be installable.
+        expected = {
+            ".workflow_run.head_repository_id == $REPO_ID",
+            ".workflow_run.repository_id == $REPO_ID",
+            ".expired == false",
+            ".build-tree",
+            "actions: read",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS))
+        )
+        content = check_ci_contracts.SELF_HOSTED_DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        for snippet in check_ci_contracts.SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS:
+            self.assertIn(snippet, content)
+
+    def test_platform_artifacts_are_named_for_the_source_tree(self) -> None:
+        # The plan job finds a reusable build by artifact name, so every
+        # platform must name its artifact for the full tree it built.
+        self.assertEqual(len(check_ci_contracts.SELF_HOSTED_TREE_NAMED_ARTIFACTS), 3)
+        for workflow, snippet in check_ci_contracts.SELF_HOSTED_TREE_NAMED_ARTIFACTS:
+            self.assertIn(snippet, workflow.read_text(encoding="utf-8"))
+
     def test_agents_hard_rules_include_self_hosted_guards(self) -> None:
         expected = {
             "Hard rule: the self-hosted pipeline must not modify the harrypm build workflows",

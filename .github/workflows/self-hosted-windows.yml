@@ -306,7 +306,7 @@ jobs:
           # Putting Qt's bin on PATH is load-bearing for ctest, not just for
           # finding windeployqt later. Qt is no longer a vcpkg package, so
           # VCPKG_APPLOCAL_DEPS does not drop Qt6Core.dll beside the binaries in
-          # build\bin, and CMakeLists.txt's stage_windows_qt_platform_runtime
+          # $BUILD_DIR\bin, and CMakeLists.txt's stage_windows_qt_platform_runtime
           # stages only plugins and qt.conf there -- not the Qt DLLs. Without
           # this line every test binary fails to start.
           "$qtDir\bin"      | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -321,6 +321,17 @@ jobs:
           fetch-tags: true
           submodules: true
           ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: Record the source tree
+        # Artifacts and the release stamp are named for the tree they were built
+        # from, not the commit. self-hosted-deploy.yml's plan job reuses a
+        # same-repo run's build when the tree being deployed is identical. For a
+        # pull_request run this is the tree of refs/pull/N/merge, which is what
+        # was built and tested.
+        run: |
+          $tree = git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0 -or -not $tree) { throw "Could not read HEAD's tree" }
+          "SOURCE_TREE=$tree" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Refresh tags
         # If the workspace persisted, a tag deleted or moved on the remote can
@@ -453,11 +464,39 @@ jobs:
           "FFMPEG_DIR=$ffmpegDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "FLAC_DIR=$flacDir"     | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Choose the persistent build directory
+        # The build directory is kept outside the workspace, which checkout's
+        # `git clean -ffdx` wipes, so MSBuild builds incrementally across runs
+        # instead of from scratch. It is keyed on everything that would make old
+        # objects unusable or the cache inconsistent: the Qt, vcpkg, CMake and
+        # MSVC toolset versions, plus the workspace path that CMakeCache.txt
+        # records. So a toolchain bump starts a fresh directory instead of mixing
+        # ABIs. Only the current key's directory is kept. This box has one
+        # runner, so no two jobs ever share it at once.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $toolsetFile = Join-Path $env:VS_INSTALL_PATH 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+          if (-not (Test-Path $toolsetFile)) { throw "MSVC toolset version file missing: $toolsetFile" }
+          $msvc = (Get-Content $toolsetFile -Raw).Trim()
+          $keyText = "qt=$env:QT_VERSION;vcpkg=$env:VCPKG_COMMIT;cmake=$env:CMAKE_VERSION;msvc=$msvc;src=$env:GITHUB_WORKSPACE"
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          $hash = ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($keyText)) | ForEach-Object { $_.ToString('x2') }) -join ''
+          $root = Join-Path $env:TOOLS_ROOT 'build'
+          $dir  = Join-Path $root $hash.Substring(0, 16)
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Get-ChildItem -Path $root -Directory | Where-Object { $_.FullName -ne $dir } | ForEach-Object {
+            Write-Host "Removing stale build directory $($_.FullName)"
+            Remove-Item -Recurse -Force $_.FullName
+          }
+          Write-Host "Build directory: $dir ($keyText)"
+          "BUILD_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Configure
         # The hosted job wraps this in lukka/run-cmake@v10; calling CMake
         # directly keeps the arguments visible in the log and drops an action
         # dependency. The preset supplies the vcpkg toolchain and the x64
-        # architecture; the extra args are what differ here:
+        # architecture, and -B overrides its in-source binaryDir with the
+        # persistent directory. The extra args are what differ here:
         #   VCPKG_MANIFEST_MODE=OFF  -- use the classic-mode installs above
         #                               instead of the shared, Qt-bearing manifest
         #   CMAKE_PREFIX_PATH        -- find the prebuilt Qt
@@ -468,7 +507,14 @@ jobs:
         # with "Invalid triplet name ... on expression: $env:VCPKG_TRIPLET".
         run: |
           $ErrorActionPreference = 'Stop'
-          cmake --preset vcpkg `
+          # Clear the previous run's outputs, but keep its objects. Staging copies
+          # every top-level $BUILD_DIR\bin\*.exe, so the old exe of a renamed or
+          # removed target must not linger there to be shipped. This happens
+          # before configure, because configure writes files into bin itself.
+          # MSBuild then relinks every target (cheap) and recompiles only what
+          # changed.
+          Remove-Item -Recurse -Force (Join-Path $env:BUILD_DIR 'bin') -ErrorAction SilentlyContinue
+          cmake --preset vcpkg -B "$env:BUILD_DIR" `
             -DCMAKE_BUILD_TYPE=Release `
             -DUSE_QT_VERSION=6 `
             -DBUILD_PYTHON=false `
@@ -489,7 +535,7 @@ jobs:
           # reach. Before this, the build ran on one core (about 12m47s).
           CL: /MP
         run: |
-          cmake --build --preset vcpkg --config Release --parallel 2
+          cmake --build "$env:BUILD_DIR" --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
       - name: Run ctest
@@ -497,24 +543,24 @@ jobs:
         # registered by CMakeLists.txt; they cannot run on Windows. Every
         # remaining test is a C++ binary linking only Qt::Core + tbc-library.
         run: |
-          ctest --test-dir build -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"
+          ctest --test-dir "$env:BUILD_DIR" -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"
           if ($LASTEXITCODE -ne 0) { throw "ctest failed" }
 
       - name: Stage binaries into the release directory
-        # Top level of build\bin only. The hosted job copies *.exe/*.dll
+        # Top level of $BUILD_DIR\bin only. The hosted job copies *.exe/*.dll
         # recursively, which flattens the staged Qt plugin subdirectories into
         # the release root and then has to undo that; here windeployqt lays the
         # plugins out properly a few steps down, and the vendor payloads are
         # copied as trees below. BUILD_TESTING=ON also puts the ctest binaries
-        # in build\bin, and those must not ship.
+        # in $BUILD_DIR\bin, and those must not ship.
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path release | Out-Null
-          Get-ChildItem -Path build\bin\* -Include *.exe, *.dll -File |
+          Get-ChildItem -Path "$env:BUILD_DIR\bin\*" -Include *.exe, *.dll -File |
             Where-Object { $_.Name -notmatch '^test' } |
             Copy-Item -Destination release\
           if (-not (Test-Path 'release\ld-analyse.exe')) {
-            throw "build\bin did not yield ld-analyse.exe"
+            throw "$env:BUILD_DIR\bin did not yield ld-analyse.exe"
           }
 
       - name: Deploy Qt runtime with windeployqt
@@ -547,7 +593,7 @@ jobs:
         # tbc-audio-align, so the tree has to keep that shape.
         run: |
           $ErrorActionPreference = 'Stop'
-          $vendorSrc = "build\bin\vendor\vhs_decode_auto_audio_align"
+          $vendorSrc = "$env:BUILD_DIR\bin\vendor\vhs_decode_auto_audio_align"
           $vendorDst = "release\vendor\vhs_decode_auto_audio_align"
           if (-not (Test-Path "$vendorSrc\VhsDecodeAutoAudioAlign.exe") -or -not (Test-Path "$vendorSrc\Binah.dll")) {
             throw "AAA vendor payload missing under $vendorSrc"
@@ -564,7 +610,7 @@ jobs:
         # directory."
         run: |
           $ErrorActionPreference = 'Stop'
-          $vendorSrc = "build\bin\vendor\vhs-teletext"
+          $vendorSrc = "$env:BUILD_DIR\bin\vendor\vhs-teletext"
           $vendorDst = "release\vendor\vhs-teletext"
           if (-not (Test-Path "$vendorSrc\teletext\__main__.py")) {
             throw "vhs-teletext vendor payload missing under $vendorSrc"
@@ -726,19 +772,23 @@ jobs:
           }
           Write-Host "All required Windows runtime files present."
 
-      - name: Stamp the build commit
+      - name: Stamp the source tree
         # self-hosted-deploy.yml's win0 job installs straight out of this
-        # workspace rather than round-tripping a few hundred MB through the
-        # artifact store. This stamp is how it proves the tree it found belongs
-        # to the commit being deployed; when it does not match, that job falls
-        # back to the uploaded artifact below.
+        # workspace when it can, rather than round-tripping a few hundred MB
+        # through the artifact store. This stamp is how it proves the release it
+        # found was built from the tree being deployed. It is the tree, not the
+        # commit: a PR run builds refs/pull/N/merge, whose commit differs from
+        # the merge commit on main while its tree is identical. When the stamp
+        # does not match, that job downloads the tree-named artifact below.
         run: |
-          $env:GITHUB_SHA | Out-File -FilePath release\.build-sha -Encoding ascii -NoNewline
+          $env:SOURCE_TREE | Out-File -FilePath release\.build-tree -Encoding ascii -NoNewline
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:
-          name: selfhosted_tbc-tools_windows_x86_64
+          # Named for the full tree hash, so the deploy's plan job can find a
+          # build of exactly this source by name.
+          name: selfhosted_tbc-tools_windows_x86_64-${{ env.SOURCE_TREE }}
           path: release
           if-no-files-found: error
           retention-days: 7
