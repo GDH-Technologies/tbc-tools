@@ -143,6 +143,23 @@
           filter = path: type:
             let
               base = builtins.baseNameOf path;
+              # The first component of the path relative to the flake root
+              # ("docs/Tools/x.md" -> "docs").
+              relPath = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+              top = builtins.head (pkgs.lib.splitString "/" relPath);
+              # Top-level entries the Nix build never reads. CMake reads src/,
+              # scripts/, test-data/ and the root build files. These are CI
+              # configuration, documentation, agent and developer logs, and
+              # notes. Leaving them out means a docs-only or workflow-only merge
+              # is not a new derivation, so wm and air0 install the build they
+              # already have instead of rebuilding it.
+              notBuildInput =
+                builtins.elem top [
+                  ".github" "docs" "development-logs" "dev-notes" "notes"
+                  "AGENTS.md" "BUILD.md" "DEV_NOTES.md" "INSTALL.md" "README.md"
+                  "TELETEXT_CENTERING_FIX.md" "WST_DECODER_INTEGRATION.md" "aqtinstall.log"
+                ]
+                || pkgs.lib.hasPrefix "prompt_readme" top;
               # The two submodule mount points. A git+file source omits a
               # gitlink entirely, but a github: tarball can carry it as an
               # empty directory -- air0's Determinate Nix does. Then the same
@@ -154,7 +171,7 @@
                 && (pkgs.lib.hasSuffix "/src/efm-decoder/libs/ezpwd" path
                     || pkgs.lib.hasSuffix "/src/ld-process-vbi/vendor/cc_decoder" path);
             in
-              !(base == ".git" || base == "build" || base == "result" || isSubmoduleMount);
+              !(base == ".git" || base == "build" || base == "result" || isSubmoduleMount || notBuildInput);
         };
         # The build identity comes from that content, not from the commit.
         #
