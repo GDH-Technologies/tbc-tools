@@ -927,18 +927,23 @@ bool Comb::FrameBuffer::split3DnnTransform(FrameBuffer &nextFrame, qint32 frameI
     static constexpr qint32 InputElementCountPerTile = 2 * TileElementCount;
     static constexpr qint32 PreferredInferenceBatchTiles = 32;
 
+    // FFTW's SIMD codelets use aligned loads, and fftw_execute_dft() requires
+    // arrays with the same alignment as the ones the plan was made for. So the
+    // plans are made on these exact buffers, and the buffers are aligned for
+    // AVX-512. (Planning on fftw_malloc'd scratch and executing on plain arrays
+    // segfaulted in n2fv_16 whenever the TLS arrays landed 8-byte aligned.)
+    // The FFTW planner is not thread-safe, and each decoder thread builds its
+    // own plans on first use, so planning is serialised.
+    alignas(64) static thread_local fftw_complex tileInput[TileElementCount];
+    alignas(64) static thread_local fftw_complex tileSpectrum[TileElementCount];
     static thread_local fftw_plan forwardPlan = nullptr;
     static thread_local fftw_plan inversePlan = nullptr;
     if (!forwardPlan || !inversePlan) {
-        auto *planIn = reinterpret_cast<fftw_complex *>(fftw_malloc(sizeof(fftw_complex) * TileElementCount));
-        auto *planOut = reinterpret_cast<fftw_complex *>(fftw_malloc(sizeof(fftw_complex) * TileElementCount));
-        forwardPlan = fftw_plan_dft_3d(Nt, Ny, Nx, planIn, planOut, FFTW_FORWARD, FFTW_ESTIMATE);
-        inversePlan = fftw_plan_dft_3d(Nt, Ny, Nx, planOut, planIn, FFTW_BACKWARD, FFTW_ESTIMATE);
-        fftw_free(planIn);
-        fftw_free(planOut);
+        static std::mutex planMutex;
+        const std::lock_guard<std::mutex> planLock(planMutex);
+        forwardPlan = fftw_plan_dft_3d(Nt, Ny, Nx, tileInput, tileSpectrum, FFTW_FORWARD, FFTW_ESTIMATE);
+        inversePlan = fftw_plan_dft_3d(Nt, Ny, Nx, tileSpectrum, tileInput, FFTW_BACKWARD, FFTW_ESTIMATE);
     }
-    static thread_local fftw_complex tileInput[TileElementCount];
-    static thread_local fftw_complex tileSpectrum[TileElementCount];
     auto *in = tileInput;
     auto *out = tileSpectrum;
 
