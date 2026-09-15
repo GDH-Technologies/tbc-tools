@@ -615,7 +615,7 @@ class ContractCoverageTests(unittest.TestCase):
             "uses: ./.github/workflows/self-hosted-linux.yml",
             "uses: ./.github/workflows/self-hosted-macos.yml",
             "uses: ./.github/workflows/self-hosted-windows.yml",
-            "dorny/paths-filter@v3",
+            "dorny/paths-filter@v4",
             # A cancelled deploy can interrupt `nix profile upgrade` or the
             # Windows directory swap halfway through.
             "cancel-in-progress: false",

@@ -72,7 +72,10 @@ jobs:
           # dorny/paths-filter diffs against github.event.before on a push, so
           # it needs the history to reach it.
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
+      # v4 declares the node24 runtime. v3 targets the deprecated node20, which
+      # FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 then forces onto node24 with a
+      # deprecation warning. v4.0.0 changed nothing but the runtime.
+      - uses: dorny/paths-filter@v4
         id: filter
         # A dispatch names its platforms explicitly; the diff decides only for a push.
         if: ${{ github.event_name == 'push' }}

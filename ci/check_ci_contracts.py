@@ -331,7 +331,7 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     "uses: ./.github/workflows/self-hosted-linux.yml",
     "uses: ./.github/workflows/self-hosted-macos.yml",
     "uses: ./.github/workflows/self-hosted-windows.yml",
-    "dorny/paths-filter@v3",
+    "dorny/paths-filter@v4",
     # A cancelled deploy can interrupt `nix profile upgrade` or the Windows
     # directory swap halfway through, so back-to-back merges must queue.
     "cancel-in-progress: false",
