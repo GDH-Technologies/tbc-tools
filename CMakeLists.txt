@@ -606,6 +606,21 @@ if(BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut
     )
 
+    # nnTransform3D (the ONNX chroma model). Pinned to the CPU provider so the
+    # result does not depend on the machine having a GPU or the CUDA plugin.
+    add_test(
+        NAME decode-pretbc-ntsc-nntransform3d
+        COMMAND ${SCRIPTS_DIR}/test-decode-pretbc
+            --build ${CMAKE_BINARY_DIR}
+            --decoder nntransform3d
+            --expect-frames 29
+            ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut
+    )
+    set_tests_properties(decode-pretbc-ntsc-nntransform3d PROPERTIES
+        ENVIRONMENT LDDECODE_NNTRANSFORM3D_PROVIDER=cpu
+        DEPENDS decode-pretbc-ntsc-cav
+    )
+
     add_test(
         NAME decode-pretbc-ntsc-clv
         COMMAND ${SCRIPTS_DIR}/test-decode-pretbc

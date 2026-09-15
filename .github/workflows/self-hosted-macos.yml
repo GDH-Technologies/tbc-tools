@@ -163,6 +163,22 @@ jobs:
           echo "$TOOLS/create-dmg/bin" >> "$GITHUB_PATH"
           echo "PYTHON311=$TOOLS/python311/bin/python3.11" >> "$GITHUB_ENV"
 
+      - name: Pin the dev shell against GC
+        # determinate-nixd's automatic GC runs every two hours on air0 and
+        # deletes any store path without a GC root, and `nix develop -c`
+        # creates none. On 2026-09-15 (PR #30) it deleted the devShell's scipy,
+        # matplotlib, tqdm and pyzmq 58 s before ctest's teletext test ran. A
+        # dev profile is a GC root for the shell's whole closure; the
+        # `nix develop` calls in run_local_ci_parity.sh evaluate the same shell.
+        # Old generations are removed first so only this run's shell is pinned.
+        # No from_deploy guard: the next step runs in deploys too.
+        run: |
+          set -euo pipefail
+          ROOTS="$HOME/Library/Caches/tbc-tools-selfhosted/gcroots"
+          mkdir -p "$ROOTS"
+          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link
+          nix develop --profile "$ROOTS/devshell" -c true
+
       - name: Build and test (CMake + Ninja + ctest)
         # The hosted macOS job does not run ctest at all; the fleet should.
         run: bash ci/run_local_ci_parity.sh --build-test-only

@@ -250,9 +250,14 @@ bool ensureCudaDriverLoaded(QString &errorMessage)
             return false;
         };
 
+        // Debian/Ubuntu, then Fedora/RHEL, then NixOS, then the bare soname. A
+        // Nix-built binary's glibc does not read the host's ld.so.cache, so the
+        // bare-soname fallback alone cannot find a driver in /usr/lib64.
         QString libcudaError;
         if (!(tryLoad("/lib/x86_64-linux-gnu/libcuda.so.1", libcudaError, true) ||
               tryLoad("/usr/lib/x86_64-linux-gnu/libcuda.so.1", libcudaError, true) ||
+              tryLoad("/usr/lib64/libcuda.so.1", libcudaError, true) ||
+              tryLoad("/run/opengl-driver/lib/libcuda.so.1", libcudaError, true) ||
               tryLoad("libcuda.so.1", libcudaError, true))) {
             if (libcudaError.isEmpty()) {
                 libcudaError = QStringLiteral("unable to locate libcuda.so.1");
@@ -264,6 +269,8 @@ bool ensureCudaDriverLoaded(QString &errorMessage)
         QString ptxJitError;
         if (!(tryLoad("/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
               tryLoad("/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
+              tryLoad("/usr/lib64/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
+              tryLoad("/run/opengl-driver/lib/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
               tryLoad("libnvidia-ptxjitcompiler.so.1", ptxJitError))) {
             if (ptxJitError.isEmpty()) {
                 ptxJitError = QStringLiteral("unable to locate libnvidia-ptxjitcompiler.so.1");
@@ -927,18 +934,23 @@ bool Comb::FrameBuffer::split3DnnTransform(FrameBuffer &nextFrame, qint32 frameI
     static constexpr qint32 InputElementCountPerTile = 2 * TileElementCount;
     static constexpr qint32 PreferredInferenceBatchTiles = 32;
 
+    // FFTW's SIMD codelets use aligned loads, and fftw_execute_dft() requires
+    // arrays with the same alignment as the ones the plan was made for. So the
+    // plans are made on these exact buffers, and the buffers are aligned for
+    // AVX-512. (Planning on fftw_malloc'd scratch and executing on plain arrays
+    // segfaulted in n2fv_16 whenever the TLS arrays landed 8-byte aligned.)
+    // The FFTW planner is not thread-safe, and each decoder thread builds its
+    // own plans on first use, so planning is serialised.
+    alignas(64) static thread_local fftw_complex tileInput[TileElementCount];
+    alignas(64) static thread_local fftw_complex tileSpectrum[TileElementCount];
     static thread_local fftw_plan forwardPlan = nullptr;
     static thread_local fftw_plan inversePlan = nullptr;
     if (!forwardPlan || !inversePlan) {
-        auto *planIn = reinterpret_cast<fftw_complex *>(fftw_malloc(sizeof(fftw_complex) * TileElementCount));
-        auto *planOut = reinterpret_cast<fftw_complex *>(fftw_malloc(sizeof(fftw_complex) * TileElementCount));
-        forwardPlan = fftw_plan_dft_3d(Nt, Ny, Nx, planIn, planOut, FFTW_FORWARD, FFTW_ESTIMATE);
-        inversePlan = fftw_plan_dft_3d(Nt, Ny, Nx, planOut, planIn, FFTW_BACKWARD, FFTW_ESTIMATE);
-        fftw_free(planIn);
-        fftw_free(planOut);
+        static std::mutex planMutex;
+        const std::lock_guard<std::mutex> planLock(planMutex);
+        forwardPlan = fftw_plan_dft_3d(Nt, Ny, Nx, tileInput, tileSpectrum, FFTW_FORWARD, FFTW_ESTIMATE);
+        inversePlan = fftw_plan_dft_3d(Nt, Ny, Nx, tileSpectrum, tileInput, FFTW_BACKWARD, FFTW_ESTIMATE);
     }
-    static thread_local fftw_complex tileInput[TileElementCount];
-    static thread_local fftw_complex tileSpectrum[TileElementCount];
     auto *in = tileInput;
     auto *out = tileSpectrum;
 
@@ -975,8 +987,12 @@ bool Comb::FrameBuffer::split3DnnTransform(FrameBuffer &nextFrame, qint32 frameI
     static std::atomic_bool onnxReady {false};
     static qint32 onnxBatchTiles = 1;
     static QString onnxProviderName = QStringLiteral("CPU");
-    static std::unique_ptr<Ort::Env> ortEnv;
-    static std::unique_ptr<Ort::Session> ortSession;
+    // Deliberately never destroyed. ONNX Runtime >= 1.21 on macOS aborts in
+    // OrtEnv's destructor when it runs from static teardown at exit ("mutex
+    // lock failed: Invalid argument", microsoft/onnxruntime#24579), after a
+    // decode has already succeeded. The OS reclaims both at process exit.
+    static auto &ortEnv = *new std::unique_ptr<Ort::Env>();
+    static auto &ortSession = *new std::unique_ptr<Ort::Session>();
     std::call_once(onnxInitOnce, []() {
         try {
             ortEnv = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "LdDecodeToolsNnTransform3D");
