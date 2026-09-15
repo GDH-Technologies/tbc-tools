@@ -465,6 +465,35 @@ SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS = (
 )
 
 
+# The build identity lives in one translation unit, and in Nix it is a tree id.
+# As global compile definitions, APP_BRANCH, APP_COMMIT and APP_VERSION changed
+# every file's command line on every commit, so identical source recompiled
+# everything. And the flake's -DAPP_COMMIT came from the commit, so identical
+# trees were different derivations: a merge rebuilt what its PR had already
+# built. Both are pinned, so neither can drift back.
+TOP_CMAKELISTS = ROOT / "CMakeLists.txt"
+LIBRARY_CMAKELISTS = ROOT / "src/library/CMakeLists.txt"
+FLAKE_NIX = ROOT / "flake.nix"
+TOP_CMAKELISTS_FORBIDDEN_SNIPPETS = (
+    "add_compile_definitions(APP_",
+)
+LIBRARY_CMAKELISTS_REQUIRED_SNIPPETS = (
+    "tbc/buildinfo.cpp",
+    "set_property(SOURCE tbc/buildinfo.cpp APPEND PROPERTY COMPILE_DEFINITIONS",
+)
+FLAKE_BUILD_IDENTITY_REQUIRED_SNIPPETS = (
+    'nixCommit = "src-${treeId}";',
+    'branch = "nix";',
+    "src = tbcSrc;",
+)
+# The precise expression forms, so explanatory comments can still name them.
+FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS = (
+    "self ? shortRev",
+    "self ? ref",
+    "self ? dirtyRev",
+)
+
+
 # Keep AGENTS hard rules aligned with CI-enforced guardrails.
 AGENTS_HARD_RULE_REQUIRED_SNIPPETS = (
     "Hard rule: Windows dedicated cache repo pushes must clear checkout-injected github.com auth headers before pull/push",
@@ -712,6 +741,14 @@ def main() -> int:
         check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS:
         check_not_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for snippet in TOP_CMAKELISTS_FORBIDDEN_SNIPPETS:
+        check_not_contains(TOP_CMAKELISTS, snippet, errors)
+    for snippet in LIBRARY_CMAKELISTS_REQUIRED_SNIPPETS:
+        check_contains(LIBRARY_CMAKELISTS, snippet, errors)
+    for snippet in FLAKE_BUILD_IDENTITY_REQUIRED_SNIPPETS:
+        check_contains(FLAKE_NIX, snippet, errors)
+    for snippet in FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS:
+        check_not_contains(FLAKE_NIX, snippet, errors)
     for workflow in (
         SELF_HOSTED_LINUX_WORKFLOW,
         SELF_HOSTED_MACOS_WORKFLOW,
