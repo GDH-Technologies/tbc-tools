@@ -47,8 +47,9 @@ jobs:
   bump:
     name: Propose and tag
     # Self-hosted: GitHub-hosted minutes are billable, and the fleet runner
-    # already has everything this needs (git + python3).
-    runs-on: [self-hosted, Linux, X64, wm]
+    # already has everything this needs (git + python3). wm-light is wm's
+    # second runner for short jobs, so a bump never waits behind a build.
+    runs-on: [self-hosted, Linux, X64, wm-light]
     steps:
       - name: Refuse to tag from anywhere but main
         env:

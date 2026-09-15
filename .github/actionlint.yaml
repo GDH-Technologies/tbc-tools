@@ -4,11 +4,14 @@
 # every `runs-on: [self-hosted, ..., wm]` is a runner-label error.
 #
 # These map to the org runners registered for GDH-Technologies:
-#   wm    -> workflow-master (Fedora, x86_64)
-#   air0  -> air-0 (Apple Silicon macOS)
-#   win0  -> WIN-NODE-0 (Windows x86_64)
+#   wm       -> workflow-master (Fedora, x86_64): builds
+#   wm-light -> workflow-master-light (same box): short jobs -- guardrails,
+#               deploy detect, the Linux install, the version bump
+#   air0     -> air-0 (Apple Silicon macOS)
+#   win0     -> WIN-NODE-0 (Windows x86_64)
 self-hosted-runner:
   labels:
     - wm
+    - wm-light
     - air0
     - win0

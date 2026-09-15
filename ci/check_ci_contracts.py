@@ -397,9 +397,15 @@ HOSTED_WORKFLOW_FORBIDDEN_SNIPPETS = (
 ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     "self-hosted-runner:",
     "- wm",
+    # wm's second runner, for short jobs (guardrails, deploy detect, the Linux
+    # install, the version bump), so they never queue behind a wm build.
+    "- wm-light",
     "- air0",
     "- win0",
 )
+# The light jobs are pinned to wm-light. On the main `wm` runner, a seven-second
+# guardrails run queued for minutes behind the PR's own build.
+WM_LIGHT_RUNS_ON = "runs-on: [self-hosted, Linux, X64, wm-light]"
 
 
 # A version bump must ask for the deploy, not rely on its push to cause one.
@@ -410,7 +416,7 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
 # success. workflow_dispatch is one of the documented exceptions to that rule.
 # The failure mode is silent, so pin the dispatch and the permission it needs.
 GDH_VERSION_BUMP_REQUIRED_SNIPPETS = (
-    "runs-on: [self-hosted, Linux, X64, wm]",
+    WM_LIGHT_RUNS_ON,
     "gh workflow run self-hosted-deploy.yml",
     "actions: write",
 )
@@ -424,7 +430,7 @@ GDH_VERSION_BUMP_REQUIRED_SNIPPETS = (
 # in agreement; and provisioning actionlint stops the parity script falling
 # back to downloading a release tarball on every run.
 SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS = (
-    "runs-on: [self-hosted, Linux, X64, wm]",
+    WM_LIGHT_RUNS_ON,
     "bash ci/run_local_ci_parity.sh --guardrails-only",
     "python3 -m unittest -v ci.tests.test_gdh_version",
     "nix build nixpkgs#actionlint",
@@ -435,6 +441,27 @@ SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS = (
 # eligibility as a required status check.
 SELF_HOSTED_GUARDRAILS_FORBIDDEN_SNIPPETS = (
     "paths:",
+)
+
+
+# The deploy's per-platform gate. The dorny/paths-filter lists must hold no
+# '!' pattern. Under the default predicate-quantifier ('some'), a negation
+# matches every file outside it, which silently turned linux, macos and windows
+# on for every change. The workflow-level push `paths:` uses double quotes and
+# GitHub's own ordered negation, which does work, so it is not caught here.
+SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS = (
+    "- '!",
+)
+# A dispatch selects its platforms from the input: through env, never
+# interpolated into the script, and matched as whole comma-separated names (so
+# "linux" never matches a hypothetical "linux-arm64"). The version bump depends
+# on the default selecting all three. detect and the Linux install run on
+# wm-light.
+SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS = (
+    'default: "linux,macos,windows"',
+    "PLATFORMS: ${{ inputs.platforms }}",
+    'selected() { [[ ",${PLATFORMS// /}," == *",$1,"* ]]; }',
+    WM_LIGHT_RUNS_ON,
 )
 
 
@@ -681,6 +708,10 @@ def main() -> int:
         check_contains(SELF_HOSTED_WINDOWS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS:
+        check_not_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
     for workflow in (
         SELF_HOSTED_LINUX_WORKFLOW,
         SELF_HOSTED_MACOS_WORKFLOW,
