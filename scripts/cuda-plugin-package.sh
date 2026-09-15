@@ -117,6 +117,40 @@ manifest_add_file() {
   printf '    {"name": "%s", "sha256": "%s", "size": %s}' "$name" "$sha" "$size" >> "$manifest"
 }
 
+# patchelf 0.15.x (nixpkgs' `patchelf`) predates DT_RELR support and silently
+# corrupts binaries that use it; require 0.18+ (nixpkgs' `patchelfUnstable`,
+# which `nix develop` provides).
+require_patchelf() {
+  command -v patchelf >/dev/null 2>&1 || die "patchelf not found (run under nix develop, which provides patchelfUnstable)"
+  local v; v="$(patchelf --version | awk '{print $2}')"
+  [ "$(printf '%s\n0.18\n' "$v" | sort -V | head -1)" = "0.18" ] \
+    || die "patchelf $v is too old; need >= 0.18 (nixpkgs patchelfUnstable)"
+}
+
+# The cuDNN 8.9 libs staged from the Nix store carry unversioned DT_NEEDED
+# entries (libcublas.so, libcublasLt.so, libcudnn_cnn_infer.so) and no RUNPATH.
+# On an installed host those resolve to whatever the loader finds first: a host
+# CUDA toolkit of another major version, or stray /nix/store copies. Pin each to
+# the soname this package ships, and point every lib's RUNPATH at its own dir.
+# $1=package dir, rest=staged .so names
+make_self_contained() {
+  local dir="$1"; shift
+  require_patchelf
+  patchelf --replace-needed libcublas.so libcublas.so.11 \
+           --replace-needed libcublasLt.so libcublasLt.so.11 \
+           "$dir/libcudnn_ops_infer.so.8"
+  patchelf --replace-needed libcudnn_cnn_infer.so libcudnn_cnn_infer.so.8 "$dir/libcudnn.so.8"
+  local so
+  for so in "$@"; do
+    patchelf --set-rpath '$ORIGIN' "$dir/$so"
+    if patchelf --print-needed "$dir/$so" | grep -Eq '^lib(cu|nv)[A-Za-z_]*\.so$'; then
+      die "$so still has an unversioned CUDA DT_NEEDED entry: $(patchelf --print-needed "$dir/$so" | tr '\n' ' ')"
+    fi
+    [ "$(patchelf --print-rpath "$dir/$so")" = '$ORIGIN' ] || die "$so RUNPATH is not \$ORIGIN"
+  done
+  say "  pinned cuDNN DT_NEEDED sonames and set RUNPATH=\$ORIGIN on ${#} libs"
+}
+
 # Build the Linux x86_64 plugin package.
 # $1=out dir, $2=version, $3=deps-dir (Nix store .so staging from .#cuda-plugin-linux-deps)
 build_linux() {
@@ -134,13 +168,18 @@ build_linux() {
   printf '{\n  "plugin_id": "tbc-tools.cuda-runtime",\n  "plugin_version": "%s",\n  "platform": "linux",\n  "arch": "x86_64",\n  "ort_version": "%s",\n  "cuda_version": "11.8",\n  "cudnn_version": "8.9",\n' "$version" "$ORT_VERSION" >> "$manifest"
 
   local first=1
-  # Copy the CUDA runtime + cuDNN .so files from the Nix-store deps dir.
+  # Copy the CUDA runtime + cuDNN .so files from the Nix-store deps dir, make
+  # them self-contained, then hash the patched files for the manifest.
   local so_files=("libcudart.so.11.0" "libcublas.so.11" "libcublasLt.so.11" "libcufft.so.10"
                   "libcurand.so.10"
                   "libcudnn.so.8" "libcudnn_cnn_infer.so.8" "libcudnn_ops_infer.so.8")
   for so in "${so_files[@]}"; do
     [ -f "$deps_dir/$so" ] || die "missing .so in deps-dir: $so"
-    cp -aL "$deps_dir/$so" "$pkgdir/$so"
+    cp -L "$deps_dir/$so" "$pkgdir/$so"
+    chmod u+w "$pkgdir/$so"
+  done
+  make_self_contained "$pkgdir" "${so_files[@]}"
+  for so in "${so_files[@]}"; do
     local sha size; sha="$(sha256_of "$pkgdir/$so")"; size="$(stat -c '%s' "$pkgdir/$so")"
     manifest_add_file "$manifest" "$so" "$sha" "$size" "$first"; first=0
     say "  staged $so ($size bytes)"

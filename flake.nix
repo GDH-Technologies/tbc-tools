@@ -306,6 +306,9 @@
             cmake
             ninja
             pkg-config
+            # scripts/cuda-plugin-package.sh patches the staged cuDNN libs.
+            # Not `patchelf`: nixpkgs' 0.15.x corrupts DT_RELR binaries.
+            pkgsUnstable.patchelfUnstable
             qt6.qtbase
             qt6.qtsvg
             fftw
