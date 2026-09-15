@@ -250,9 +250,14 @@ bool ensureCudaDriverLoaded(QString &errorMessage)
             return false;
         };
 
+        // Debian/Ubuntu, then Fedora/RHEL, then NixOS, then the bare soname. A
+        // Nix-built binary's glibc does not read the host's ld.so.cache, so the
+        // bare-soname fallback alone cannot find a driver in /usr/lib64.
         QString libcudaError;
         if (!(tryLoad("/lib/x86_64-linux-gnu/libcuda.so.1", libcudaError, true) ||
               tryLoad("/usr/lib/x86_64-linux-gnu/libcuda.so.1", libcudaError, true) ||
+              tryLoad("/usr/lib64/libcuda.so.1", libcudaError, true) ||
+              tryLoad("/run/opengl-driver/lib/libcuda.so.1", libcudaError, true) ||
               tryLoad("libcuda.so.1", libcudaError, true))) {
             if (libcudaError.isEmpty()) {
                 libcudaError = QStringLiteral("unable to locate libcuda.so.1");
@@ -264,6 +269,8 @@ bool ensureCudaDriverLoaded(QString &errorMessage)
         QString ptxJitError;
         if (!(tryLoad("/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
               tryLoad("/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
+              tryLoad("/usr/lib64/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
+              tryLoad("/run/opengl-driver/lib/libnvidia-ptxjitcompiler.so.1", ptxJitError) ||
               tryLoad("libnvidia-ptxjitcompiler.so.1", ptxJitError))) {
             if (ptxJitError.isEmpty()) {
                 ptxJitError = QStringLiteral("unable to locate libnvidia-ptxjitcompiler.so.1");
