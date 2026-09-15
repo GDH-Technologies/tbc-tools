@@ -3628,3 +3628,129 @@ Commit:
   - `c54501d7`
   - `15 files changed, 664 insertions(+), 382 deletions(-)`
   - includes `Co-Authored-By: Warp <agent@warp.dev>`
+
+## 2026-09-13 — Revert OutputWriter chroma active-area gate (hybrid/export regression)
+
+Context:
+- Commit `bbf977b` ("Fix SECAM full-frame chroma leakage...") added a `chromaInActiveArea`
+  gate in `OutputWriter::convertLine` that forced U/V to neutral (0 / C_ZERO) for every
+  pixel outside the active picture on ALL non-trimmed output. That suppressed chroma for
+  full-frame AND hybrid viewing, not just full-frame export -> hard regression: "chroma of
+  the whole signal frame is not being viewed/rendered; broke hybrid and export modes".
+- Root cause re-check: the export green/rainbow bands were the MKV muxer `DisplayUnit=3`
+  anamorphic-SAR bug, already fixed losslessly in commit `0715160` (mkvmerge remux with
+  pixel-unit display dims + nanosecond timestamp scale). The decoder-side chroma
+  suppression was treating a downstream muxer problem at the wrong layer.
+
+Change:
+- `src/ld-chroma-decoder/outputwriter.cpp`: removed the `chromaInActiveArea` lambda and the
+  per-pixel `chromaActive` gating in the RGB48 and YUV444P16 branches. Restored the stable
+  `convertLine` so chroma flows through unconditionally (gated only by the existing
+  `useLeveledRangeAtX` Y-leveling window for hybrid mode). Verified byte-identical to
+  parent `e668bec` via `diff -u`.
+- `src/ld-chroma-decoder/secamdecoder.cpp`: the `fillChannel` V-interval re-zero (rows <
+  `firstActiveFieldLine`) was NOT reverted. It is a no-op in full-frame mode
+  (`firstActiveFieldLine` is widened to 0 there) and only neutralises V-interval colour-drag
+  in trimmed SECAM output. Pending user visual confirmation on whether to keep or revert.
+
+Commands run:
+- `git -C /home/harry/tbc-tools --no-pager show e668bec:src/ld-chroma-decoder/outputwriter.cpp > /tmp/ow_parent.cpp`
+- `git -C /home/harry/tbc-tools --no-pager show bbf977b -- src/ld-chroma-decoder/secamdecoder.cpp > /tmp/secam_diff.patch`
+- `git -C /home/harry/tbc-tools --no-pager show bbf977b -- src/ld-chroma-decoder/outputwriter.cpp > /tmp/ow_diff.patch`
+- `diff -u <(git show e668bec:...outputwriter.cpp) .../outputwriter.cpp` -> IDENTICAL_TO_PARENT
+- `cd /home/harry/tbc-tools && nix develop -c ninja -C build` -> [5/5] Linking bin/ld-analyse (OK)
+
+Build:
+- Binaries rebuilt: build/bin/ld-chroma-decoder, build/bin/ld-analyse (mtime 2026-09-13 00:07:26).
+- Build must run inside `nix develop` (plain-shell ninja fails: `QtCore/qtversionchecks.h: No such file or directory`).
+
+Status:
+- NOT committed (awaiting user visual verification). No restore-point zip yet (per rule: only
+  after user confirms fixed/working).
+- Pending: user to visually verify hybrid + export mode chroma in ld-analyse, and exports.
+
+## 2026-09-13 00:27 — Restore applyFullFrameDecodeBounds (full-frame chroma extent)
+
+User re-check: "hybrid is working again for PAL but full-frame is broken no chroma export".
+File under test: /media/harry/20TB HDD1/USA/Tape 2/PP_VHS_PAL_SP_02_2026.09.11_14.05.30_video_rf_12-bit.tbc
+(split VHS RF: luma .tbc + _chroma.tbc, PAL SP, 4fSC 1135x313 fields, 4166 fields).
+
+Hard-data investigation (no assumptions):
+- JSON has NO firstActiveFieldLine/firstActiveFrameLine fields; vertical bounds are library
+  defaults. activeVideoStart=185, activeVideoEnd=1107.
+- ld-chroma-decoder --full-frame on the LUMA .tbc: Cb/Cr neutral across ALL rows (max dev 3),
+  frame 500 has picture (Y max 47105) -> luma .tbc is demodulated luma only, no chroma
+  subcarrier. Same with -p yuv trimmed (928x576): Cb dev 0.52. So ld-chroma-decoder cannot
+  produce chroma from the luma .tbc in any mode.
+- Existing export mkv (made 00:12, after OutputWriter revert but BEFORE decoderpool revert):
+  1136x626 FFV1 yuv422p10le. Region scan: ACTIVE PICTURE Cb dev 127 max 328 (has chroma);
+  top V-interval rows0-43 Cb dev 0.0; bottom rows620-625 dev 0.0; left/right margins dev 0.0.
+  => chroma only inside active picture, full-frame extent neutral. This is the "no chroma
+  export" symptom (full-frame extent monochrome).
+- Root cause: bbf977b deleted applyFullFrameDecodeBounds from decoderpool.cpp. The export
+  pipeline runs a CHROMA pass (wrapper_ld_chroma_decoder.py: full_frame -> "--full-frame") on
+  the _chroma.tbc with a PAL decoder; without applyFullFrameDecodeBounds the chroma decoder
+  kept active-picture-only bounds -> demodulated chroma only in the active region.
+- OutputWriter revert alone was necessary but not sufficient (decoder wrote no chroma outside
+  active, so reverted OutputWriter had nothing to pass through there).
+
+Fix (byte-identical to parent e668bec, verified via diff -u):
+- src/ld-chroma-decoder/decoderpool.cpp: restored applyFullFrameDecodeBounds + the
+  `if (outputConfig.fullFrameDecode) applyFullFrameDecodeBounds(videoParameters);` call.
+- src/ld-chroma-decoder/secamdecoder.cpp: reverted the fillChannel V-interval re-zero
+  (no-op in full-frame anyway; removed to match parent per "logic same as PAL/SECAM").
+- src/ld-chroma-decoder/outputwriter.cpp: already reverted (prior step).
+- exportdialog.cpp SECAM/MESECAM 625-line export support from bbf977b: KEPT (export-side,
+  unrelated to the decoder regression).
+
+Verification (hard data, chroma pass: ld-chroma-decoder --full-frame -f transform2d -p yuv
+on _chroma.tbc with luma json, frame 500):
+- top V-interval rows0-43: Cb dev 164.1 max 11068 (was 0.6) -> chroma present
+- active rows44-619: Cb dev 573.6
+- bottom rows620-624: Cb dev 1413.1
+- left margin cols0-15 / right margin cols1119-1134: dev 0.0 (by design: applyFullFrameDecodeBounds
+  sets activeVideoStart=16, activeVideoEnd=fieldWidth-16)
+=> full-frame chroma extent restored to pre-bbf977b behaviour.
+
+Rebuild: `nix develop -c ninja -C build` -> [10/10]. Binaries current:
+ build/lib/libtbc-chroma.a 00:27:34, build/bin/ld-analyse 00:27:35, build/bin/ld-chroma-decoder 00:27:38.
+
+Status: NOT committed; awaiting user visual verification in ld-analyse (hybrid + full-frame)
+and a re-run export. ctest + ci/check_ci_contracts.py still to run. No restore-point zip yet.
+
+## 2026-09-13 13:51 — SECAM/MESECAM test snippets + SECAM flicker measurement
+
+User: "/home/harry/Desktop/SECAM - entire test folder here; make some snippets for test data".
+Also reported: "SECAM has chroma flickering but otherwise is good" (PAL & NTSC confirmed good).
+
+Sources in /home/harry/Desktop/SECAM:
+- etienne_Quadruplex_colorbars-20260824_SECAM_MISRC2.5_16bit_40mhz.tbc (SECAM, combined, 330 fields/165 frames, 1135x313, QUADRUPLEX)
+- tape275_03_tfb-secam-testcard_1987-09-18_mesecam.tbc + _chroma.tbc (MESECAM, split, 992 fields/496 frames, VHS)
+
+Layout verified empirically (not assumed): both .tbc are tightly packed fields
+(file_size == fields * 1135 * 313 * 2 exactly). sourcevideo.cpp:150 confirms fields read by
+packed offset fieldNumber*fieldByteLength; JSON fileLoc is legacy/unused for reads.
+
+Snippets created in /home/harry/Desktop/SECAM/snippets/ (50 frames each):
+- secam_etienne_colorbars_50f.tbc + .tbc.json  (71.1 MB; from field 20 / frame 11)
+- mesecam_tape275_testcard_50f.tbc + _chroma.tbc + .tbc.json  (71.1 + 71.1 MB; from field 100 / frame 51)
+Snippet JSON: seqNo renumbered 1..N, fileLoc=i*FIELD_BYTES, numberOfSequentialFields=N,
+isFirstField + secamFirstLineIsRed + vitsMetrics + dropOuts preserved. Start on even field
+(frame boundary).
+
+Validation (hard data):
+- SECAM snippet -f secam --full-frame frame0: Cb dev 19022 max 32448, Cr dev 15971 (colorbars, full scale).
+  A/B vs original frame 15/16: BYTE-IDENTICAL stats (19022.1 / 11458.6 / abs-diff 21704.1) => snippet faithful.
+- MESECAM luma (mono) frame5: decodes OK. MESECAM chroma (-f secam on _chroma.tbc) needs --input-json
+  pointing at the luma json (the _chroma.tbc has no json sibling); with that, Cb dev 16936, Cr dev 6194.
+
+SECAM flicker measurement (static colorbars, -f secam --full-frame, frames 15-18 of etienne):
+- Y mean stable: 32180, 32201, 32218, 32197 (constant, as static bars should be)
+- Cb sign-mean erratic: +14678, -619, +14671, +7047
+- Cr sign-mean erratic: +14076, +346, +14245, +7311
+=> FLICKER IS CHROMA-SPECIFIC, not luma. Pattern is erratic (not a clean 2-frame parity flip),
+   pointing at unstable per-field parity detection (drOnEven majority vote over rest carriers,
+   secamdecoder.cpp:302-309). Pre-existing in parent e668bec (secamdecoder.cpp now byte-identical
+   to parent), NOT caused by the bbf977b reverts. Needs a separate fix (pending user go-ahead).
+
+Status: snippets delivered and validated. SECAM flicker fix not yet started (await direction).

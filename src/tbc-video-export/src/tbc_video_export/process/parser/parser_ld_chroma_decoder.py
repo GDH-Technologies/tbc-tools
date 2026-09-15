@@ -32,8 +32,15 @@ class ParserLDChromaDecoder(Parser):
 
         with suppress(ValueError):
             if reg := re.match("|".join(patterns), line):
+                # warnings are surfaced as messages (they are not failures);
+                # critical messages count as errors
+                if line.startswith("Warning:"):
+                    state.message = self._create_log_line(line)
+                elif line.startswith("Critical:"):
+                    self.error_count += 1
+                    state.message = self._create_log_line(line)
                 # matches but no groups, an error
-                if all(v is None for v in reg.groups()):
+                elif all(v is None for v in reg.groups()):
                     self.error_count += 1
                     state.message = self._create_log_line(line)
                 elif (start_frame := reg.group(1)) is not None and (

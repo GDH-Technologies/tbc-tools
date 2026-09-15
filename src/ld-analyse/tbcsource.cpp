@@ -1967,6 +1967,11 @@ void TbcSource::configureChromaDecoder()
         // Its output covers the full line width regardless, so the full-frame
         // and hybrid preview modes still work.
         secamConfiguration.chromaGain = palConfiguration.chromaGain;
+        secamConfiguration.chromaPhase = palConfiguration.chromaPhase;
+        // Original first active field line (videoParameters here is the
+        // un-widened metadata). The decoder zeroes V-interval chroma below
+        // this in full-frame/hybrid mode.
+        secamConfiguration.nominalFirstActiveFieldLine = videoParameters.firstActiveFieldLine;
         secamDecoder.updateConfiguration(videoParameters, secamConfiguration);
         // The pre-demod SECAM decoder does no FM demodulation; it only needs
         // the line geometry plus the chroma gain and the live first-line
@@ -2024,6 +2029,7 @@ void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParamete
     if (videoParameters.chromaPhase != -1.0) {
         palConfiguration.chromaPhase = videoParameters.chromaPhase;
         ntscConfiguration.chromaPhase = videoParameters.chromaPhase;
+        secamConfiguration.chromaPhase = videoParameters.chromaPhase;
     }
 
     if (videoParameters.lumaNR >= 0.0) {
@@ -2094,6 +2100,15 @@ void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParamete
                 ntscConfiguration.dimensions = 0;
                 ntscConfiguration.nnTransform3D = false;
             }
+        }
+    } else {
+        // No chromaDecoder string in metadata: pick the default for the system.
+        // SECAM/MESECAM carry an FM chroma block that the PAL QAM decoder cannot
+        // read (it emits neutral chroma, i.e. mono output), so default to the
+        // SECAM FM decoder. Matches tbc-video-export's video_system_secam default
+        // and ld-chroma-decoder's CLI auto-select.
+        if (videoParameters.system == SECAM || videoParameters.system == MESECAM) {
+            palConfiguration.chromaFilter = PalColour::secam;
         }
     }
 }

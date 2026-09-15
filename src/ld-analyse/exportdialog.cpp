@@ -64,12 +64,19 @@ void setTableItem(QTableWidget *table, int row, int column, const QString &text)
     item->setText(text);
 }
 
+// 625-line/25fps systems: PAL, SECAM and MESECAM share line geometry,
+// frame rate, output sizing and full-frame FFV1 slice constraints.
+bool is625LineSystem(int system)
+{
+    return system == PAL || system == SECAM || system == MESECAM;
+}
+
 QString bt601NonSquareSarForSystem(int system)
 {
-    // 625-line (PAL): 702->4:3 maps to 128:117
+    // 625-line (PAL/SECAM/MESECAM): 702->4:3 maps to 128:117
     // 525-line (NTSC/PAL-M): 702->4:3 maps to 12:13
-    return (system == PAL) ? QStringLiteral("128/117")
-                           : QStringLiteral("12/13");
+    return is625LineSystem(system) ? QStringLiteral("128/117")
+                                   : QStringLiteral("12/13");
 }
 
 QString sd480SarForMode(const QString &outputResolutionMode)
@@ -423,6 +430,8 @@ ActiveAreaFrameDefaults activeAreaDefaultsForSystem(int system)
 {
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return {22, 308, 44, 620};
     case PAL_M:
     case NTSC:
@@ -485,6 +494,8 @@ double frameRateForSystem(int system)
 {
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return 25.0;
     case PAL_M:
     case NTSC:
@@ -497,6 +508,8 @@ int nominalFrameRateForSystem(int system)
 {
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return 25;
     case PAL_M:
     case NTSC:
@@ -632,7 +645,9 @@ const QList<int> &supportedPalMFullFrameFfv1SlicesValues()
 
 const QList<int> &supportedFullFrameFfv1SlicesValuesForSystem(int system)
 {
-    if (system == PAL) {
+    // 625-line systems share the odd 625-line full-frame height, which
+    // rules out slice counts like 4 (625 % 4 != 0).
+    if (is625LineSystem(system)) {
         return supportedPalFullFrameFfv1SlicesValues();
     }
     if (system == PAL_M) {
@@ -675,12 +690,12 @@ QString effectiveOutputResolutionMode(const QComboBox *outputResolutionModeCombo
 
 int activeAreaOutputHeightForSystem(int system)
 {
-    return system == PAL ? 576 : 486;
+    return is625LineSystem(system) ? 576 : 486;
 }
 
 int activeVbiOutputHeightForSystem(int system)
 {
-    return system == PAL ? 608 : 512;
+    return is625LineSystem(system) ? 608 : 512;
 }
 
 struct VbiFrameLineRange {
@@ -692,6 +707,8 @@ VbiFrameLineRange vbiFrameLinesForSystem(int system)
 {
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return {12, 620};
     case PAL_M:
         return {17, 525};
@@ -735,6 +752,8 @@ int fullFrameWidthForSystemFallback(int system)
 {
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return 1135;
     case PAL_M:
         return 909;
@@ -746,7 +765,7 @@ int fullFrameWidthForSystemFallback(int system)
 
 int fullFrameHeightForSystemFallback(int system)
 {
-    return system == PAL ? 625 : 525;
+    return is625LineSystem(system) ? 625 : 525;
 }
 
 
@@ -786,7 +805,7 @@ OutputResamplePlan outputResamplePlanForModes(int system,
         plan.sampleAspectRatio = bt601NonSquareSarForSystem(system);
     } else if ((outputResolutionMode == QStringLiteral("ntsc_480_43")
                 || outputResolutionMode == QStringLiteral("ntsc_480_169"))
-               && system != PAL) {
+               && !is625LineSystem(system)) {
         plan.width = 720;
         plan.height = 480;
         plan.sampleAspectRatio = sd480SarForMode(outputResolutionMode);
@@ -840,7 +859,7 @@ bool isFfv1SlicesCompatibleWithResolutionMode(int slices, int system, const QStr
 int recommendedFfv1SlicesForResolutionMode(int system, const QString &resolutionMode)
 {
     if (isFullFrame4fscResolutionMode(resolutionMode)) {
-        if (system == PAL) {
+        if (is625LineSystem(system)) {
             return 20;
         }
         if (system == PAL_M) {
@@ -4730,6 +4749,10 @@ QString ExportDialog::videoSystemArg(int system) const
         return QStringLiteral("pal");
     case PAL_M:
         return QStringLiteral("pal-m");
+    case SECAM:
+        return QStringLiteral("secam");
+    case MESECAM:
+        return QStringLiteral("mesecam");
     case NTSC:
     default:
         return QStringLiteral("ntsc");
@@ -5339,6 +5362,7 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
     const TbcMetaData::VideoParameters &videoParameters = tbcSource->getVideoParameters();
     const bool isPalSystem = (videoParameters.system == PAL || videoParameters.system == PAL_M);
     const bool isNtscSystem = (videoParameters.system == NTSC);
+    const bool isSplitSource = tbcSource && tbcSource->getSourceMode() != TbcSource::ONE_SOURCE;
     if (videoParameters.isValid) {
         args << QStringLiteral("--video-system") << videoSystemArg(videoParameters.system);
     }
@@ -5346,18 +5370,22 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
     QString normalizedDecoderName;
     if (!videoParameters.chromaDecoder.isEmpty()) {
         normalizedDecoderName = videoParameters.chromaDecoder.trimmed().toLower();
-        if (isValidChromaDecoderForSystem(normalizedDecoderName, videoParameters.system)) {
+        // MONO cannot decode the chroma pass of a split (Y+C) source: the
+        // merged export needs U/V planes, and MONO emits GRAY16, which fails
+        // the merge and leaves an empty output file. Omit the flag so
+        // tbc-video-export picks its per-system default chroma decoder.
+        if ((!isSplitSource || normalizedDecoderName != QStringLiteral("mono"))
+            && isValidChromaDecoderForSystem(normalizedDecoderName, videoParameters.system)) {
             args << QStringLiteral("--chroma-decoder") << normalizedDecoderName;
         }
     }
-    const bool monoDecoderSelected = normalizedDecoderName == QStringLiteral("mono");
+    const bool monoDecoderSelected = normalizedDecoderName == QStringLiteral("mono") && !isSplitSource;
     if (!monoDecoderSelected && videoParameters.chromaGain >= 0.0) {
         args << QStringLiteral("--chroma-gain") << QString::number(videoParameters.chromaGain, 'f', 6);
     }
     if (!monoDecoderSelected && videoParameters.chromaPhase != -1.0) {
         args << QStringLiteral("--chroma-phase") << QString::number(videoParameters.chromaPhase, 'f', 3);
     }
-    const bool isSplitSource = tbcSource && tbcSource->getSourceMode() != TbcSource::ONE_SOURCE;
     if (!isSplitSource && videoParameters.lumaNR >= 0.0) {
         args << QStringLiteral("--luma-nr") << QString::number(videoParameters.lumaNR, 'f', 3);
     }

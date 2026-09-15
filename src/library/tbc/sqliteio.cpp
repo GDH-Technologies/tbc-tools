@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS field_record (
         CHECK (pad IN (0,1)),
     sync_conf INTEGER,
 
-    -- SECAM line identity (schema version 7), see TbcMetaData::Field::secamFirstLineIsRed
+    -- SECAM line identity (schema version 7) - see TbcMetaData::Field::secamFirstLineIsRed
     secam_first_line_is_red INTEGER
         CHECK (secam_first_line_is_red IN (0,1)),
 

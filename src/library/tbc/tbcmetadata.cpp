@@ -511,7 +511,13 @@ void TbcMetaData::VideoParameters::read(JsonReader &reader)
         blanking16bIre = black16bIre;
     }
     if (secamFamilySystem && chromaDecoder.trimmed().isEmpty()) {
-        chromaDecoder = QStringLiteral("mono");
+        // SECAM/MESECAM carry an FM chroma block that the PAL/NTSC QAM
+        // decoders cannot read -- mono would render them black-and-white.
+        // Default to the SECAM FM decoder so a source whose metadata has no
+        // chromaDecoder string decodes in colour. Matches tbc-video-export's
+        // video_system_secam default. Users who want mono can set it
+        // explicitly in metadata or via --decoder mono.
+        chromaDecoder = QStringLiteral("secam");
     }
 
     isValid = true;
