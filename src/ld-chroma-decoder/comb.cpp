@@ -987,8 +987,12 @@ bool Comb::FrameBuffer::split3DnnTransform(FrameBuffer &nextFrame, qint32 frameI
     static std::atomic_bool onnxReady {false};
     static qint32 onnxBatchTiles = 1;
     static QString onnxProviderName = QStringLiteral("CPU");
-    static std::unique_ptr<Ort::Env> ortEnv;
-    static std::unique_ptr<Ort::Session> ortSession;
+    // Deliberately never destroyed. ONNX Runtime >= 1.21 on macOS aborts in
+    // OrtEnv's destructor when it runs from static teardown at exit ("mutex
+    // lock failed: Invalid argument", microsoft/onnxruntime#24579), after a
+    // decode has already succeeded. The OS reclaims both at process exit.
+    static auto &ortEnv = *new std::unique_ptr<Ort::Env>();
+    static auto &ortSession = *new std::unique_ptr<Ort::Session>();
     std::call_once(onnxInitOnce, []() {
         try {
             ortEnv = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "LdDecodeToolsNnTransform3D");
