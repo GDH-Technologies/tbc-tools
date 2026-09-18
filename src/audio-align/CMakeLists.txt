@@ -2,6 +2,7 @@ add_executable(tbc-audio-align
     audioalignmentdialog.cpp
     audioalignmentdialog.ui
     audioalignmentutil.cpp
+    headlessalign.cpp
     main.cpp
 )
 
@@ -86,4 +87,25 @@ if(BUILD_TESTING)
         NAME aaa-detect-aaa-envbin
         COMMAND $<TARGET_FILE:test-audio-align-runtime> --detect-aaa-envbin
     )
+
+    # Headless CLI contract: exit 2 on usage errors, 0 on --help, no display.
+    add_test(
+        NAME aaa-headless-usage
+        COMMAND $<TARGET_FILE:test-audio-align-runtime>
+            --headless-cli $<TARGET_FILE:tbc-audio-align>
+    )
+    set_tests_properties(aaa-headless-usage PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=")
+
+    # Headless end-to-end alignment on the fixture; skips (77) without the
+    # AAA runtime (mono/ffmpeg), exactly like aaa-runtime.
+    add_test(
+        NAME aaa-headless-runtime
+        COMMAND $<TARGET_FILE:test-audio-align-runtime>
+            --headless-cli $<TARGET_FILE:tbc-audio-align>
+            --json "${CMAKE_SOURCE_DIR}/src/tbc-video-export/tests/files/pal_svideo.tbc.json"
+            --input-audio "${CMAKE_SOURCE_DIR}/src/tbc-video-export/tests/files/audio_48_16.wav"
+            --output-audio "${CMAKE_BINARY_DIR}/test-artifacts/aaa-headless/aligned.flac"
+            --rf-video-sample-rate-hz 40000000
+    )
+    set_tests_properties(aaa-headless-runtime PROPERTIES SKIP_RETURN_CODE 77)
 endif()

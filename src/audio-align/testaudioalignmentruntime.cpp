@@ -102,7 +102,107 @@ int main(int argc, char *argv[])
                        "required. Exits 0 on success, 1 on failure."));
     parser.addOption(detectAaaEnvBinOption);
 
+    QCommandLineOption headlessCliOption(
+        QStringList() << QStringLiteral("headless-cli"),
+        QStringLiteral("Headless CLI test: drive the given tbc-audio-align binary with --headless. "
+                       "Without --json it checks the usage contract (exit 2 on missing/bad "
+                       "options, exit 0 on --help). With --json/--input-audio/--output-audio it "
+                       "runs a real alignment and asserts exit 0, a non-empty output and a result "
+                       "JSON with ok=true; skips (77) when the AAA runtime is unavailable (exit 3)."),
+        QStringLiteral("path"));
+    parser.addOption(headlessCliOption);
+
     parser.process(app);
+
+    if (parser.isSet(headlessCliOption)) {
+        const QString cli = parser.value(headlessCliOption);
+        if (!QFileInfo(cli).isExecutable()) {
+            return failTest(QStringLiteral("tbc-audio-align not executable: %1").arg(cli));
+        }
+        const auto runCli = [&cli](const QStringList &arguments, QString *output) -> int {
+            QProcess process;
+            process.setProcessChannelMode(QProcess::MergedChannels);
+            process.start(cli, QStringList() << QStringLiteral("--headless") << arguments);
+            if (!process.waitForStarted(10000) || !process.waitForFinished(600000)) {
+                return -1;
+            }
+            if (output) {
+                *output = QString::fromLocal8Bit(process.readAll());
+            }
+            return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
+        };
+
+        if (!parser.isSet(jsonOption)) {
+            QString output;
+            const struct {
+                QStringList arguments;
+                int expected;
+                const char *label;
+            } cases[] = {
+                {QStringList(), 2, "no options"},
+                {QStringList() << QStringLiteral("--json") << QStringLiteral("x.tbc.json")
+                               << QStringLiteral("--input-file") << QStringLiteral("a.wav")
+                               << QStringLiteral("--output-file") << QStringLiteral("b.flac"),
+                 2, "missing --rf-video-sample-rate-hz"},
+                {QStringList() << QStringLiteral("--json") << QStringLiteral("x.tbc.json")
+                               << QStringLiteral("--input-file") << QStringLiteral("a.wav")
+                               << QStringLiteral("--output-file") << QStringLiteral("b.flac")
+                               << QStringLiteral("--rf-video-sample-rate-hz") << QStringLiteral("abc"),
+                 2, "non-numeric rate"},
+                {QStringList() << QStringLiteral("--no-such-option"), 2, "unknown option"},
+                {QStringList() << QStringLiteral("--help"), 0, "--help"},
+            };
+            for (const auto &testCase : cases) {
+                const int code = runCli(testCase.arguments, &output);
+                if (code != testCase.expected) {
+                    return failTest(QStringLiteral("%1: expected exit %2, got %3\n%4")
+                                        .arg(QString::fromLatin1(testCase.label))
+                                        .arg(testCase.expected)
+                                        .arg(code)
+                                        .arg(output));
+                }
+            }
+            QTextStream(stdout) << "Headless usage contract ok." << Qt::endl;
+            return 0;
+        }
+
+        const QString outputPath = parser.value(outputAudioOption);
+        QDir().mkpath(QFileInfo(outputPath).absolutePath());
+        QFile::remove(outputPath);
+        const QString resultPath = outputPath + QStringLiteral(".result.json");
+        QFile::remove(resultPath);
+        QString output;
+        const int code = runCli(QStringList()
+                                    << QStringLiteral("--json") << parser.value(jsonOption)
+                                    << QStringLiteral("--input-file") << parser.value(inputAudioOption)
+                                    << QStringLiteral("--output-file") << outputPath
+                                    << QStringLiteral("--rf-video-sample-rate-hz")
+                                    << parser.value(rfVideoSampleRateOption)
+                                    << QStringLiteral("--overwrite")
+                                    << QStringLiteral("--result-json") << resultPath,
+                                &output);
+        if (code == 3) {
+            return skipTest(QStringLiteral("AAA runtime unavailable:\n%1").arg(output));
+        }
+        if (code != 0) {
+            return failTest(QStringLiteral("headless alignment exited %1:\n%2").arg(code).arg(output));
+        }
+        if (QFileInfo(outputPath).size() <= 0) {
+            return failTest(QStringLiteral("headless alignment wrote no output: %1").arg(outputPath));
+        }
+        QFile resultFile(resultPath);
+        if (!resultFile.open(QIODevice::ReadOnly)) {
+            return failTest(QStringLiteral("result JSON missing: %1").arg(resultPath));
+        }
+        const QJsonObject result = QJsonDocument::fromJson(resultFile.readAll()).object();
+        if (!result.value(QStringLiteral("ok")).toBool()
+            || result.value(QStringLiteral("exitCode")).toInt(-1) != 0) {
+            return failTest(QStringLiteral("result JSON does not report success: %1")
+                                .arg(QString::fromUtf8(QJsonDocument(result).toJson())));
+        }
+        QTextStream(stdout) << "Headless alignment ok: " << outputPath << Qt::endl;
+        return 0;
+    }
 
     if (parser.isSet(detectAaaOption)) {
         // Detection (must succeed): the resolver must find the AAA executable

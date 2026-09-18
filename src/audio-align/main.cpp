@@ -17,6 +17,7 @@
 #include <QStyleFactory>
 
 #include "audioalignmentdialog.h"
+#include "headlessalign.h"
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
 #include "tbc/buildinfo.h"
@@ -25,6 +26,12 @@ int main(int argc, char *argv[])
 {
     // Set 'binary mode' for stdin and stdout on Windows
     setBinaryMode();
+
+    // Headless automation path: decided before any QApplication exists so it
+    // never needs a display.
+    if (HeadlessAlign::requested(argc, argv)) {
+        return HeadlessAlign::run(argc, argv);
+    }
 
     // Install the local debug message handler
     setDebug(true);
@@ -81,6 +88,8 @@ int main(int argc, char *argv[])
                                              QCoreApplication::translate("main", "Write aligned track details for ld-analyse export auto-load"),
                                              QCoreApplication::translate("main", "filename"));
     parser.addOption(exportTrackFileOption);
+    parser.addOption(QCommandLineOption("headless",
+                                        QCoreApplication::translate("main", "Align without the dialog (see --headless --help)")));
     parser.addOption(QCommandLineOption("force-dark-theme",
                                         QCoreApplication::translate("main", "Force dark theme regardless of system settings (default; no-op)")));
     parser.addOption(QCommandLineOption("light-theme",
