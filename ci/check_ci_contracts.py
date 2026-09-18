@@ -18,6 +18,7 @@ SELF_HOSTED_LINUX_WORKFLOW = ROOT / ".github/workflows/self-hosted-linux.yml"
 SELF_HOSTED_MACOS_WORKFLOW = ROOT / ".github/workflows/self-hosted-macos.yml"
 SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml"
 SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
+FLEET_DEPLOY_HOST_SCRIPT = ROOT / "ci/deploy_fleet_host.sh"
 ACTIONLINT_CONFIG = ROOT / ".github/actionlint.yaml"
 GDH_VERSION_BUMP_WORKFLOW = ROOT / ".github/workflows/gdh-version-bump.yml"
 SELF_HOSTED_GUARDRAILS_WORKFLOW = ROOT / ".github/workflows/self-hosted-guardrails.yml"
@@ -378,6 +379,39 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # The Windows swap must be atomic and must refuse a locked install dir.
     "Programs\\tbc-tools",
     "Refusing to deploy: tbc-tools is running from",
+)
+# The rest of the Linux fleet (wf1, lws, cs0, cs1) is deployed from wm. Every
+# target is probed first so an offline box is skipped instead of queued for a
+# day; wm's installed closure is pushed with `nix copy`; one host's failure must
+# not cancel the others; and a verdict job decides the run's colour. Skipped
+# hosts never turn it red, a failed attempted one always does.
+SELF_HOSTED_DEPLOY_FLEET_REQUIRED_SNIPPETS = (
+    "-o BatchMode=yes -o ConnectTimeout=5",
+    "fleet_hosts: ${{ steps.probe.outputs.fleet_hosts }}",
+    "store_path: ${{ steps.smoke.outputs.store_path }}",
+    'nix copy --no-check-sigs --to "ssh-ng://$HOST" "$STORE"',
+    "< ci/deploy_fleet_host.sh",
+    "fail-fast: false",
+    "host: ${{ fromJSON(needs.detect.outputs.fleet_hosts) }}",
+    "name: Deploy verdict",
+    "if: ${{ always() }}",
+    'select(.value.result == "failure" or .value.result == "cancelled")',
+    # The host script is build-relevant: a change to it must redeploy Linux.
+    "- 'ci/deploy_fleet_host.sh'",
+)
+# The host side. --max-jobs 0 makes a store miss fail instead of compiling on a
+# capture server, and success is reported only for wm's exact store path at the
+# deployed commit, with the headless aligner (which the toolkit's post-decode
+# pipeline drives) present.
+FLEET_DEPLOY_HOST_REQUIRED_SNIPPETS = (
+    "set -euo pipefail",
+    "nix profile upgrade --refresh --max-jobs 0 tbc-tools",
+    'nix profile "$ADD" --refresh --max-jobs 0 "$FLAKE_URL"',
+    'FLAKE_URL="github:GDH-Technologies/tbc-tools"',
+    'grep -q "Locked flake URL:.*$SHA"',
+    'if [ "$INSTALLED" != "$STORE" ]; then',
+    '"$STORE/bin/tbc-audio-align" --headless',
+    "Refusing to deploy on $HOST:",
 )
 # The self-hosted boxes have persistent DISKS but must never be assumed to have
 # persistent WORKSPACES, and wm/air0 carry shared multi-project Nix stores.
@@ -746,6 +780,7 @@ def main() -> int:
         ACTIONLINT_CONFIG,
         GDH_VERSION_BUMP_WORKFLOW,
         SELF_HOSTED_GUARDRAILS_WORKFLOW,
+        FLEET_DEPLOY_HOST_SCRIPT,
     ):
         if not required_file.exists():
             errors.append(f"missing required file: {required_file}")
@@ -785,6 +820,10 @@ def main() -> int:
         check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS:
         check_not_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_DEPLOY_FLEET_REQUIRED_SNIPPETS:
+        check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
+    for snippet in FLEET_DEPLOY_HOST_REQUIRED_SNIPPETS:
+        check_contains(FLEET_DEPLOY_HOST_SCRIPT, snippet, errors)
     for snippet in TOP_CMAKELISTS_FORBIDDEN_SNIPPETS:
         check_not_contains(TOP_CMAKELISTS, snippet, errors)
     for snippet in LIBRARY_CMAKELISTS_REQUIRED_SNIPPETS:

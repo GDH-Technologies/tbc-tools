@@ -643,6 +643,34 @@ class ContractCoverageTests(unittest.TestCase):
             expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS))
         )
 
+    def test_self_hosted_deploy_contract_covers_the_linux_fleet(self) -> None:
+        # wf1, lws, cs0 and cs1 are deployed from wm: probed first so an
+        # offline box is skipped rather than queued for a day, fed wm's closure
+        # with nix copy, isolated from each other's failures, and judged by a
+        # verdict job that forgives skips but never a failed attempt.
+        expected = {
+            "-o BatchMode=yes -o ConnectTimeout=5",
+            'nix copy --no-check-sigs --to "ssh-ng://$HOST" "$STORE"',
+            "fail-fast: false",
+            "name: Deploy verdict",
+            'select(.value.result == "failure" or .value.result == "cancelled")',
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.SELF_HOSTED_DEPLOY_FLEET_REQUIRED_SNIPPETS))
+        )
+        # The host must never compile (cs0/cs1 are capture servers) and must
+        # report success only for wm's exact store path.
+        self.assertTrue(
+            {
+                "nix profile upgrade --refresh --max-jobs 0 tbc-tools",
+                'if [ "$INSTALLED" != "$STORE" ]; then',
+            }.issubset(set(check_ci_contracts.FLEET_DEPLOY_HOST_REQUIRED_SNIPPETS))
+        )
+        self.assertTrue(
+            check_ci_contracts.FLEET_DEPLOY_HOST_SCRIPT.exists(),
+            "ci/deploy_fleet_host.sh is a required contract file",
+        )
+
     def test_guardrails_contract_keeps_it_unfiltered_and_complete(self) -> None:
         # The fork's always-on check. A paths filter would both create contract
         # blind spots (check_ci_contracts.py validates source files too) and
