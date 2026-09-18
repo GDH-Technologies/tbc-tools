@@ -1,10 +1,19 @@
 name: "Self-hosted build and deploy"
 
 # Fork-exclusive. On a merge to main that touches build-relevant paths, install
-# on each of the three GDH boxes. If a successful run in this repository (in
+# on each of the three build boxes (wm, air0, win0) and on the rest of the Linux
+# fleet (wf1, lws, cs0, cs1). If a successful run in this repository (in
 # practice, the PR's own checks) already built and tested this exact source
 # tree, that build is reused. Otherwise the box rebuilds first. This is the ONLY
 # entry point in the repository that installs anything.
+#
+# The Linux fleet never compiles: wm pushes the closure it just installed with
+# `nix copy`, and each host's profile operation is then a store hit (see
+# ci/deploy_fleet_host.sh). Every host is probed over SSH first, and an offline
+# host is skipped rather than left queued for a day. The verdict job is red on
+# any failure of a host that was attempted, and requires wm's Linux install to
+# have succeeded whenever Linux was part of the plan; skipped hosts alone never
+# turn a run red.
 #
 # The three platform workflows also trigger on `push: branches: [main]`, but
 # each of their jobs stands down unless called with from_deploy=true, so a
@@ -77,6 +86,9 @@ jobs:
       windows_run: ${{ steps.plan.outputs.windows_run }}
       # The git tree of the commit being deployed.
       tree: ${{ steps.plan.outputs.tree }}
+      # JSON array of the Linux fleet hosts that answered the probe and have
+      # Nix: deploy-fleet's matrix.
+      fleet_hosts: ${{ steps.probe.outputs.fleet_hosts }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -112,6 +124,7 @@ jobs:
               - '.gdh-version'
               - 'ci/run_local_ci_parity.sh'
               - 'ci/verify_linux_bundle.sh'
+              - 'ci/deploy_fleet_host.sh'
               - '.github/workflows/self-hosted-linux.yml'
             macos:
               - *common
@@ -130,10 +143,63 @@ jobs:
               # file. A version bump arrives as a dispatch, which selects its
               # platforms explicitly.
               - '.github/workflows/self-hosted-windows.yml'
+      - name: Probe hosts
+        id: probe
+        # An offline runner leaves its job queued for up to 24 hours, and a
+        # host that is down cannot take a nix copy. So every target is probed
+        # from wm first, over the per-host keys in ~/.ssh/config, and only what
+        # answers is deployed. BatchMode fails instead of prompting; the outer
+        # timeout covers a host that accepts TCP but then stalls.
+        #
+        # Linux fleet hosts: `command -v nix` exits 0 (online), 255 (ssh itself
+        # failed: offline) or anything else (reachable but no Nix: skipped).
+        # air0 and win0 are only checked for reachability; their jobs run on
+        # their own runners.
+        env:
+          FLEET: wf1 lws cs0 cs1
+        run: |
+          set -uo pipefail
+          SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5)
+          fleet_json="[]"
+          rows=""
+          for host in $FLEET; do
+            timeout 20 "${SSH[@]}" "$host" 'command -v nix' >/dev/null 2>&1
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              status="online"
+              fleet_json="$(jq -c --arg h "$host" '. + [$h]' <<<"$fleet_json")"
+            elif [ "$rc" -eq 255 ] || [ "$rc" -eq 124 ]; then
+              status="offline"
+            else
+              status="no-nix"
+            fi
+            rows+="| $host | $status |"$'\n'
+          done
+          for host in air0 win0; do
+            if timeout 20 "${SSH[@]}" "$host" exit >/dev/null 2>&1; then
+              status="online"
+            else
+              status="offline"
+            fi
+            rows+="| $host | $status |"$'\n'
+            echo "${host}_online=$([ "$status" = online ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          done
+          echo "fleet_hosts=$fleet_json" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Host probe"
+            echo ""
+            echo "| host | status |"
+            echo "| --- | --- |"
+            printf '%s' "$rows"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Plan each platform
         id: plan
         # Untrusted-by-default inputs go through env, never into the script text.
         env:
+          MACOS_ONLINE: ${{ steps.probe.outputs.air0_online }}
+          WINDOWS_ONLINE: ${{ steps.probe.outputs.win0_online }}
           EVENT: ${{ github.event_name }}
           PLATFORMS: ${{ inputs.platforms }}
           F_LINUX: ${{ steps.filter.outputs.linux }}
@@ -190,6 +256,14 @@ jobs:
           read -r LINUX LINUX_RUN <<<"$(plan linux "$F_LINUX" selfhosted_tbc-tools_linux_x86_64)"
           read -r MACOS MACOS_RUN <<<"$(plan macos "$F_MACOS" selfhosted_tbc-tools_macos_arm64)"
           read -r WINDOWS WINDOWS_RUN <<<"$(plan windows "$F_WINDOWS" selfhosted_tbc-tools_windows_x86_64)"
+          # An offline box is skipped rather than queued. Its build job would
+          # wait on its runner just as its deploy job would.
+          if [ "$MACOS" != "skip" ] && [ "$MACOS_ONLINE" != "true" ]; then
+            MACOS=skip; MACOS_RUN="offline"
+          fi
+          if [ "$WINDOWS" != "skip" ] && [ "$WINDOWS_ONLINE" != "true" ]; then
+            WINDOWS=skip; WINDOWS_RUN="-"; WINDOWS_NOTE="offline"
+          fi
           [ "$WINDOWS_RUN" = "-" ] && WINDOWS_RUN=""
           {
             echo "tree=$TREE"
@@ -205,9 +279,9 @@ jobs:
             echo ""
             echo "| platform | plan | build reused from run |"
             echo "| --- | --- | --- |"
-            echo "| linux (wm)     | ${LINUX} | ${LINUX_RUN} |"
+            echo "| linux (wm, then the fleet) | ${LINUX} | ${LINUX_RUN} |"
             echo "| macos (air0)   | ${MACOS} | ${MACOS_RUN} |"
-            echo "| windows (win0) | ${WINDOWS} | ${WINDOWS_RUN:--} |"
+            echo "| windows (win0) | ${WINDOWS} | ${WINDOWS_RUN:-${WINDOWS_NOTE:--}} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The build jobs run only when the plan found no reusable build of this tree.
@@ -253,6 +327,10 @@ jobs:
     # right here. It runs on wm's light runner so the install never queues
     # behind a PR build on the main `wm` runner.
     runs-on: [self-hosted, Linux, X64, wm-light]
+    outputs:
+      # The tbc-tools store path wm just installed and smoke-tested. deploy-fleet
+      # copies exactly this closure to the rest of the Linux fleet.
+      store_path: ${{ steps.smoke.outputs.store_path }}
     env:
       # wm installs from a local flake rather than from GitHub, so the deploy
       # is: fast-forward the developer's real checkout, then upgrade. The
@@ -355,6 +433,7 @@ jobs:
           fi
 
       - name: Smoke test and report
+        id: smoke
         # Resolve the binaries from the store path that was just installed,
         # not from PATH. The PATH form passed on wm and failed on air0 for a
         # deploy that had entirely succeeded: `command -v ld-analyse` returned
@@ -424,6 +503,7 @@ jobs:
             echo "::warning::tbc-tools is installed but not on PATH for this runner;" \
                  "add the nix profile's bin directory to the service environment."
           fi
+          echo "store_path=$STORE" >> "$GITHUB_OUTPUT"
           {
             echo "## wm deploy"
             echo ""
@@ -671,3 +751,86 @@ jobs:
 
           "## win0 deploy`n`nInstalled ``$env:GITHUB_SHA`` to ``$dest`` (source: $env:SRC_KIND)." |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+  deploy-fleet:
+    name: Deploy to ${{ matrix.host }}
+    needs: [detect, deploy-linux]
+    # Only after wm's own install succeeded: its store path is what gets copied.
+    # Hosts the probe found offline or without Nix are simply not in the matrix.
+    if: ${{ !cancelled() && needs.deploy-linux.result == 'success' && needs.detect.outputs.fleet_hosts != '[]' && needs.detect.outputs.fleet_hosts != '' }}
+    # Driven from wm over SSH, not from each host's own runner: wm holds the
+    # closure and the per-host keys, and the capture servers' runners stay out
+    # of reach of this public repository.
+    runs-on: [self-hosted, Linux, X64, wm-light]
+    timeout-minutes: 60
+    strategy:
+      # One host's failure must not cancel the others; the verdict job reports
+      # every failure.
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(needs.detect.outputs.fleet_hosts) }}
+    env:
+      HOST: ${{ matrix.host }}
+      STORE: ${{ needs.deploy-linux.outputs.store_path }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Copy wm's build to the host
+        # Needs rdodge in the host's nix.conf trusted-users: wm's paths are
+        # unsigned. Only what the host lacks is transferred.
+        run: |
+          set -euo pipefail
+          case "$STORE" in
+            /nix/store/*-tbc-tools-*) ;;
+            *) echo "deploy-linux reported no usable store path: '$STORE'" >&2; exit 1 ;;
+          esac
+          nix copy --no-check-sigs --to "ssh-ng://$HOST" "$STORE"
+
+      - name: Install on the host and smoke test
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
+            bash -s -- "$GITHUB_SHA" "$STORE" < ci/deploy_fleet_host.sh
+          {
+            echo "## $HOST deploy"
+            echo ""
+            echo "Installed \`$GITHUB_SHA\` (\`$STORE\`), copied from wm."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verdict:
+    name: Deploy verdict
+    needs: [detect, build-linux, build-macos, build-windows, deploy-linux, deploy-macos, deploy-windows, deploy-fleet]
+    # Always runs, so a skipped or failed dependency still yields a verdict.
+    if: ${{ always() }}
+    runs-on: [self-hosted, Linux, X64, wm-light]
+    steps:
+      - name: Decide
+        # Red on any failure or cancellation of a job that ran. Skipped jobs
+        # (a platform not in the plan, an offline box) never turn a run red.
+        # When Linux was part of the plan, wm's install must have succeeded,
+        # so at least one Linux host always holds the new build on green.
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          LINUX_PLAN: ${{ needs.detect.outputs.linux }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<<"$NEEDS" > "$RUNNER_TEMP/results.md"
+          {
+            echo "## Deploy verdict"
+            echo ""
+            echo "| job | result |"
+            echo "| --- | --- |"
+            cat "$RUNNER_TEMP/results.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bad="$(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<<"$NEEDS")"
+          if [ -n "$bad" ]; then
+            echo "::error::Deploy failed: $(echo "$bad" | tr '\n' ' ')"
+            exit 1
+          fi
+          if [ "$LINUX_PLAN" != "skip" ] && [ "$(jq -r '."deploy-linux".result' <<<"$NEEDS")" != "success" ]; then
+            echo "::error::Linux was planned ($LINUX_PLAN) but no Linux host was deployed."
+            exit 1
+          fi
+          echo "Deploy green."
