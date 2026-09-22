@@ -146,6 +146,7 @@ private:
         bool resizeFrameWithWindow;
         bool showExportBoundary;
         qint32 exportBoundaryThickness;
+        bool exportBoundaryThicknessUserSet;
     };
 
     // Update checker options

@@ -79,6 +79,7 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("resizeFrameWithWindow", settings.viewOptions.resizeFrameWithWindow);
     configuration->setValue("showExportBoundary", settings.viewOptions.showExportBoundary);
     configuration->setValue("exportBoundaryThickness", settings.viewOptions.exportBoundaryThickness);
+    configuration->setValue("exportBoundaryThicknessUserSet", settings.viewOptions.exportBoundaryThicknessUserSet);
     configuration->endGroup();
 
     // Update checker
@@ -154,9 +155,17 @@ void Configuration::readConfiguration(void)
     settings.viewOptions.exportProfileConfigPath = configuration->value("exportProfileConfigPath", QString()).toString();
     settings.viewOptions.resizeFrameWithWindow = configuration->value("resizeFrameWithWindow", true).toBool();
     settings.viewOptions.showExportBoundary = configuration->value("showExportBoundary", true).toBool();
-    settings.viewOptions.exportBoundaryThickness = configuration->value("exportBoundaryThickness", 4).toInt();
+    settings.viewOptions.exportBoundaryThickness = configuration->value("exportBoundaryThickness", 2).toInt();
+    settings.viewOptions.exportBoundaryThicknessUserSet = configuration->value("exportBoundaryThicknessUserSet", false).toBool();
     if (settings.viewOptions.exportBoundaryThickness < 1) settings.viewOptions.exportBoundaryThickness = 1;
     if (settings.viewOptions.exportBoundaryThickness > 8) settings.viewOptions.exportBoundaryThickness = 8;
+    // Migrate configurations written before the stock default changed from 4 px to
+    // 2 px: a value of 4 with no user-set flag is the old stock default, so adopt
+    // the new stock value. Manually chosen values are left untouched.
+    if (!settings.viewOptions.exportBoundaryThicknessUserSet
+        && settings.viewOptions.exportBoundaryThickness == 4) {
+        settings.viewOptions.exportBoundaryThickness = 2;
+    }
     configuration->endGroup();
 
     // Update checker (additive keys - older config files fall back to defaults)
@@ -222,7 +231,8 @@ void Configuration::setDefault(void)
     settings.viewOptions.exportProfileConfigPath = QString();
     settings.viewOptions.resizeFrameWithWindow = true;
     settings.viewOptions.showExportBoundary = true;
-    settings.viewOptions.exportBoundaryThickness = 4;
+    settings.viewOptions.exportBoundaryThickness = 2;
+    settings.viewOptions.exportBoundaryThicknessUserSet = false;
 
     // Update checker
     settings.updateCheck.enabled = true;
@@ -469,6 +479,9 @@ bool Configuration::getShowExportBoundary(void)
 void Configuration::setExportBoundaryThickness(qint32 exportBoundaryThickness)
 {
     settings.viewOptions.exportBoundaryThickness = exportBoundaryThickness;
+    // Only reached from the video parameters dialogue on a manual change, so mark
+    // the value as user-set so future stock-default changes never override it
+    settings.viewOptions.exportBoundaryThicknessUserSet = true;
 }
 
 qint32 Configuration::getExportBoundaryThickness(void)
