@@ -1,9 +1,9 @@
-## ld-dropout-correct
+## tbc-dropout-correct
 This application uses the drop-out information in the JSON metadata file to perform dropout correction on the input TBC file and produces a new output file.  The current version of the corrector uses framing in order to provide inter-field correction.  Note that inter-field correction may not function correctly for NTSC pull-down sources.
 
 Syntax:
 
-ld-dropout-correct \<options> \<input TBC file name> \<output TBC file name>
+tbc-dropout-correct \<options> \<input TBC file name> \<output TBC file name>
 
 ```
 Options:

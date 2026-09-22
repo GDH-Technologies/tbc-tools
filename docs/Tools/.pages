@@ -6,7 +6,7 @@ nav:
   - tbc-chroma-encoder.md
   - ld-disc-stacker.md
   - ld-discmap.md
-  - ld-dropout-correct.md
+  - tbc-dropout-correct.md
   - tbc-export-metadata.md
   - ld-lds-converter.md
   - ld-process-efm.md

@@ -198,11 +198,11 @@ class TestWrappersProcessVBI:
 
 
 class TestWrappersDropoutCorrect:
-    """Tests for ld-dropout-correct wrapper."""
+    """Tests for tbc-dropout-correct wrapper."""
 
     test_cases = [
         WrapperTestCase(
-            id="default ld-dropout-correct luma opts",
+            id="default tbc-dropout-correct luma opts",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=[],
             expected_opts=[
@@ -215,7 +215,7 @@ class TestWrappersDropoutCorrect:
             tbc_type=TBCType.LUMA,
         ),
         WrapperTestCase(
-            id="default ld-dropout-correct chroma opts",
+            id="default tbc-dropout-correct chroma opts",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=[],
             expected_opts=[

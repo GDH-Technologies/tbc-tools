@@ -2,13 +2,13 @@
 
     correctorpool.h
 
-    ld-dropout-correct - Dropout correction for ld-decode
+    tbc-dropout-correct - Dropout correction for ld-decode
     Copyright (C) 2018-2020 Simon Inns
     Copyright (C) 2019-2020 Adam Sampson
 
     This file is part of tbc-tools.
 
-    ld-dropout-correct is free software: you can redistribute it and/or
+    tbc-dropout-correct is free software: you can redistribute it and/or
     modify it under the terms of the GNU General Public License as
     published by the Free Software Foundation, either version 3 of the
     License, or (at your option) any later version.

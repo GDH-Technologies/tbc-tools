@@ -45,7 +45,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ### Tools
 
 - **ld-discmap**          - TBC and VBI alignment and correction tool
-- **ld-dropout-correct**  - Advanced dropout detection and correction
+- **tbc-dropout-correct**  - Advanced dropout detection and correction
 - **tbc-chroma-decoder**   - Color decoder for TBC LaserDisc video to RGB/YUV conversion
 - **ld-disc-stacker**     - Combine multiple TBC captures for improved quality
 

@@ -57,7 +57,7 @@ rm -rf build
 ### Key Tools Categories
 - **Core Processing**: `tbc-process-vbi` (VBI decode + selectable processing options; also performs VITS metrics via `--vits` in-process)
 - **EFM Decoder Suite**: `efm-decoder-f2`, `efm-decoder-d24`, `efm-decoder-audio`, `efm-decoder-data`, `efm-stacker-f2`
-- **Analysis**: `tbc-analyse` (GUI), `ld-discmap`, `ld-dropout-correct`
+- **Analysis**: `tbc-analyse` (GUI), `ld-discmap`, `tbc-dropout-correct`
 - **Export/Conversion**: `tbc-chroma-decoder`, `tbc-export-metadata`, `ld-lds-converter`, `tbc-metadata-converter`
 
 ### Build System

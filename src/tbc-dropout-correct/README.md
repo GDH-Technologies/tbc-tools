@@ -1,16 +1,16 @@
-# ld-dropout-correct
+# tbc-dropout-correct
 
 **Dropout Detection and Concealment for TBC Files**
 
 ## Overview
 
-ld-dropout-correct detects and conceals dropouts (signal loss) in Time Base Corrected (TBC) LaserDisc video files. It uses multiple strategies to replace missing or corrupted video data with reconstructed information from adjacent fields or lines.
+tbc-dropout-correct detects and conceals dropouts (signal loss) in Time Base Corrected (TBC) LaserDisc video files. It uses multiple strategies to replace missing or corrupted video data with reconstructed information from adjacent fields or lines.
 
 ## Usage
 
 ### Basic Syntax
 ```bash
-ld-dropout-correct [options] inputs output
+tbc-dropout-correct [options] inputs output
 ```
 
 ## Options
@@ -50,21 +50,21 @@ ld-dropout-correct [options] inputs output
 
 ```bash
 # Basic Dropout Correction
-ld-dropout-correct input.tbc output.tbc
+tbc-dropout-correct input.tbc output.tbc
 
 # Using Additional Sources
-ld-dropout-correct input.tbc output.tbc \
+tbc-dropout-correct input.tbc output.tbc \
     --source capture2.tbc \
     --source capture3.tbc
 
 # Intra-Field Correction
-ld-dropout-correct --intra input.tbc output.tbc
+tbc-dropout-correct --intra input.tbc output.tbc
 
 # Reverse Processing
-ld-dropout-correct --reverse input.tbc output.tbc
+tbc-dropout-correct --reverse input.tbc output.tbc
 
 # Overcorrection Mode
-ld-dropout-correct --overcorrect input.tbc output.tbc
+tbc-dropout-correct --overcorrect input.tbc output.tbc
 ```
 
 ## Input/Output

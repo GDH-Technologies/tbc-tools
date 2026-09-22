@@ -555,13 +555,13 @@ def run_efm_decoder(args):
                 'samples; expected at least', args.expect_efm_samples)
 
 def run_ld_dropout_correct(args):
-    """Run ld-dropout-correct."""
+    """Run tbc-dropout-correct."""
 
     clean(args, ['.doc.tbc', '.doc.tbc.db'])
 
     cmd = [resolve_tool(
-        os.path.join(build_dir, 'bin', 'ld-dropout-correct'),
-        os.path.join(build_dir, 'src', 'ld-dropout-correct', 'ld-dropout-correct'),
+        os.path.join(build_dir, 'bin', 'tbc-dropout-correct'),
+        os.path.join(build_dir, 'src', 'tbc-dropout-correct', 'tbc-dropout-correct'),
     )]
     cmd += ['--input-metadata', runtime_metadata_db(args)]
     cmd += ['--output-metadata', args.output + '.doc.tbc.db']
@@ -673,7 +673,7 @@ def main():
     required_tools = [
         os.path.join(build_dir, 'bin', 'tbc-process-vbi'),
         os.path.join(build_dir, 'bin', 'tbc-export-metadata'),
-        os.path.join(build_dir, 'bin', 'ld-dropout-correct'),
+        os.path.join(build_dir, 'bin', 'tbc-dropout-correct'),
         os.path.join(build_dir, 'bin', 'tbc-chroma-decoder'),
     ]
     if not args.no_efm:

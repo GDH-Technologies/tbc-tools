@@ -1114,7 +1114,7 @@ bool parseInfoProgressLine(const QString &line, ExportDialog::ExportProcessStat 
         QRegularExpression::CaseInsensitiveOption);
     match = dropoutWorkloadPattern.match(line);
     if (match.hasMatch()) {
-        stat->process = QStringLiteral("ld-dropout-correct");
+        stat->process = QStringLiteral("tbc-dropout-correct");
         stat->tbcType = QStringLiteral("—");
         stat->trackedName = QStringLiteral("frame");
         stat->current = QStringLiteral("0");
@@ -1138,7 +1138,7 @@ bool parseCompletionSummaryLine(const QString &line, ExportDialog::ExportProcess
         QRegularExpression::CaseInsensitiveOption);
     QRegularExpressionMatch match = dropoutCompletePattern.match(line);
     if (match.hasMatch()) {
-        stat->process = QStringLiteral("ld-dropout-correct");
+        stat->process = QStringLiteral("tbc-dropout-correct");
         stat->tbcType = QStringLiteral("—");
         stat->trackedName = QStringLiteral("frame");
         stat->current = match.captured(1).trimmed();
@@ -4056,18 +4056,18 @@ void ExportDialog::initializeProcessStats()
     };
     const auto seedFeed = [&seedStat, mode](const QString &feedTag) {
         if (mode == TbcSource::BOTH_SOURCES) {
-            seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("LUMA"), feedTag);
-            seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
+            seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("LUMA"), feedTag);
+            seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
             seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
             seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("CHROMA"), feedTag);
         } else if (mode == TbcSource::LUMA_SOURCE) {
-            seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("LUMA"), feedTag);
+            seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("LUMA"), feedTag);
             seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
         } else if (mode == TbcSource::CHROMA_SOURCE) {
-            seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
+            seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
             seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("CHROMA"), feedTag);
         } else {
-            seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("COMBINED"), feedTag);
+            seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("COMBINED"), feedTag);
             seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("COMBINED"), feedTag);
         }
         seedStat(QStringLiteral("ffmpeg"), QStringLiteral("—"), feedTag);

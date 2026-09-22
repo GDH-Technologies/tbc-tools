@@ -103,13 +103,13 @@ A sample command is as follows:
 
 Note: Dropout correction is generally not required when stacking discs unless the --passthrough option was used.  Dropouts will be corrected by the Stacker by substituting data from another source which does not have the dropout.  If, for some reason, you do not wish to use the disc stacker, then multi-source dropout correction is an alternative which only corrects missing pixels (rather than stacking them for greater accuracy).
 
-The ld-dropout-correct tool supports both single source concealment and multi-source correction.  The advantage of multi-source correction is that dropouts can be corrected by copying in good data from another source so, unlike single disc concealment, the data is actually corrected (rather than being substituted using a similar field line).
+The tbc-dropout-correct tool supports both single source concealment and multi-source correction.  The advantage of multi-source correction is that dropouts can be corrected by copying in good data from another source so, unlike single disc concealment, the data is actually corrected (rather than being substituted using a similar field line).
 
 Note that single-source concealment is still possible even with multiple sources.  In the unlikely event that a good replacement can't be found from the other sources (such as errors detected by the luma clip detection mentioned above) the corrector will use the normal inter-field concealment within the same source.
 
 The dropout correction tool corrects only one source at a time; so the first source provided is the 'master' and the following sources are used to correct it (the last specified file is the output .tbc filename).  For example, to dropout correct the ds1 source, you would use the following command:
 
-    ld-dropout-correct dragonslair_ds1_mapped.tbc dragonslair_ds2_mapped.tbc \
+    tbc-dropout-correct dragonslair_ds1_mapped.tbc dragonslair_ds2_mapped.tbc \
     dragonslair_ds3_mapped.tbc dragonslair_ds4_mapped.tbc \
     dragonslair_ds1_mapped_doc.tbc
 

@@ -183,7 +183,7 @@ Typical position in processing pipeline:
 # Standard LaserDisc workflow
 ld-decode input.ldf capture.tbc
 tbc-process-vbi capture.tbc              # Run before dropout correction
-ld-dropout-correct capture.tbc corrected.tbc
+tbc-dropout-correct capture.tbc corrected.tbc
 tbc-chroma-decoder corrected.tbc output.rgb
 ```
 

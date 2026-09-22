@@ -2,13 +2,13 @@
 
     main.cpp
 
-    ld-dropout-correct - Dropout correction for ld-decode
+    tbc-dropout-correct - Dropout correction for ld-decode
     Copyright (C) 2018-2025 Simon Inns
     Copyright (C) 2019-2020 Adam Sampson
 
     This file is part of tbc-tools.
 
-    ld-dropout-correct is free software: you can redistribute it and/or
+    tbc-dropout-correct is free software: you can redistribute it and/or
     modify it under the terms of the GNU General Public License as
     published by the Free Software Foundation, either version 3 of the
     License, or (at your option) any later version.
@@ -91,14 +91,14 @@ int main(int argc, char *argv[])
     QCoreApplication a(argc, argv);
 
     // Set application name and version
-    QCoreApplication::setApplicationName("ld-dropout-correct");
+    QCoreApplication::setApplicationName("tbc-dropout-correct");
     QCoreApplication::setApplicationVersion(QString("tbc-tools - Branch: %1 / Commit: %2").arg(APP_BRANCH, APP_COMMIT));
     QCoreApplication::setOrganizationDomain("domesday86.com");
 
     // Set up the command line parser ---------------------------------------------------------------------------------
     QCommandLineParser parser;
     parser.setApplicationDescription(
-                "ld-dropout-correct - Multi-source dropout correction for ld-decode\n"
+                "tbc-dropout-correct - Multi-source dropout correction for ld-decode\n"
                 "\n"
                 "(c)2018-2025 Simon Inns\n"
                 "(C)2019-2020 Adam Sampson\n"
