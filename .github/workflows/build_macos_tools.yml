@@ -209,7 +209,7 @@ jobs:
           # result/bin/vendor directory, so the vendored vhs-teletext Python
           # tree is missing from the .app. teletextintegration.cpp resolves it
           # relative to the app dir (Contents/MacOS) at vendor/vhs-teletext, so
-          # bundle it there or ld-process-vbi's --teletext-html-dir export fails
+          # bundle it there or tbc-process-vbi's --teletext-html-dir export fails
           # with "Could not locate vendored vhs-teletext runtime directory."
           TELETEXT_VENDOR_SRC="result/bin/vendor/vhs-teletext"
           TELETEXT_VENDOR_DST="dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext"
@@ -561,7 +561,7 @@ jobs:
             exit 1
           fi
           # vhs-teletext vendor payload must be bundled at the resolver path so
-          # ld-process-vbi's teletext HTML export can find teletext/__main__.py.
+          # tbc-process-vbi's teletext HTML export can find teletext/__main__.py.
           if [ ! -f "dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext/teletext/__main__.py" ]; then
             echo "Missing vhs-teletext vendor payload: dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext/teletext/__main__.py"
             exit 1

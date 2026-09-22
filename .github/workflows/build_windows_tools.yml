@@ -246,7 +246,7 @@ jobs:
         # dropping the vendored Python tree that teletextintegration.cpp's
         # resolveTeletextVendorDirectory() looks for at <appDir>\vendor\vhs-teletext
         # (it validates the candidate by checking for teletext\__main__.py).
-        # Without this restore, ld-process-vbi's --teletext-html-dir export fails
+        # Without this restore, tbc-process-vbi's --teletext-html-dir export fails
         # on a clean Windows install with "Could not locate vendored vhs-teletext
         # runtime directory." (surfaced via tbc-analyse's Process VBI action).
         # Same restore pattern as the AAA vendor payload above. The tree is

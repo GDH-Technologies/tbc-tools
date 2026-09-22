@@ -463,7 +463,7 @@ int main(int argc, char *argv[])
         // Ensure source video has VBI data
         if (!metaData[i]->getFieldVbi(1).inUse) {
             qInfo() << "Source video" << i << "does not appear to have valid VBI data in the metadata.";
-            qInfo() << "Please try running ld-process-vbi on the source video and then try again";
+            qInfo() << "Please try running tbc-process-vbi on the source video and then try again";
             return 1;
         }
 

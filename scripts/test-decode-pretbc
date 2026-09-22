@@ -275,15 +275,15 @@ def copy_pretbc_files(args):
             die(f'Required file {src} does not exist')
 
 def run_ld_process_vbi(args):
-    """Run ld-process-vbi."""
+    """Run tbc-process-vbi."""
     clean_suffixes = ['.tbc.json.bup', '.tbc.db.bup']
     if args.fresh_db_decode:
         clean_suffixes += ['.fresh.tbc.db', '.fresh.tbc.db.bup']
     clean(args, clean_suffixes)
 
     cmd = [resolve_tool(
-        os.path.join(build_dir, 'bin', 'ld-process-vbi'),
-        os.path.join(build_dir, 'src', 'ld-process-vbi', 'ld-process-vbi'),
+        os.path.join(build_dir, 'bin', 'tbc-process-vbi'),
+        os.path.join(build_dir, 'src', 'tbc-process-vbi', 'tbc-process-vbi'),
     )]
     if args.fresh_db_decode:
         cmd += ['--nobackup']
@@ -569,14 +569,14 @@ def run_ld_dropout_correct(args):
     run_command(cmd)
 
 def run_ld_chroma_decoder(args, decoder):
-    """Run ld-chroma-decoder with a given decoder."""
+    """Run tbc-chroma-decoder with a given decoder."""
 
     clean(args, ['.rgb'])
     rgb_file = args.output + '.rgb'
 
     cmd = [resolve_tool(
-        os.path.join(build_dir, 'bin', 'ld-chroma-decoder'),
-        os.path.join(build_dir, 'src', 'ld-chroma-decoder', 'ld-chroma-decoder'),
+        os.path.join(build_dir, 'bin', 'tbc-chroma-decoder'),
+        os.path.join(build_dir, 'src', 'tbc-chroma-decoder', 'tbc-chroma-decoder'),
     )]
     cmd += ['--input-metadata', args.output + '.doc.tbc.db']
     if decoder is not None:
@@ -632,7 +632,7 @@ def main():
                             '(targeted regression/support check)')
     group.add_argument('--decoder', metavar='decoder', action='append',
                        dest='decoders', default=[],
-                       help='use specific ld-chroma-decoder decoder '
+                       help='use specific tbc-chroma-decoder decoder '
                             '(use more than once to test multiple decoders)')
     group = parser.add_argument_group("Sanity checks")
     group.add_argument('--expect-frames', metavar='N', type=int,
@@ -671,10 +671,10 @@ def main():
     source_dir = build_dir
 
     required_tools = [
-        os.path.join(build_dir, 'bin', 'ld-process-vbi'),
+        os.path.join(build_dir, 'bin', 'tbc-process-vbi'),
         os.path.join(build_dir, 'bin', 'tbc-export-metadata'),
         os.path.join(build_dir, 'bin', 'ld-dropout-correct'),
-        os.path.join(build_dir, 'bin', 'ld-chroma-decoder'),
+        os.path.join(build_dir, 'bin', 'tbc-chroma-decoder'),
     ]
     if not args.no_efm:
         required_tools += [

@@ -19,7 +19,7 @@
 #include <QDir>
 #include <QDebug>
 
-#include "vbiprocessingoptions.h"
+#include "tbc/vbiprocessingoptions.h"
 
 class Configuration : public QObject
 {

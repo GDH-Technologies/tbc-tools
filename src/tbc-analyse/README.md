@@ -33,12 +33,10 @@ tbc-analyse [options] <input.tbc>
    - Sources: Compare multiple sources (when available)
    - View: Switch between frame/field/split modes
    - Field Order: Toggle first/second field first
-4. **Analysis Tools**: Tools menu
-   - Line Scope: Waveform oscilloscope
-   - Vectorscope: Color analysis
-   - VBI: Metadata display
-   - Dropout Analysis: Statistical dropout information
-   - SNR Analysis: Signal-to-noise measurements
+4. **Windows and tool modes** (menus):
+   - Window menu: Dropout analysis, Visible Dropout analysis, Black/White SNR analysis, VBI, Teletext Viewer, Closed Captions, Marker Viewer, Video parameters, Video decoder configuration
+   - Scopes menu: Vectorscope, Waveform monitor, Line scope, RGB scope, YUV range, Field timing scope
+   - Tools menu: Process VBI, Fix JSON SNR, Auto Audio Align, EFM Handler, LDS Converter, Metadata Status/Editor/Conversion/Export
 5. **Save/Export**:
    - File → Save Metadata
    - File → Save frame as PNG

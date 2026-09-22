@@ -258,7 +258,7 @@ case "$MODE" in
     require_path "$ROOT"
 
     require_path "$ROOT/usr/bin/tbc-analyse"
-    require_path "$ROOT/usr/bin/ld-process-vbi"
+    require_path "$ROOT/usr/bin/tbc-process-vbi"
     require_path "$ROOT/usr/bin/tbc-video-export"
     require_path "$ROOT/usr/bin/qt.conf"
     # AAA (Auto Audio Align) is shipped as a self-contained AppImage built
@@ -330,7 +330,7 @@ case "$MODE" in
     fi
 
     require_path "$TARGET/bin/tbc-analyse"
-    require_path "$TARGET/bin/ld-process-vbi"
+    require_path "$TARGET/bin/tbc-process-vbi"
     require_path "$TARGET/bin/tbc-video-export"
     require_path "$TARGET/bin/qt.conf"
     # AAA (Auto Audio Align) is shipped as a self-contained AppImage built

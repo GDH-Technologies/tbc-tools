@@ -16,7 +16,7 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
         type=int,
         metavar="int",
         help=(
-            "Specify the number of ld-chroma-decoder threads.\n"
+            "Specify the number of tbc-chroma-decoder threads.\n"
             "  - This overrides --threads, and setting to 0 uses process defaults."
             "\n\n"
         ),
@@ -97,7 +97,7 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Run ld-chroma-decoder full-frame mode.\\n"
+            "Run tbc-chroma-decoder full-frame mode.\\n"
             "  - This is intended for full-frame 4fsc workflows in tools such as "
             "tbc-analyse."
             "\\n\\n"
@@ -347,7 +347,7 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
         default=False,
         help=(
             "Disable dropout correction. (default: no)\n"
-            "  - This will run ld-chroma-decoder without dropout correction."
+            "  - This will run tbc-chroma-decoder without dropout correction."
             "\n\n"
         ),
     )
@@ -388,7 +388,7 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Run ld-process-vbi before exporting. (default: no)\n"
+            "Run tbc-process-vbi before exporting. (default: no)\n"
             "  - The generated JSON file will be used for decoding."
             "\n\n"
         ),
@@ -406,7 +406,7 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
         type=int,
         metavar="int",
         help=(
-            "Specify the number of ld-process-vbi threads.\n"
+            "Specify the number of tbc-process-vbi threads.\n"
             "  - This overrides --threads, and setting to 0 uses process defaults."
             "\n\n"
         ),

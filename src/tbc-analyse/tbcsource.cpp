@@ -2021,7 +2021,7 @@ void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParamete
         // SECAM/MESECAM carry an FM chroma block that the PAL QAM decoder cannot
         // read (it emits neutral chroma, i.e. mono output), so default to the
         // SECAM FM decoder. Matches tbc-video-export's video_system_secam default
-        // and ld-chroma-decoder's CLI auto-select.
+        // and tbc-chroma-decoder's CLI auto-select.
         if (videoParameters.system == SECAM || videoParameters.system == MESECAM) {
             palConfiguration.chromaFilter = PalColour::secam;
         }

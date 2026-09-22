@@ -2,7 +2,7 @@
 
     vitsanalyser.h
 
-    tbc-library - shared VITS analyser (invoked by ld-process-vbi --vits)
+    tbc-library - shared VITS analyser (invoked by tbc-process-vbi --vits)
     Copyright (C) 2020 Simon Inns
 
     This file is part of tbc-tools.

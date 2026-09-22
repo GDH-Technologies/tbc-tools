@@ -17,14 +17,14 @@ All required sources must first be decoded using ld-decode.  It's recommended th
 
 # Process the VBI
 
-It is very important that the VBI metadata is as good as possible for any discs used with multi-source tools.  Ensure that ld-process-vbi is used with all source .tbc files:
+It is very important that the VBI metadata is as good as possible for any discs used with multi-source tools.  Ensure that tbc-process-vbi is used with all source .tbc files:
 
-    ld-process-vbi dragonslair_ds1.tbc
-    ld-process-vbi dragonslair_ds2.tbc
-    ld-process-vbi dragonslair_ds3.tbc
-    ld-process-vbi dragonslair_ds4.tbc
+    tbc-process-vbi dragonslair_ds1.tbc
+    tbc-process-vbi dragonslair_ds2.tbc
+    tbc-process-vbi dragonslair_ds3.tbc
+    tbc-process-vbi dragonslair_ds4.tbc
 
-Note that ld-process-vbi is more accurate and comprehensive that the on-the-fly VBI processing in ld-decode; so this extra step is required for the best possible results.
+Note that tbc-process-vbi is more accurate and comprehensive that the on-the-fly VBI processing in ld-decode; so this extra step is required for the best possible results.
 
 # Disc mapping
 
@@ -93,11 +93,11 @@ If you do not require diffDOD use the --no-diffdod option to turn it off.
 
 # Analysing the resulting SNR (Signal to Noise Ratio) of the stacked TBC
 
-ld-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running ld-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in tbc-analyse.
+tbc-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running tbc-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in tbc-analyse.
 
 A sample command is as follows:
 
-    ld-process-vbi --vits dragonslair_stacked.tbc
+    tbc-process-vbi --vits dragonslair_stacked.tbc
 
 # Multi-Source Dropout Correction
 

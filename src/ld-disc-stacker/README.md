@@ -91,7 +91,7 @@ ld-disc-stacker --it capture1.tbc capture2.tbc capture3.tbc combined.tbc
 
 ### Input Requirements
 - **Same Disc**: All sources must be from same physical disc
-- **VBI Data**: Sources need ld-process-vbi run first
+- **VBI Data**: Sources need tbc-process-vbi run first
 - **Same Standard**: PAL sources with PAL, NTSC with NTSC
 - **Quality Metadata**: Requires SNR and dropout data
 
@@ -105,7 +105,7 @@ ld-disc-stacker --it capture1.tbc capture2.tbc capture3.tbc combined.tbc
 
 ### Alignment Issues
 - Ensure all sources are from same physical disc
-- Check that ld-process-vbi was run on all sources
+- Check that tbc-process-vbi was run on all sources
 - Verify VBI frame numbers are present in metadata
 
 ### Quality Issues

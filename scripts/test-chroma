@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 #
-# test-chroma - test ld-chroma-decoder using ld-chroma-encoder
+# test-chroma - test tbc-chroma-decoder using tbc-chroma-encoder
 # Copyright (C) 2022 Adam Sampson
 #
 # This file is part of ld-decode.
@@ -19,8 +19,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # The overall idea here is that we generate a test video using ffmpeg, encode
-# it into TBC form using ld-chroma-encoder, then decode it using
-# ld-chroma-decoder, and use ffmpeg's psnr filter to compare the decoded
+# it into TBC form using tbc-chroma-encoder, then decode it using
+# tbc-chroma-decoder, and use ffmpeg's psnr filter to compare the decoded
 # version to the original.
 #
 # The PSNR shouldn't be too low for any individual decode (in practice this
@@ -102,11 +102,11 @@ def test_encode(args, source, sc_locked, png_suffix):
             + ['-frames:v', '1', args.output + png_suffix]
             )
 
-    # Encode the .rgb to .tbc, using ld-chroma-encoder
+    # Encode the .rgb to .tbc, using tbc-chroma-encoder
     tbc_file = args.output + '.tbc'
     cmd = [resolve_tool(
-        os.path.join(build_dir, 'bin', 'ld-chroma-encoder'),
-        os.path.join(build_dir, 'src', 'ld-chroma-decoder', 'encoder', 'ld-chroma-encoder'),
+        os.path.join(build_dir, 'bin', 'tbc-chroma-encoder'),
+        os.path.join(build_dir, 'src', 'tbc-chroma-decoder', 'encoder', 'tbc-chroma-encoder'),
     )]
     cmd += ['--input-format', args.input_format]
     if sc_locked:
@@ -122,7 +122,7 @@ def test_decode(args, decoder, phase_locked, output_format, png_suffix):
 
     clean(args, ['.decoded', '.psnr', png_suffix])
 
-    # Work out ffmpeg input format corresponding to ld-chroma-decoder output format
+    # Work out ffmpeg input format corresponding to tbc-chroma-decoder output format
     if output_format == 'rgb':
         decoded_format = RGB_FORMAT
         if args.system == 'ntsc':
@@ -138,12 +138,12 @@ def test_decode(args, decoder, phase_locked, output_format, png_suffix):
         # ffmpeg can read the Y4M header, but psnr fails if framerates mismatch
         decoded_format = ['-r', 'pal']
 
-    # Decode the .tbc using ld-chroma-decoder
+    # Decode the .tbc using tbc-chroma-decoder
     tbc_file = args.output + '.tbc'
     decoded_file = args.output + '.decoded'
     cmd = [resolve_tool(
-        os.path.join(build_dir, 'bin', 'ld-chroma-decoder'),
-        os.path.join(build_dir, 'src', 'ld-chroma-decoder', 'ld-chroma-decoder'),
+        os.path.join(build_dir, 'bin', 'tbc-chroma-decoder'),
+        os.path.join(build_dir, 'src', 'tbc-chroma-decoder', 'tbc-chroma-decoder'),
     ),
         '--quiet',
         '-f', decoder,
@@ -203,7 +203,7 @@ def test_decode(args, decoder, phase_locked, output_format, png_suffix):
     return statistics.median(psnrs)
 
 def main():
-    parser = argparse.ArgumentParser(description='Test ld-chroma-decoder using ld-chroma-encoder')
+    parser = argparse.ArgumentParser(description='Test tbc-chroma-decoder using tbc-chroma-encoder')
     group = parser.add_argument_group("Encoding and decoding")
     group.add_argument('input', metavar='input', nargs='?', default=None,
                        help='input video file (default colour bars)')
@@ -235,8 +235,8 @@ def main():
         print('SKIP: ffmpeg not found in PATH')
         sys.exit(77)
 
-    encoder_path = os.path.join(build_dir, 'bin', 'ld-chroma-encoder')
-    decoder_path = os.path.join(build_dir, 'bin', 'ld-chroma-decoder')
+    encoder_path = os.path.join(build_dir, 'bin', 'tbc-chroma-encoder')
+    decoder_path = os.path.join(build_dir, 'bin', 'tbc-chroma-decoder')
     missing = [path for path in (encoder_path, decoder_path) if not os.path.exists(path)]
     if missing:
         print('SKIP: required tool(s) not built:', ', '.join(missing))

@@ -238,7 +238,7 @@ QString resolveTeletextVendorDirectory()
     appendUniqueCandidate(candidates, QDir(appDirectory).filePath(QStringLiteral("vendor/vhs-teletext")));
     appendUniqueCandidate(candidates, QDir(appDirectory).filePath(QStringLiteral("../vendor/vhs-teletext")));
     appendUniqueCandidate(candidates, QDir(appDirectory).filePath(QStringLiteral("../../vendor/vhs-teletext")));
-    appendUniqueCandidate(candidates, QDir::current().filePath(QStringLiteral("src/ld-process-vbi/vendor/vhs-teletext")));
+    appendUniqueCandidate(candidates, QDir::current().filePath(QStringLiteral("src/tbc-process-vbi/vendor/vhs-teletext")));
 
     for (const QString &candidate : candidates) {
         if (isTeletextVendorDirectory(candidate)) {

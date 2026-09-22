@@ -4909,10 +4909,10 @@ void MainWindow::on_actionProcess_VBI_triggered()
         return;
     }
 
-    const QString toolPath = resolveExternalExecutable({QStringLiteral("ld-process-vbi")});
+    const QString toolPath = resolveExternalExecutable({QStringLiteral("tbc-process-vbi")});
     if (toolPath.isEmpty()) {
         QMessageBox::warning(this, tr("Tool not found"),
-                             tr("ld-process-vbi was not found in PATH or alongside the application."));
+                             tr("tbc-process-vbi was not found in PATH or alongside the application."));
         return;
     }
 
@@ -4958,7 +4958,7 @@ void MainWindow::on_actionProcess_VBI_triggered()
     }
 
     // Processing options: disable the unticked in-process VBI decoders. Each flag
-    // is guarded so the GUI degrades gracefully against older ld-process-vbi
+    // is guarded so the GUI degrades gracefully against older tbc-process-vbi
     // builds that don't yet support it (the type just runs on those builds).
     if (!opts.vbiCore && toolHelpListsOption(toolPath, QStringLiteral("--no-vbi-core"))) {
         toolArguments << QStringLiteral("--no-vbi-core");
@@ -5003,14 +5003,14 @@ void MainWindow::on_actionProcess_VBI_triggered()
         toolArguments << QStringLiteral("--no-teletext-html");
     }
 
-    // VITS is an opt-in in-process mode of ld-process-vbi (--vits).
+    // VITS is an opt-in in-process mode of tbc-process-vbi (--vits).
     if (opts.vits) {
         if (toolHelpListsOption(toolPath, QStringLiteral("--vits"))) {
             toolArguments << QStringLiteral("--vits");
         } else {
             QMessageBox::warning(this, tr("VITS not supported"),
-                                 tr("The selected ld-process-vbi build does not support the --vits flag. "
-                                    "VITS metrics were not processed. Use a newer ld-process-vbi build."));
+                                 tr("The selected tbc-process-vbi build does not support the --vits flag. "
+                                    "VITS metrics were not processed. Use a newer tbc-process-vbi build."));
             // Continue without --vits rather than aborting the whole VBI run.
         }
     }
@@ -5025,7 +5025,7 @@ void MainWindow::on_actionProcess_VBI_triggered()
         }
         QMessageBox::warning(this, tr("Process failed"),
                              errorMessage.isEmpty()
-                                 ? tr("ld-process-vbi failed.")
+                                 ? tr("tbc-process-vbi failed.")
                                  : errorMessage);
         return;
     }
@@ -5084,13 +5084,13 @@ void MainWindow::on_actionFix_JSON_SNR_triggered()
                || filename.endsWith(QStringLiteral(".tbcc"), Qt::CaseInsensitive);
     };
 
-    // VITS metrics processing is now a mode of ld-process-vbi (--vits), so fix
-    // JSON SNR by running ld-process-vbi with only VITS enabled (the four VBI
+    // VITS metrics processing is now a mode of tbc-process-vbi (--vits), so fix
+    // JSON SNR by running tbc-process-vbi with only VITS enabled (the four VBI
     // decoders disabled to preserve any manually-edited VBI metadata).
-    const QString toolPath = resolveExternalExecutable({QStringLiteral("ld-process-vbi")});
+    const QString toolPath = resolveExternalExecutable({QStringLiteral("tbc-process-vbi")});
     if (toolPath.isEmpty()) {
         QMessageBox::warning(this, tr("Tool not found"),
-                             tr("ld-process-vbi was not found in PATH or alongside the application."));
+                             tr("tbc-process-vbi was not found in PATH or alongside the application."));
         return;
     }
 
@@ -5167,15 +5167,15 @@ void MainWindow::on_actionFix_JSON_SNR_triggered()
 
     // Only recompute SNR: enable VITS and disable the four VBI decoders so
     // existing VBI/NTSC/VITC/closed-caption metadata is round-tripped unchanged.
-    // Each flag is guarded so an older ld-process-vbi build degrades gracefully
+    // Each flag is guarded so an older tbc-process-vbi build degrades gracefully
     // (missing --no-* flags just mean those decoders re-run, which is harmless;
     // a missing --vits flag makes the operation a no-op and is reported below).
     if (toolHelpListsOption(toolPath, QStringLiteral("--vits"))) {
         toolArguments << QStringLiteral("--vits");
     } else {
         QMessageBox::warning(this, tr("VITS not supported"),
-                             tr("The selected ld-process-vbi build does not support the --vits flag, "
-                                "so the SNR metrics cannot be recomputed. Use a newer ld-process-vbi build."));
+                             tr("The selected tbc-process-vbi build does not support the --vits flag, "
+                                "so the SNR metrics cannot be recomputed. Use a newer tbc-process-vbi build."));
         return;
     }
     if (toolHelpListsOption(toolPath, QStringLiteral("--no-vbi-core"))) {

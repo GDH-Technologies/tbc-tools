@@ -110,7 +110,7 @@ QString CudaPluginManager::defaultInstallDirectory()
     // Nix/AppImage/Windows-installed builds). Use GenericDataLocation + a
     // fixed "/tbc-tools/plugins/cuda" suffix (NOT AppDataLocation, which
     // appends the per-binary application name and would put tbc-analyse's
-    // plugin dir at a different path than ld-chroma-decoder's).
+    // plugin dir at a different path than tbc-chroma-decoder's).
     //   Linux:   ~/.local/share/tbc-tools/plugins/cuda  (XDG_DATA_HOME)
     //   Windows: %LOCALAPPDATA%/tbc-tools/plugins/cuda
     //   macOS:   ~/Library/Application Support/tbc-tools/plugins/cuda

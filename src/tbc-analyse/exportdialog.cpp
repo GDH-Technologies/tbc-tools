@@ -1064,7 +1064,7 @@ bool parseInfoProgressLine(const QString &line, ExportDialog::ExportProcessStat 
         QRegularExpression::CaseInsensitiveOption);
     QRegularExpressionMatch match = framesProcessedPattern.match(line);
     if (match.hasMatch()) {
-        stat->process = QStringLiteral("ld-chroma-decoder");
+        stat->process = QStringLiteral("tbc-chroma-decoder");
         stat->tbcType = QStringLiteral("—");
         stat->trackedName = QStringLiteral("frame");
         stat->current = match.captured(1).trimmed();
@@ -1079,7 +1079,7 @@ bool parseInfoProgressLine(const QString &line, ExportDialog::ExportProcessStat 
         QRegularExpression::CaseInsensitiveOption);
     match = writtenFramePattern.match(line);
     if (match.hasMatch()) {
-        stat->process = QStringLiteral("ld-chroma-decoder");
+        stat->process = QStringLiteral("tbc-chroma-decoder");
         stat->tbcType = QStringLiteral("—");
         stat->trackedName = QStringLiteral("frame");
         stat->current = match.captured(1).trimmed();
@@ -1099,7 +1099,7 @@ bool parseInfoProgressLine(const QString &line, ExportDialog::ExportProcessStat 
         QString startFrameDigits = startFrameText;
         bool startOk = false;
         const int startFrame = startFrameDigits.remove(QLatin1Char(',')).toInt(&startOk);
-        stat->process = QStringLiteral("ld-chroma-decoder");
+        stat->process = QStringLiteral("tbc-chroma-decoder");
         stat->tbcType = QStringLiteral("—");
         stat->trackedName = QStringLiteral("frame");
         stat->current = startOk && startFrame > 0 ? QString::number(startFrame - 1) : QStringLiteral("0");
@@ -1153,7 +1153,7 @@ bool parseCompletionSummaryLine(const QString &line, ExportDialog::ExportProcess
         QRegularExpression::CaseInsensitiveOption);
     match = processingCompletePattern.match(line);
     if (match.hasMatch()) {
-        stat->process = QStringLiteral("ld-chroma-decoder");
+        stat->process = QStringLiteral("tbc-chroma-decoder");
         stat->tbcType = QStringLiteral("—");
         stat->trackedName = QStringLiteral("frame");
         stat->current = match.captured(1).trimmed();
@@ -4058,17 +4058,17 @@ void ExportDialog::initializeProcessStats()
         if (mode == TbcSource::BOTH_SOURCES) {
             seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("LUMA"), feedTag);
             seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
-            seedStat(QStringLiteral("ld-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
-            seedStat(QStringLiteral("ld-chroma-decoder"), QStringLiteral("CHROMA"), feedTag);
+            seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
+            seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("CHROMA"), feedTag);
         } else if (mode == TbcSource::LUMA_SOURCE) {
             seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("LUMA"), feedTag);
-            seedStat(QStringLiteral("ld-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
+            seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
         } else if (mode == TbcSource::CHROMA_SOURCE) {
             seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
-            seedStat(QStringLiteral("ld-chroma-decoder"), QStringLiteral("CHROMA"), feedTag);
+            seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("CHROMA"), feedTag);
         } else {
             seedStat(QStringLiteral("ld-dropout-correct"), QStringLiteral("COMBINED"), feedTag);
-            seedStat(QStringLiteral("ld-chroma-decoder"), QStringLiteral("COMBINED"), feedTag);
+            seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("COMBINED"), feedTag);
         }
         seedStat(QStringLiteral("ffmpeg"), QStringLiteral("—"), feedTag);
     };

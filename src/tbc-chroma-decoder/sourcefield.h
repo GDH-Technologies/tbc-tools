@@ -1,0 +1,61 @@
+/************************************************************************
+
+    sourcefield.h
+
+    tbc-chroma-decoder - Colourisation filter for ld-decode
+    Copyright (C) 2019 Adam Sampson
+
+    This file is part of tbc-tools.
+
+    tbc-chroma-decoder is free software: you can redistribute it and/or
+    modify it under the terms of the GNU General Public License as
+    published by the Free Software Foundation, either version 3 of the
+    License, or (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+************************************************************************/
+
+#ifndef SOURCEFIELD_H
+#define SOURCEFIELD_H
+
+#include "tbcmetadata.h"
+#include "sourcevideo.h"
+
+// A field read from the input, with metadata and data
+struct SourceField {
+    TbcMetaData::Field field;
+    SourceVideo::Data data;
+
+    // Load a sequence of frames from the input files.
+    //
+    // fields will contain {lookbehind fields... [startIndex] real fields... [endIndex] lookahead fields...}.
+    // Fields requested outside the bounds of the file will have dummy metadata and black data.
+    static void loadFields(SourceVideo &sourceVideo, TbcMetaData &metaData,
+                           qint32 firstFrameNumber, qint32 numFrames,
+                           qint32 lookBehindFrames, qint32 lookAheadFrames,
+                           QVector<SourceField> &fields, qint32 &startIndex, qint32 &endIndex);
+
+    // Return the vertical offset of this field within the interlaced frame
+    // (i.e. 0 for the top field, 1 for the bottom field).
+    qint32 getOffset() const {
+        return field.isFirstField ? 0 : 1;
+    }
+
+    // Return the first/last active line numbers within this field's data,
+    // given the video parameters.
+    qint32 getFirstActiveLine(const TbcMetaData::VideoParameters &videoParameters) const {
+        return (videoParameters.firstActiveFrameLine + 1 - getOffset()) / 2;
+    }
+    qint32 getLastActiveLine(const TbcMetaData::VideoParameters &videoParameters) const {
+        return (videoParameters.lastActiveFrameLine + 1 - getOffset()) / 2;
+    }
+};
+
+#endif

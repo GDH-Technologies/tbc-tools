@@ -91,7 +91,7 @@ The decoded frame is made up of several distinct areas.  The following diagram s
 
 ## VITC - Timecode Readout
 
-`ld-process-vbi` can scan for common [SMPTE VITC Timecode](https://github.com/oyvindln/vhs-decode/wiki/VITC-SMPTE-Timecode) and add that to the .JSON files if the data is detected you will see the `HH:MM:SS:FF` readout automatically, this is the exact hour/min/sec/frame information the for current frame displayed at the bottem, typically this is runtime on commercial media or time of day information on prosumer/broadcast tapes.
+`tbc-process-vbi` can scan for common [SMPTE VITC Timecode](https://github.com/oyvindln/vhs-decode/wiki/VITC-SMPTE-Timecode) and add that to the .JSON files if the data is detected you will see the `HH:MM:SS:FF` readout automatically, this is the exact hour/min/sec/frame information the for current frame displayed at the bottem, typically this is runtime on commercial media or time of day information on prosumer/broadcast tapes.
 
 ![](assets/tbc-analyse_VITC_readout.png)
 
@@ -248,6 +248,45 @@ This option zooms the frame viewer to 3 times the original size.
 # The Window Menu
 
 The Window menu contains a number of options that open additional windows to assist with analysis.
+
+## Windows and tool modes overview
+
+tbc-analyse has the following windows and tool modes (matching the menus):
+
+**Window menu - analysis and data windows:**
+
+* Dropout analysis... - dropout graph for the whole TBC file
+* Visible Dropout analysis... - dropout graph limited to the visible picture area
+* Black SNR analysis... - black-level signal-to-noise graph
+* White SNR analysis... - white-level signal-to-noise graph
+* VBI... - decoded VBI data (timecode, disc type, chapter, picture stop, ...)
+* Teletext Viewer... - decoded teletext pages
+* Closed Captions... - decoded CEA-608 closed captions
+* Marker Viewer... - timeline markers and notes for the loaded TBC
+* Video parameters... - framing (active video area, aspect ratio) and export boundary
+* Video decoder configuration... - chroma decoder settings and video levels
+
+**Scopes menu - measurement scopes:**
+
+* Vectorscope... - colour analysis
+* Waveform monitor... - luminance histogram of the current frame
+* Line scope... - oscilloscope view of the selected video line
+* RGB scope... - RGB component view
+* YUV range... - YUV range overlay and settings
+* Field timing scope... - field timing analysis
+
+**Tools menu - tool modes (standalone windows and launchers):**
+
+* Process VBI... - the `tbc-process-vbi` VBI/VITS processing window
+* Fix JSON SNR... - repair SNR values in JSON metadata
+* Auto Audio Align... - auto audio alignment (AAA) workflow
+* EFM Handler... - the `tbc-efm-handler` EFM/AC3 workflow GUI
+* LDS Converter... - launcher for `ld-lds-converter`
+* Metadata Status... / Metadata Editor... / Metadata Conversion... / Metadata Export - metadata workflow windows
+
+**Plugins menu:**
+
+* Plugin Manager... - CUDA/ONNX plugin management
 
 ## Dropout analysis
 
@@ -467,7 +506,7 @@ The 'Show export boundary' checkbox overlays a red 4‑pixel outline around the 
 
 ## Chroma decoder configuration
 
-This window lets you adjust the chroma decoder's settings. Most of the options here correspond to command-line arguments to the `ld-chroma-decoder` tool, so you can use it prior to decoding to find the best settings.
+This window lets you adjust the chroma decoder's settings. Most of the options here correspond to command-line arguments to the `tbc-chroma-decoder` tool, so you can use it prior to decoding to find the best settings.
 
 ### Chroma gain
 

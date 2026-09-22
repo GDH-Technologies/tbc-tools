@@ -2,7 +2,7 @@
 
     processingpool.cpp
 
-    tbc-library - shared VITS analyser pool (invoked by ld-process-vbi --vits)
+    tbc-library - shared VITS analyser pool (invoked by tbc-process-vbi --vits)
     Copyright (C) 2020-2025 Simon Inns
 
     This file is part of tbc-tools.

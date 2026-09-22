@@ -28,7 +28,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ### Core Processing Tools
 
 - **tbc-analyse**       - GUI tool for TBC file visual analysis & adjustment handler. Supports drag-and-drop loading of `.tbc`, `.ytbc`, `.ctbc`, `.tbcy`, `.tbcc`, `.db`, and `.json` files into the main window.
-- **ld-process-vbi**   - Decode Vertical Blanking Interval data (Closed Captions, VITC - Vertical Interval Time Code, XDS Data) and VITS metrics; selectable processing options (`--no-vbi-core`/`--no-ntsc`/`--no-vitc`/`--no-closed-captions`/`--teletext`/`--vits`; teletext off by default, non-fatal)
+- **tbc-process-vbi**   - Decode Vertical Blanking Interval data (Closed Captions, VITC - Vertical Interval Time Code, XDS Data) and VITS metrics; selectable processing options (`--no-vbi-core`/`--no-ntsc`/`--no-vitc`/`--no-closed-captions`/`--teletext`/`--vits`; teletext off by default, non-fatal)
 - **ac3-decoder**      - Decode AC3 data from demodulated AC3-RF QPSK symbols
 
 ### EFM Decoder Suite
@@ -46,7 +46,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 - **ld-discmap**          - TBC and VBI alignment and correction tool
 - **ld-dropout-correct**  - Advanced dropout detection and correction
-- **ld-chroma-decoder**   - Color decoder for TBC LaserDisc video to RGB/YUV conversion
+- **tbc-chroma-decoder**   - Color decoder for TBC LaserDisc video to RGB/YUV conversion
 - **ld-disc-stacker**     - Combine multiple TBC captures for improved quality
 
 ### Export and Conversion Tools
@@ -72,16 +72,9 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 ## Linux Dependencies and Installation (Multi-Distro)
 
-### Recommended: Nix (reproducible)
-
-Use the Nix-based install/build instructions in `INSTALL.md` and `BUILD.md`:
-
-- Install to profile: `nix profile install .#`
-- Build locally: `nix develop -c cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && nix develop -c ninja -C build`
-
-### Native distro packages (manual build)
-
-See `BUILD.md` for the manual build instructions using native distro packages (submodules, per-distro dependencies, and build/install commands).
+- **Install (Nix, recommended)**: see `INSTALL.md` for installing into your Nix profile (`nix profile install .#`) or building via `nix build`.
+- **Build**: see `BUILD.md` for the Nix dev-shell build and the manual build using native distro packages (submodules, per-distro dependencies, and build/install commands).
+- **Ready-to-use binaries**: see the [releases page](https://github.com/harrypm/tbc-tools/releases/).
 
 ## Local CI parity checks
 

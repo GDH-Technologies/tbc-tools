@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class WrapperLDProcessVBI(Wrapper):
-    """Wrapper for ld-process-vbi."""
+    """Wrapper for tbc-process-vbi."""
 
     def __init__(self, state: ProgramState, config: WrapperConfig[None, None]) -> None:
         self._tbc_json_vbi = Path(f"{state.file_helper.input_name}.vbi.json")

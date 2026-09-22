@@ -443,7 +443,7 @@ class ContractCoverageTests(unittest.TestCase):
 
     def test_windows_teletext_vendor_contract_requires_bundle_step(self) -> None:
         # The Windows release must bundle the vendored vhs-teletext Python tree
-        # at release\vendor\vhs-teletext or ld-process-vbi's teletext HTML export
+        # at release\vendor\vhs-teletext or tbc-process-vbi's teletext HTML export
         # fails with "Could not locate vendored vhs-teletext runtime directory."
         expected = {
             "Copy vhs-teletext vendor payload to release directory",

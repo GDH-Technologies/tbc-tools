@@ -5,7 +5,7 @@ Disc mapping is the process of mapping out a .tbc file to ensure that the VBI fr
 
 As there can be many capture issues (especially with damaged/rotten discs) combined with complexities such as pulldown frames (which are not numbered in the VBI) - disc mapping is not a fool-proof task. The ld-discmap tool is designed to warn you if things don't look right, but it can't spot every possible issue.
 
-It is recommended to run ld-process-vbi on the input .tbc before running this tool.
+It is recommended to run tbc-process-vbi on the input .tbc before running this tool.
 
 ```
 Options:

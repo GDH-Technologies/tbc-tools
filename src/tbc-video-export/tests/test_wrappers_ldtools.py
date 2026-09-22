@@ -25,11 +25,11 @@ if TYPE_CHECKING:
 
 
 class TestWrappersProcessVBI:
-    """Tests for ld-process-vbi wrapper."""
+    """Tests for tbc-process-vbi wrapper."""
 
     test_cases = [
         WrapperTestCase(
-            id="default ld-process-vbi opts",
+            id="default tbc-process-vbi opts",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=["--process-vbi"],
             expected_opts=[
@@ -311,7 +311,7 @@ class TestWrappersDropoutCorrect:
 
 
 class TestWrappersChromaDecoder:
-    """Tests for ld-chroma-decoder wrapper."""
+    """Tests for tbc-chroma-decoder wrapper."""
 
     test_cases = [
         # PAL

@@ -311,7 +311,7 @@ CUDA_PLUGIN_PACKAGE_SCRIPT_REQUIRED_SNIPPETS = (
     "--deps-dir",
 )
 # Windows release must bundle the vendored vhs-teletext Python tree at
-# release\vendor\vhs-teletext so ld-process-vbi's teletextintegration.cpp
+# release\vendor\vhs-teletext so tbc-process-vbi's teletextintegration.cpp
 # resolveTeletextVendorDirectory() finds teletext\__main__.py next to the exe.
 # The "Copy binaries" step flattens only *.exe/*.dll to the release root and
 # drops the Python source tree, so an explicit restore step is required (same
@@ -475,7 +475,7 @@ def main() -> int:
             f"(arm64 only), found {gp_step_count}"
         )
     # Windows release must bundle the vendored vhs-teletext Python tree
-    # (release\vendor\vhs-teletext) so ld-process-vbi's teletext HTML export can
+    # (release\vendor\vhs-teletext) so tbc-process-vbi's teletext HTML export can
     # resolve the vendor directory next to the exe. The step is not arch-gated
     # (arch-independent Python source) and must appear exactly once.
     for snippet in WINDOWS_TELETEXT_VENDOR_REQUIRED_SNIPPETS:

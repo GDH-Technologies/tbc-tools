@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class ParserLDProcessVBI(Parser):
-    """Parser for ld-process-vbi process."""
+    """Parser for tbc-process-vbi process."""
 
     def __init__(self, process_name: ProcessName) -> None:
         super().__init__(process_name)

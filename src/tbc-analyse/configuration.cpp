@@ -258,7 +258,7 @@ void Configuration::setDefault(void)
     settings.cudaPlugin.trusted = false;
     settings.cudaPlugin.installPath = QString();
 
-    // VBI processing options (defaults match ld-process-vbi CLI defaults)
+    // VBI processing options (defaults match tbc-process-vbi CLI defaults)
     settings.vbiProcessing.vbiCore = true;
     settings.vbiProcessing.ntsc = true;
     settings.vbiProcessing.vitc = true;
