@@ -43,7 +43,7 @@ All sources must be successfully disc mapped before any other multi-source tool 
     ld-discmap dragonslair_ds3.tbc dragonslair_ds3_mapped.tbc
     ld-discmap dragonslair_ds4.tbc dragonslair_ds4_mapped.tbc
 
-As disc-mapping is **highly automated guess-work**; it is important to check and verify each mapped copy using ld-analyse to ensure that the resulting TBC looks correct before continuing with the process - especially if ld-discmap reports a suspected problem with a disc.
+As disc-mapping is **highly automated guess-work**; it is important to check and verify each mapped copy using tbc-analyse to ensure that the resulting TBC looks correct before continuing with the process - especially if ld-discmap reports a suspected problem with a disc.
 
 ## Troublesome discs
 
@@ -53,13 +53,13 @@ If you are unlucky you will find a disc source that doesn't follow the normal 1-
 
 Once a likely pulldown frame is identified, the disc mapper looks 5 frames back and 5 frames forward for another pulldown.  If either is present the current frame is also marked as a pulldown.  This second 'double-check' can fail for discs that do not follow the 1-in-5 pattern causing pulldown frames to be marked incorrectly as normal frames (and therefore the disc mapper does not correctly map the disc).
 
-For sources where this occurs it may be possible to use the --nostrict option which disables the double-check.  If the source is poor (and has multiple skips/jumps) this can have the opposite effect of marking non-pulldown frames as pulldown...  If you use the --nostrict option be sure to manually check the disc map results in ld-analyse for errors.
+For sources where this occurs it may be possible to use the --nostrict option which disables the double-check.  If the source is poor (and has multiple skips/jumps) this can have the opposite effect of marking non-pulldown frames as pulldown...  If you use the --nostrict option be sure to manually check the disc map results in tbc-analyse for errors.
 
 ### Un-mappable frames
 
 In certain cases it may not be possible for the disc mapper to map certain frames; for example, if the player gets stuck on a pulldown frame the resulting .tbc will contain repeating frames with no VBI frame number, so the mapper cannot tell where the frames belong.
 
-The normal action when there are un-mappable frames is to abort the disc mapping process and report the error.  It is possible to override this with the --delete-unmappable-frames which will tell the disc mapper to simply delete any frames that can't be successfully mapped.  If you use the --delete-unmappable-frames option be sure to manually check the disc map results in ld-analyse for errors.
+The normal action when there are un-mappable frames is to abort the disc mapping process and report the error.  It is possible to override this with the --delete-unmappable-frames which will tell the disc mapper to simply delete any frames that can't be successfully mapped.  If you use the --delete-unmappable-frames option be sure to manually check the disc map results in tbc-analyse for errors.
 
 # Stacking multiple discs
 
@@ -93,7 +93,7 @@ If you do not require diffDOD use the --no-diffdod option to turn it off.
 
 # Analysing the resulting SNR (Signal to Noise Ratio) of the stacked TBC
 
-ld-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running ld-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in ld-analyse.
+ld-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running ld-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in tbc-analyse.
 
 A sample command is as follows:
 
@@ -113,7 +113,7 @@ The dropout correction tool corrects only one source at a time; so the first sou
     dragonslair_ds3_mapped.tbc dragonslair_ds4_mapped.tbc \
     dragonslair_ds1_mapped_doc.tbc
 
-Once you have the disc images decoded it is possible to use ld-analyse (specifically the SNR and DO graphs) to work out how good each copy is.  Rank them in order of best to worse.  This ranking is important for the dropout-correction tool as it will use all the available sources to 'repair' the initial source.  So the first specified source should always be the best available.
+Once you have the disc images decoded it is possible to use tbc-analyse (specifically the SNR and DO graphs) to work out how good each copy is.  Rank them in order of best to worse.  This ranking is important for the dropout-correction tool as it will use all the available sources to 'repair' the initial source.  So the first specified source should always be the best available.
 
 The simplest way to range discs is based on completeness and SNR - firstly use ld-decode to scan the disc looking for obvious errors or skipped frames then using the black SNR graph function, make a note of the best and worst SNR averages across the disc.
 

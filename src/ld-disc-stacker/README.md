@@ -111,7 +111,7 @@ ld-disc-stacker --it capture1.tbc capture2.tbc capture3.tbc combined.tbc
 ### Quality Issues
 - Use `--verbose` to see selection decisions
 - Try different stacking modes (-m option)
-- Check individual source quality with ld-analyse
+- Check individual source quality with tbc-analyse
 
 ### Performance Issues
 - Reduce thread count if memory usage is high

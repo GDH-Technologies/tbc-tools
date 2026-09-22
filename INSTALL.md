@@ -28,10 +28,10 @@ The build output will be available under `./result`.
 ### Run from the build output
 
 ```bash
-./result/bin/ld-analyse
+./result/bin/tbc-analyse
 ```
 
-Replace `ld-analyse` with any other tool from the suite.
+Replace `tbc-analyse` with any other tool from the suite.
 
 ## Notes
 

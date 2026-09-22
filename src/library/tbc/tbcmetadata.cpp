@@ -158,7 +158,7 @@ bool parseVideoSystemName(QString name, VideoSystem &system)
     }
 
     // PAL-family aliases currently emitted/accepted by vhs-decode workflows
-    // (mapped to PAL line-system defaults in ld-analyse)
+    // (mapped to PAL line-system defaults in tbc-analyse)
     // NOTE: SECAM and MESECAM are now first-class enum values resolved by
     // the VIDEO_SYSTEM_DEFAULTS loop above, so they are not aliased to PAL here.
     if (normalisedName == "PALN" ||

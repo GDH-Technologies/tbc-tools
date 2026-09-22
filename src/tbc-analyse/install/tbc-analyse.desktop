@@ -1,0 +1,11 @@
+[Desktop Entry]
+Encoding=UTF-8
+Type=Application
+NoDisplay=false
+Terminal=false
+Exec=tbc-analyse
+Icon=tbc-analyse
+Name=tbc-analyse
+MimeType=application/video-tbc
+Comment=
+Categories=AudioVideo;Video;Utility;

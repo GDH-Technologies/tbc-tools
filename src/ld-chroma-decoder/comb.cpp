@@ -191,7 +191,7 @@ qint32 getNnIntraOpThreads()
 //   macOS:   ~/Library/Application Support/tbc-tools/plugins/cuda
 // Use GenericDataLocation + a fixed "/tbc-tools/plugins/cuda" suffix (NOT
 // AppDataLocation, which appends the per-binary application name and would
-// put ld-analyse's plugin dir at a different path than ld-chroma-decoder's).
+// put tbc-analyse's plugin dir at a different path than ld-chroma-decoder's).
 // The app-relative plugins/cuda + cuda-plugin paths are kept as fallbacks for
 // portable/unzipped builds where the app dir is writable.
 QStringList cudaPluginCandidateDirectories()

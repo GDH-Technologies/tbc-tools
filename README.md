@@ -27,7 +27,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 ### Core Processing Tools
 
-- **ld-analyse**       - GUI tool for TBC file visual analysis & adjustment handler. Supports drag-and-drop loading of `.tbc`, `.ytbc`, `.ctbc`, `.tbcy`, `.tbcc`, `.db`, and `.json` files into the main window.
+- **tbc-analyse**       - GUI tool for TBC file visual analysis & adjustment handler. Supports drag-and-drop loading of `.tbc`, `.ytbc`, `.ctbc`, `.tbcy`, `.tbcc`, `.db`, and `.json` files into the main window.
 - **ld-process-vbi**   - Decode Vertical Blanking Interval data (Closed Captions, VITC - Vertical Interval Time Code, XDS Data) and VITS metrics; selectable processing options (`--no-vbi-core`/`--no-ntsc`/`--no-vitc`/`--no-closed-captions`/`--teletext`/`--vits`; teletext off by default, non-fatal)
 - **ac3-decoder**      - Decode AC3 data from demodulated AC3-RF QPSK symbols
 
@@ -64,7 +64,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 ## Getting Started
 
-**Analyse & Adjust**: Use `ld-analyse` to assess capture quality and identify issues such as off-set active picture area or chroma phase/gain & video levels corrections.
+**Analyse & Adjust**: Use `tbc-analyse` to assess capture quality and identify issues such as off-set active picture area or chroma phase/gain & video levels corrections.
 
 **Align**: Using Auto Audio Align, your can align your source capture to your metadata and load in the audio for perfect cut.
 

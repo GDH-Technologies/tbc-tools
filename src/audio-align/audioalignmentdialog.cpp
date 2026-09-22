@@ -79,7 +79,7 @@ AudioAlignmentDialog::AudioAlignmentDialog(QWidget *parent) :
     if (ui->overwriteCheckBox) {
         ui->overwriteCheckBox->setChecked(true);
     }
-    const QString loadTracksForExportTooltip = tr("When launched from ld-analyse, load aligned track files and names into Export audio tracks.");
+    const QString loadTracksForExportTooltip = tr("When launched from tbc-analyse, load aligned track files and names into Export audio tracks.");
     if (ui->loadTracksForExportCheckBox) {
         ui->loadTracksForExportCheckBox->setToolTip(loadTracksForExportTooltip);
     }
@@ -963,7 +963,7 @@ bool AudioAlignmentDialog::writeExportTrackPayload(const QString &linearOutputFi
     }
 
     QJsonObject rootObject;
-    rootObject.insert(QStringLiteral("format"), QStringLiteral("ld-analyse-export-audio-tracks"));
+    rootObject.insert(QStringLiteral("format"), QStringLiteral("tbc-analyse-export-audio-tracks"));
     rootObject.insert(QStringLiteral("version"), 1);
     rootObject.insert(QStringLiteral("tracks"), tracks);
 

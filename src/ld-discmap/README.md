@@ -86,7 +86,7 @@ ld-discmap -n input.tbc output.tbc
 ### Field order issues
 - Try --reverse option
 - Verify metadata has correct field order
-- Check with ld-analyse
+- Check with tbc-analyse
 
 ### Audio sync problems
 - Ensure audio processing is enabled (remove -n)

@@ -99,7 +99,7 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
         help=(
             "Run ld-chroma-decoder full-frame mode.\\n"
             "  - This is intended for full-frame 4fsc workflows in tools such as "
-            "ld-analyse."
+            "tbc-analyse."
             "\\n\\n"
         ),
     )

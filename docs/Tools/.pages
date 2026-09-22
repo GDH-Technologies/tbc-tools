@@ -1,7 +1,7 @@
 title: Tools
 nav:
   - ld-decode.md
-  - ld-analyse.md
+  - tbc-analyse.md
   - ld-chroma-decoder.md
   - ld-chroma-encoder.md
   - ld-disc-stacker.md

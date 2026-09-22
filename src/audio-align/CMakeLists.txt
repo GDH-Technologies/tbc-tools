@@ -48,7 +48,7 @@ if(BUILD_TESTING)
     )
     set_tests_properties(aaa-runtime PROPERTIES SKIP_RETURN_CODE 77)
 
-    # Detection test: verifies the AAA resolver (the same one ld-analyse uses)
+    # Detection test: verifies the AAA resolver (the same one tbc-analyse uses)
     # actually finds the vendored VhsDecodeAutoAudioAlign executable via the
     # application-dir-relative vendor lookup + AUDIO_ALIGN_VENDOR_DIR. Fails if
     # not detected; skips (77) if detected but not launchable in this tree

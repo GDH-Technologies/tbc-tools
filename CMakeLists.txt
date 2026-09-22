@@ -366,7 +366,7 @@ add_compile_definitions(APP_VERSION=\"${APP_VERSION}\")
 
 # Subdirectories
 
-add_subdirectory(src/ld-analyse)
+add_subdirectory(src/tbc-analyse)
 add_subdirectory(src/ld-chroma-decoder)
 add_subdirectory(src/ld-chroma-decoder/encoder)
 add_subdirectory(src/ld-disc-stacker)
@@ -389,7 +389,7 @@ if(BUILD_TESTING)
     add_subdirectory(src/library/tbc/testvbidecoder)
     add_subdirectory(src/library/tbc/testvitcdecoder)
     add_subdirectory(src/ld-chroma-decoder/testsourcefield)
-    add_subdirectory(src/ld-analyse/testexportarguments)
+    add_subdirectory(src/tbc-analyse/testexportarguments)
 
     # Tests for the ld-decode tools.
     # Most of the tests expect that you have cloned (or symlinked) the

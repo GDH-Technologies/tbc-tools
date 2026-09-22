@@ -229,7 +229,7 @@ jobs:
       - name: Copy AAA (Auto Audio Align) vendor payload to release directory
         # The "Copy binaries" step flattens *.exe/*.dll to the release root, which
         # breaks the AAA resolver path (<appDir>\vendor\vhs_decode_auto_audio_align\)
-        # that audioalignmentutil.cpp expects for ld-analyse/tbc-audio-align.
+        # that audioalignmentutil.cpp expects for tbc-analyse/tbc-audio-align.
         # Restore the vendored VhsDecodeAutoAudioAlign.exe + Binah.dll under their
         # resolver-expected subdir so the AAA feature works in the Windows release.
         run: |
@@ -248,7 +248,7 @@ jobs:
         # (it validates the candidate by checking for teletext\__main__.py).
         # Without this restore, ld-process-vbi's --teletext-html-dir export fails
         # on a clean Windows install with "Could not locate vendored vhs-teletext
-        # runtime directory." (surfaced via ld-analyse's Process VBI action).
+        # runtime directory." (surfaced via tbc-analyse's Process VBI action).
         # Same restore pattern as the AAA vendor payload above. The tree is
         # arch-independent Python source, so this is not matrix-arch gated.
         run: |
@@ -496,7 +496,7 @@ jobs:
             "release\\Qt6Widgets.dll",
             "release\\FLAC.dll",
             "release\\ld-lds-converter.exe",
-            "release\\ld-analyse.exe",
+            "release\\tbc-analyse.exe",
             "release\\tbc-video-export.exe",
             "release\\vcruntime140.dll",
             "release\\vcruntime140_1.dll",

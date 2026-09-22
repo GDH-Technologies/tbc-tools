@@ -122,10 +122,10 @@ run_smoke_test() {
 }
 
 # End-to-end AAA usability smoke test: drive the bundled AAA AppImage's
-# `stream-align` action (the exact codepath ld-analyse runs when the user
+# `stream-align` action (the exact codepath tbc-analyse runs when the user
 # clicks Align) against a tiny synthesized fixture, and assert it produced
 # non-empty aligned output. This proves AAA is not merely detectable but
-# callable AND usable from ld-analyse (or independently), as opposed to just
+# callable AND usable from tbc-analyse (or independently), as opposed to just
 # `show-build-info`.
 #
 # Args: $1 = label prefix (e.g. x86-appimage / arm64)
@@ -185,7 +185,7 @@ JSON
   rm -f "$log_dir/.smoke-${label}-aaa-ffmpeg.log"
   local aligned="$smoke_dir/audio_aligned.s24le"
   rm -f "$aligned"
-  # stream-align: the real ld-analyse invocation (program + prefix args +
+  # stream-align: the real tbc-analyse invocation (program + prefix args +
   # stream-align + its switches). resolveRunner launches the AppImage via
   # `env APPIMAGE_EXTRACT_AND_RUN=1 <appimage>`.
   local exit_code=0
@@ -257,7 +257,7 @@ case "$MODE" in
     ROOT="squashfs-root"
     require_path "$ROOT"
 
-    require_path "$ROOT/usr/bin/ld-analyse"
+    require_path "$ROOT/usr/bin/tbc-analyse"
     require_path "$ROOT/usr/bin/ld-process-vbi"
     require_path "$ROOT/usr/bin/tbc-video-export"
     require_path "$ROOT/usr/bin/qt.conf"
@@ -268,22 +268,22 @@ case "$MODE" in
     require_executable "$ROOT/usr/bin/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage"
     run_smoke_test "x86-appimage-aaa-no-host-mono" "$ROOT/.smoke-x86-aaa.log" \
       env APPIMAGE_EXTRACT_AND_RUN=1 "$ROOT/usr/bin/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage" show-build-info
-    # AAA detection: validate ld-analyse's appDir-relative resolver path
-    # actually reaches the AAA AppImage. ld-analyse's applicationDirPath() is
+    # AAA detection: validate tbc-analyse's appDir-relative resolver path
+    # actually reaches the AAA AppImage. tbc-analyse's applicationDirPath() is
     # usr/bin, and the resolver probes vendor/vhs_decode_auto_audio_align/
-    # vhs-decode-aaa.AppImage relative to it. Compute that path from ld-analyse's
+    # vhs-decode-aaa.AppImage relative to it. Compute that path from tbc-analyse's
     # own directory (not a hard-coded absolute path) so a bundle that placed AAA
     # at the wrong relative location is caught, then launch it via the same
     # `env APPIMAGE_EXTRACT_AND_RUN=1` mechanism resolveRunner uses.
-    LD_ANALYSE="$ROOT/usr/bin/ld-analyse"
+    LD_ANALYSE="$ROOT/usr/bin/tbc-analyse"
     require_path "$LD_ANALYSE"
-    LD_ANALYSE_DIR="$(cd "$(dirname "$LD_ANALYSE")" && pwd)"
-    DETECTED_AAA="$LD_ANALYSE_DIR/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage"
+    TBC_ANALYSE_DIR="$(cd "$(dirname "$LD_ANALYSE")" && pwd)"
+    DETECTED_AAA="$TBC_ANALYSE_DIR/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage"
     require_executable "$DETECTED_AAA"
     run_smoke_test "x86-appimage-aaa-detection" "$ROOT/.smoke-x86-aaa-detect.log" \
       env APPIMAGE_EXTRACT_AND_RUN=1 "$DETECTED_AAA" show-build-info
     # AAA usability: drive the bundled AAA AppImage's `stream-align` (the
-    # exact codepath ld-analyse runs on Align) against a synthesized fixture
+    # exact codepath tbc-analyse runs on Align) against a synthesized fixture
     # and assert it produced non-empty aligned output. Proves AAA is callable
     # AND usable, not merely detectable. Uses the bundle's ffmpeg to make the
     # input audio so the test is self-contained at runtime.
@@ -305,12 +305,12 @@ case "$MODE" in
       [ -x "$candidate" ] || continue
       require_no_nix_store_shebang "$candidate"
     done
-    require_non_nix_rpath "$ROOT/usr/bin/ld-analyse"
+    require_non_nix_rpath "$ROOT/usr/bin/tbc-analyse"
     require_non_nix_rpath "$ROOT/usr/plugins/platforms/libqxcb.so"
     require_bundled_loader_present "$ROOT/usr/lib"
     require_runtime_libs "$ROOT/usr/lib" "${GLIBC_RUNTIME_LIBS[@]}"
     require_runtime_libs "$ROOT/usr/lib" "${XCB_RUNTIME_LIBS[@]}"
-    require_needed_in_bundle "$ROOT/usr/bin/ld-analyse" "$ROOT/usr/lib"
+    require_needed_in_bundle "$ROOT/usr/bin/tbc-analyse" "$ROOT/usr/lib"
     require_needed_in_bundle "$ROOT/usr/plugins/platforms/libqxcb.so" "$ROOT/usr/lib"
     for rel in "${COMMON_RELATIVE_PATHS[@]}"; do
       require_path "$ROOT/$rel"
@@ -329,7 +329,7 @@ case "$MODE" in
       exit 1
     fi
 
-    require_path "$TARGET/bin/ld-analyse"
+    require_path "$TARGET/bin/tbc-analyse"
     require_path "$TARGET/bin/ld-process-vbi"
     require_path "$TARGET/bin/tbc-video-export"
     require_path "$TARGET/bin/qt.conf"
@@ -340,21 +340,21 @@ case "$MODE" in
     require_executable "$TARGET/bin/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage"
     run_smoke_test "arm64-aaa-no-host-mono" "$TARGET/.smoke-arm64-aaa.log" \
       env APPIMAGE_EXTRACT_AND_RUN=1 "$TARGET/bin/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage" show-build-info
-    # AAA detection: validate ld-analyse's appDir-relative resolver path
+    # AAA detection: validate tbc-analyse's appDir-relative resolver path
     # actually reaches the AAA AppImage (see the x86-appimage mode for the
-    # rationale). ld-analyse's applicationDirPath() is bin, and the resolver
+    # rationale). tbc-analyse's applicationDirPath() is bin, and the resolver
     # probes vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage
-    # relative to it. Compute that path from ld-analyse's own directory and
+    # relative to it. Compute that path from tbc-analyse's own directory and
     # launch it via the resolver's `env APPIMAGE_EXTRACT_AND_RUN=1` mechanism.
-    LD_ANALYSE="$TARGET/bin/ld-analyse"
+    LD_ANALYSE="$TARGET/bin/tbc-analyse"
     require_path "$LD_ANALYSE"
-    LD_ANALYSE_DIR="$(cd "$(dirname "$LD_ANALYSE")" && pwd)"
-    DETECTED_AAA="$LD_ANALYSE_DIR/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage"
+    TBC_ANALYSE_DIR="$(cd "$(dirname "$LD_ANALYSE")" && pwd)"
+    DETECTED_AAA="$TBC_ANALYSE_DIR/vendor/vhs_decode_auto_audio_align/vhs-decode-aaa.AppImage"
     require_executable "$DETECTED_AAA"
     run_smoke_test "arm64-aaa-detection" "$TARGET/.smoke-arm64-aaa-detect.log" \
       env APPIMAGE_EXTRACT_AND_RUN=1 "$DETECTED_AAA" show-build-info
     # AAA usability: drive the bundled AAA AppImage's `stream-align` (the
-    # exact codepath ld-analyse runs on Align) against a synthesized fixture
+    # exact codepath tbc-analyse runs on Align) against a synthesized fixture
     # and assert it produced non-empty aligned output (see x86-appimage mode).
     run_aaa_stream_align_smoke "arm64" "$TARGET" "$DETECTED_AAA" "$TARGET/bin/ffmpeg" "$TARGET/tbc-tools-run"
     # vhs-teletext vendor payload must be bundled at the resolver path.
@@ -374,12 +374,12 @@ case "$MODE" in
       [ -x "$candidate" ] || continue
       require_no_nix_store_shebang "$candidate"
     done
-    require_non_nix_rpath "$TARGET/bin/ld-analyse"
+    require_non_nix_rpath "$TARGET/bin/tbc-analyse"
     require_non_nix_rpath "$TARGET/plugins/platforms/libqxcb.so"
     require_bundled_loader_present "$TARGET/lib"
     require_runtime_libs "$TARGET/lib" "${GLIBC_RUNTIME_LIBS[@]}"
     require_runtime_libs "$TARGET/lib" "${XCB_RUNTIME_LIBS[@]}"
-    require_needed_in_bundle "$TARGET/bin/ld-analyse" "$TARGET/lib"
+    require_needed_in_bundle "$TARGET/bin/tbc-analyse" "$TARGET/lib"
     require_needed_in_bundle "$TARGET/plugins/platforms/libqxcb.so" "$TARGET/lib"
     require_path "$TARGET/bin/ffmpeg"
     require_path "$TARGET/bin/ffprobe"

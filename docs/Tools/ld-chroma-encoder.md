@@ -1,5 +1,5 @@
 ## ld-chroma-encoder
-This application does the opposite of ld-chroma-**de**coder.  It reads a stream of RGB48 or YUV444P16 frames, encodes them into PAL or NTSC composite video, and writes a TBC file as output.  It's mostly useful for testing and development purposes.  For example, you can use it to generate TBC files from standard test videos and then look at the effects of decoding them with different options in ld-analyse or ld-chroma-decoder.
+This application does the opposite of ld-chroma-**de**coder.  It reads a stream of RGB48 or YUV444P16 frames, encodes them into PAL or NTSC composite video, and writes a TBC file as output.  It's mostly useful for testing and development purposes.  For example, you can use it to generate TBC files from standard test videos and then look at the effects of decoding them with different options in tbc-analyse or ld-chroma-decoder.
 
 The input is assumed to be either 928x576 for PAL (top field first) or 758x486 for NTSC (bottom field first).
 

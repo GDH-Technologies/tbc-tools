@@ -48,7 +48,7 @@ PAL
 ## Notes & Command Argument List
 
 
-Most options have a corresponding setting in ld-analyse's 'Chroma decoder configuration' window so you can experiment with them interactively there. For more information, see the [ld-analyse manual](https://github.com/happycube/ld-decode/wiki/ld-analyse#chroma-decoder-configuration).
+Most options have a corresponding setting in tbc-analyse's 'Chroma decoder configuration' window so you can experiment with them interactively there. For more information, see the [tbc-analyse manual](https://github.com/happycube/ld-decode/wiki/tbc-analyse#chroma-decoder-configuration).
 
 The `mono` filter treats the whole signal as luma, so it's the best choice when you know that the input video doesn't contain any colour information (e.g. black-and-white films).
 
