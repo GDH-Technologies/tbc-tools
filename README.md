@@ -89,7 +89,12 @@ Useful scoped modes:
 ```bash
 bash ci/run_local_ci_parity.sh --guardrails-only
 bash ci/run_local_ci_parity.sh --build-test-only
+bash ci/run_local_ci_parity.sh --python-tests-only
 ```
+
+The python test mode (`src/tbc-video-export` pytest suite) runs inside the Nix dev
+shell so it uses the same bundled/pulled ffmpeg as the release builds — the AV1
+profiles need `libsvtav1`, which stock distro ffmpeg builds lack.
 
 ## Important Notes
 
