@@ -1,26 +1,59 @@
 # TBC Tools
 
 
-This is the complete suite of tools for processing TBC (Time Base Corrected) files from the decode projects, [vhs-decode](https://github.com/oyvindln/vhs-decode/wiki), [cvbs-decode](https://github.com/oyvindln/vhs-decode/wiki/CVBS-Composite-Decode), [ld-decode](https://github.com/happycube/ld-decode). 
+This is the complete suite of tools for processing TBC (Time Base Corrected) files from the decode projects
 
-This is an cross-platform (experimental) highly subject to change feature addtion focused branch based off the orignal ld-tools, directly after the cut-off for [decode-orc](https://simoninns.github.io/decode-orc-docs/decode-orc/) development.
+- [vhs-decode](https://github.com/oyvindln/vhs-decode/wiki) & [cvbs-decode](https://github.com/oyvindln/vhs-decode/wiki/CVBS-Composite-Decode)
+- [Tape Decode Rust](https://github.com/harrypm/tape-decode-rust)
+- [Decode Dot Net](https://github.com/JunliangRen/vhs-decode-dotnet)
+
+This is an cross-platform feature addition focused continuation based off the original now legacy ld-tools, directly after the cut-off for [decode-orc](https://simoninns.github.io/decode-orc-docs/decode-orc/) development.
 
 These tools are for analyzing decoded analog video sources, handling the 4fsc video data, sound, metadata and final tweaks in framing, chroma-decoding and video levels before converting to YUV digital video files.
 
-Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) for ready to use self-contained binarys for production usage. 
+Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) for ready to use self-contained binary's for production usage on Windows, macOS, Linux for x86 and ARM64 platforms.  
 
 
-## Images
+# Images
 
-<img width="1920" height="1080" alt="Screenshot from 2026-04-04 19-16-33" src="https://github.com/user-attachments/assets/9458ffcb-6bc5-4801-8716-476921b8506e" />
 
-<img width="1920" height="1080" alt="Screenshot from 2026-04-04 19-12-14" src="https://github.com/user-attachments/assets/b5d43138-07d3-4eae-9b65-389df2963792" />
+## Main Window & Scopes
 
-<img width="1354" height="975" alt="Screenshot from 2026-05-02 07-02-52" src="https://github.com/user-attachments/assets/e6241648-a911-445b-a777-629a691ce7d6" />
 
-<img width="665" height="345" alt="Screenshot from 2026-05-02 07-03-24" src="https://github.com/user-attachments/assets/de08ed72-00cb-4887-8951-0fc27dea12cf" />
+<img width="1920" height="" alt="Screenshot from 2026-04-04 19-16-33" src="https://github.com/user-attachments/assets/9458ffcb-6bc5-4801-8716-476921b8506e" />
 
-<img width="860" height="762" alt="Screenshot from 2026-05-02 07-01-35" src="https://github.com/user-attachments/assets/d147dd99-6b09-4752-b3b3-c90801b72f21" />
+<img width="1920" height="" alt="Screenshot from 2026-04-04 19-12-14" src="https://github.com/user-attachments/assets/b5d43138-07d3-4eae-9b65-389df2963792" />
+
+
+## Export Page
+
+
+<img width="1354" height="" alt="Screenshot from 2026-05-02 07-02-52" src="https://github.com/user-attachments/assets/e6241648-a911-445b-a777-629a691ce7d6" />
+
+
+## VBI Decoding
+
+
+<img width="422" height="404" alt="image" src="https://github.com/user-attachments/assets/e9d748b6-d494-43a1-a1d6-2c8a3f1753c3" />
+
+
+## Chapter Marker Control 
+
+
+<img width="600" height="" alt="image" src="https://github.com/user-attachments/assets/4c335698-4413-4335-a31f-c7ec889c0f75" />
+
+<img width="600" height="" alt="tbc-analyse_chapter_markers" src="https://github.com/user-attachments/assets/a89a584b-1221-4b0f-bb6f-023eed65ce74" />
+
+
+## Auto Audio Align
+
+
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/fc9c757f-8bc3-464f-a72b-4609581cb550" />
+
+
+## Teletext Viewer
+
+<img width="400" height="" alt="Teletext_Viewer" src="https://github.com/user-attachments/assets/add401fd-ecc6-46d4-8bb8-658a53ea5497" />
 
 
 ## Tool Categories
@@ -28,8 +61,8 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ### Core Processing Tools
 
 - **tbc-analyse**       - GUI tool for TBC file visual analysis & adjustment handler. Supports drag-and-drop loading of `.tbc`, `.ytbc`, `.ctbc`, `.tbcy`, `.tbcc`, `.db`, and `.json` files into the main window.
-- **tbc-process-vbi**   - Decode Vertical Blanking Interval data (Closed Captions, VITC - Vertical Interval Time Code, XDS Data) and VITS metrics; selectable processing options (`--no-vbi-core`/`--no-ntsc`/`--no-vitc`/`--no-closed-captions`/`--teletext`/`--vits`; teletext off by default, non-fatal)
-- **ac3-decoder**      - Decode AC3 data from demodulated AC3-RF QPSK symbols
+- **tbc-process-vbi**   - Decode Vertical Blanking Interval data. Closed Captions, VITC - Vertical Interval Time Code, XDS Data and VITS metrics Teletext and more!
+- **ac3-decoder**       - Decode AC3 data from demodulated AC3-RF QPSK symbols
 
 ### EFM Decoder Suite
 
@@ -44,15 +77,15 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 ### Tools
 
-- **ld-discmap**          - TBC and VBI alignment and correction tool
+- **ld-discmap**           - TBC and VBI alignment and correction tool
 - **tbc-dropout-correct**  - Advanced dropout detection and correction
-- **tbc-chroma-decoder**   - Color decoder for TBC LaserDisc video to RGB/YUV conversion
-- **ld-disc-stacker**     - Combine multiple TBC captures for improved quality
+- **tbc-chroma-decoder**   - Color decoder for TBC CVBS/S-Video data  to RGB/YUV conversion
+- **ld-disc-stacker**      - Combine multiple TBC captures for improved quality
 
 ### Export and Conversion Tools
 
 - **tbc-export-metadata**     - Export TBC metadata to external formats
-- **ld-lds-converter**        - Convert between 10-bit packed and 16-bit data formats for DomesDay Duplicator captures.
+- **ld-lds-converter**        - Convert and bulk compress between 10-bit packed and 16-bit data formats for legacy DdD captures.
 - **tbc-metadata-converter**  - Convert between  JSON & SQLite metadata formats
 - **tbc-video-export**        - Direct to video export task handler for .tbc files. 
 
@@ -62,39 +95,16 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 - **filtermaker**              - Create custom filtering profiles (in scripts/)
 - **tbc-video-export-legacy**  - Legacy TBC to video conversion (archived)
 
+
 ## Getting Started
 
 **Analyse & Adjust**: Use `tbc-analyse` to assess capture quality and identify issues such as off-set active picture area or chroma phase/gain & video levels corrections.
 
 **Align**: Using Auto Audio Align, your can align your source capture to your metadata and load in the audio for perfect cut.
 
-**Export**: Convert to final formats using the export page to chroma-decode and encode via FFmpeg profile to a main and or proxy video file. 
+**Set in/out**: Using the timeline set your exact in/out cut points and any chapter markers (exported into video) for points of interest. 
 
-## Linux Dependencies and Installation (Multi-Distro)
-
-- **Install (Nix, recommended)**: see `INSTALL.md` for installing into your Nix profile (`nix profile install .#`) or building via `nix build`.
-- **Build**: see `BUILD.md` for the Nix dev-shell build and the manual build using native distro packages (submodules, per-distro dependencies, and build/install commands).
-- **Ready-to-use binaries**: see the [releases page](https://github.com/harrypm/tbc-tools/releases/).
-
-## Local CI parity checks
-
-To keep local validation aligned with GitHub Actions, run the same guardrails and full build/test flow locally before pushing:
-
-```bash
-bash ci/run_local_ci_parity.sh
-```
-
-Useful scoped modes:
-
-```bash
-bash ci/run_local_ci_parity.sh --guardrails-only
-bash ci/run_local_ci_parity.sh --build-test-only
-bash ci/run_local_ci_parity.sh --python-tests-only
-```
-
-The python test mode (`src/tbc-video-export` pytest suite) runs inside the Nix dev
-shell so it uses the same bundled/pulled ffmpeg as the release builds — the AV1
-profiles need `libsvtav1`, which stock distro ffmpeg builds lack.
+**Export**: Convert to final formats using the export page to chroma-decode and encode via FFmpeg profile to a main and or proxy video files.
 
 ## Important Notes
 
@@ -110,6 +120,6 @@ Each tool directory contains detailed README.md files with:
 - Complete option references
 - Usage examples
 - Input/output format specifications
-- Troubleshooting Refrences
+- Troubleshooting References
 
-See individual tool directories for specific tool documentation.
+See individual tool directories for specific tool documentation and [the wiki](https://github.com/harrypm/tbc-tools/wiki) for more info.
