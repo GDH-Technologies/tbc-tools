@@ -559,8 +559,8 @@ jobs:
           Get-ChildItem -Path "$env:BUILD_DIR\bin\*" -Include *.exe, *.dll -File |
             Where-Object { $_.Name -notmatch '^test' } |
             Copy-Item -Destination release\
-          if (-not (Test-Path 'release\ld-analyse.exe')) {
-            throw "$env:BUILD_DIR\bin did not yield ld-analyse.exe"
+          if (-not (Test-Path 'release\tbc-analyse.exe')) {
+            throw "$env:BUILD_DIR\bin did not yield tbc-analyse.exe"
           }
 
       - name: Deploy Qt runtime with windeployqt
@@ -568,8 +568,8 @@ jobs:
         # windeployqt reads a binary's imports and brings exactly the Qt DLLs
         # and plugins it needs, in the layout Qt expects relative to the exe.
         #
-        # One call, against ld-analyse: CMakeLists.txt asks Qt for Core, Gui,
-        # Widgets, Sql, Svg and Network, and ld-analyse is the binary that uses
+        # One call, against tbc-analyse: CMakeLists.txt asks Qt for Core, Gui,
+        # Widgets, Sql, Svg and Network, and tbc-analyse is the binary that uses
         # all of them -- every CLI tool links a subset. Deploying the superset
         # once covers the whole tree and avoids invoking windeployqt on a
         # binary that turns out not to link Qt at all, which it treats as an
@@ -578,7 +578,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & "$env:QT_DIR\bin\windeployqt.exe" `
             --release --no-translations --no-system-d3d-compiler --no-opengl-sw `
-            --dir release release\ld-analyse.exe
+            --dir release release\tbc-analyse.exe
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
           # windeployqt places plugins relative to --dir, which Qt finds on its
           # own; qt.conf is written anyway so plugin discovery cannot fall back
@@ -589,7 +589,7 @@ jobs:
 
       - name: Copy AAA (Auto Audio Align) vendor payload to release directory
         # audioalignmentutil.cpp resolves AAA at
-        # <appDir>\vendor\vhs_decode_auto_audio_align\ for ld-analyse and
+        # <appDir>\vendor\vhs_decode_auto_audio_align\ for tbc-analyse and
         # tbc-audio-align, so the tree has to keep that shape.
         run: |
           $ErrorActionPreference = 'Stop'
@@ -605,7 +605,7 @@ jobs:
       - name: Copy vhs-teletext vendor payload to release directory
         # teletextintegration.cpp's resolveTeletextVendorDirectory() looks for
         # <appDir>\vendor\vhs-teletext and validates it by the presence of
-        # teletext\__main__.py. Without it, ld-process-vbi's --teletext-html-dir
+        # teletext\__main__.py. Without it, tbc-process-vbi's --teletext-html-dir
         # export fails with "Could not locate vendored vhs-teletext runtime
         # directory."
         run: |
@@ -751,7 +751,7 @@ jobs:
             "release\FLAC.dll",
             "release\sqlite3.dll",
             "release\ld-lds-converter.exe",
-            "release\ld-analyse.exe",
+            "release\tbc-analyse.exe",
             "release\tbc-video-export.exe",
             "release\ffmpeg.exe",
             "release\onnxruntime.dll",

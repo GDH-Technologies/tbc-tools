@@ -50,7 +50,7 @@ The Linux workflow uses:
 
 ### AppRun Script
 The AppRun script enables:
-- Default GUI execution: `./appimage.AppImage` → runs ld-analyse
+- Default GUI execution: `./appimage.AppImage` → runs tbc-analyse
 - CLI tool passthrough: `./appimage.AppImage tool-name args` → runs any bundled tool
 
 ## Recovery Procedure
@@ -134,31 +134,31 @@ Removing or renaming these inputs breaks the expected Actions modal and causes o
 
 ## HARD DEV NOTE - LD-ANALYSE METADATA EXPORT WINDOWING FIX (2026-04-04)
 
-The `Tools -> Export Decode Metadata` action in `ld-analyse` must behave as an integrated sub-window (same app/session behavior as Auto Audio Align), not as a separate detached application window.
+The `Tools -> Export Decode Metadata` action in `tbc-analyse` must behave as an integrated sub-window (same app/session behavior as Auto Audio Align), not as a separate detached application window.
 
 ### Root cause
-- `ld-analyse` launched `tbc-export-metadata` GUI with `QProcess::startDetached()`, which creates a separate app window/process lifecycle.
+- `tbc-analyse` launched `tbc-export-metadata` GUI with `QProcess::startDetached()`, which creates a separate app window/process lifecycle.
 
 ### Required behavior
-- Metadata export UI is opened in-process from `ld-analyse` and reused as a non-modal child window.
+- Metadata export UI is opened in-process from `tbc-analyse` and reused as a non-modal child window.
 - It must show/raise/activate consistently and stay tied to the main app window behavior.
 
 ### Implementation now in place
-- `src/ld-analyse/mainwindow.cpp`:
+- `src/tbc-analyse/mainwindow.cpp`:
   - Replaced detached process GUI launch with an owned/reused `MetadataExportDialog` instance.
   - Configures non-modal window flags consistent with other tool sub-windows.
   - Applies source directory/default metadata input before showing.
-- `src/ld-analyse/mainwindow.h`:
+- `src/tbc-analyse/mainwindow.h`:
   - Added `MetadataExportDialog` forward declaration and member pointer.
-- `src/ld-analyse/CMakeLists.txt`:
-  - Added `../tbc-export-metadata/metadataexportdialog.cpp/.h/.ui` to `ld-analyse` target.
+- `src/tbc-analyse/CMakeLists.txt`:
+  - Added `../tbc-export-metadata/metadataexportdialog.cpp/.h/.ui` to `tbc-analyse` target.
 - `src/tbc-export-metadata/metadataexportdialog.cpp/.h`:
-  - Added setters used by `ld-analyse` integration:
+  - Added setters used by `tbc-analyse` integration:
     - `setDefaultInputFile(...)`
     - `setExportExecutablePath(...)`
 
 ### Validation
-- Build verification passed for `ld-analyse` and `tbc-export-metadata`.
+- Build verification passed for `tbc-analyse` and `tbc-export-metadata`.
 - User confirmed real-world GUI behavior is fixed.
 
 ## HARD DEV NOTE - TBC-VIDEO-EXPORT PIXEL FORMAT + PADDING COMPATIBILITY (2026-05-04)

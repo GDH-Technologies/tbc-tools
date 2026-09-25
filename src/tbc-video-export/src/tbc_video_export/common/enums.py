@@ -133,6 +133,12 @@ class ProcessName(Flag):
         """Return formatted enum name as string."""
         if self is ProcessName.LD_EXPORT_METADATA:
             return "tbc-export-metadata"
+        if self is ProcessName.LD_DROPOUT_CORRECT:
+            return "tbc-dropout-correct"
+        if self is ProcessName.LD_CHROMA_DECODER:
+            return "tbc-chroma-decoder"
+        if self is ProcessName.LD_PROCESS_VBI:
+            return "tbc-process-vbi"
         return str(self.name).replace("_", "-").lower()
 
 

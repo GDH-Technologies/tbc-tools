@@ -308,7 +308,7 @@ files migrate in place on the first write. The tables are described in
 The rules that turn those records into recording segments live in
 `tbc/segments.h` (`analyseSegments`, `deriveSegments`, `segmentFrameRange`,
 `resolveFieldRange`) and nowhere else: tbc-segments, tbc-export-metadata and
-ld-analyse all call them, so a segment boundary and its exported frame range
+tbc-analyse all call them, so a segment boundary and its exported frame range
 are the same in every tool. The gapless-section rule (a fileLoc step outside a
 third of the nominal field length starts a section) is tbc-audio-align's, and
 `src/library/tbc/testsegments` asserts the two agree.

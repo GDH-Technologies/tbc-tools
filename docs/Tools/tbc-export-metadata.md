@@ -6,7 +6,7 @@ This application reads ld-decode metadata (`.db` or `.json`) and exports informa
 - Per-frame LaserDisc VBI control signals, as CSV
 - LaserDisc navigation information, as Audacity labels
 - LaserDisc navigation information, as FFMETADATA1 (which FFmpeg can use to add chapter navigation to a video file, including VITC `timecode` when available)
-- Recording segments stored in the metadata (tape record start/stop seams found by tbc-segments or edited in ld-analyse), as FFMETADATA1 chapters in place of the LaserDisc navigation chapters, rebased to the `--start`/`--length` window so a per-segment export carries its own chapters
+- Recording segments stored in the metadata (tape record start/stop seams found by tbc-segments or edited in tbc-analyse), as FFMETADATA1 chapters in place of the LaserDisc navigation chapters, rebased to the `--start`/`--length` window so a per-segment export carries its own chapters
 - The recording-segment report (segments, events, per-segment frame ranges) as JSON, from the metadata alone
 - FFmpeg readvitc filter style VITC text, as `lavfi.readvitc.*` key lines for every frame
 - Closed Captions, as SCC format (which tools like [ttconv](https://github.com/sandflow/ttconv) can read)
@@ -50,7 +50,7 @@ Arguments:
 
 When the metadata holds recording segments (`segments` in the JSON, the
 `segment` table in the SQLite database; written by `tbc-segments
---write-segments` or ld-analyse's Segments viewer), `--ffmetadata` writes one
+--write-segments` or tbc-analyse's Segments viewer), `--ffmetadata` writes one
 `[CHAPTER]` per enabled segment instead of the LaserDisc navigation chapters.
 `START`/`END` are the segment's 0-based fields rebased to the export start
 field, so the same `--start`/`--length` tbc-video-export runs with produces

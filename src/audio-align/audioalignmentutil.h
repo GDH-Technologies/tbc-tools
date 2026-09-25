@@ -38,7 +38,7 @@ quint32 detectRfSourceSampleRateFromJson(const QString &jsonFilename);
 // then PATH). Returns the executable path, or an empty string if not found
 // (with errorMessage set). This is detection only — it does not check that a
 // launcher (mono/env) is available. Exposed so CI/detection tests can verify
-// ld-analyse actually finds the bundled AAA without driving the full pipeline.
+// tbc-analyse actually finds the bundled AAA without driving the full pipeline.
 QString resolvedAudioAlignPath(QString *errorMessage = nullptr);
 // Builds the argv to launch the resolved AAA executable (program first, then
 // any prefix arguments — e.g. ["env","APPIMAGE_EXTRACT_AND_RUN=1",<appimage>]

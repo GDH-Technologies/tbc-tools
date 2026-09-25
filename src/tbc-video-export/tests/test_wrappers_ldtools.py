@@ -25,11 +25,11 @@ if TYPE_CHECKING:
 
 
 class TestWrappersProcessVBI:
-    """Tests for ld-process-vbi wrapper."""
+    """Tests for tbc-process-vbi wrapper."""
 
     test_cases = [
         WrapperTestCase(
-            id="default ld-process-vbi opts",
+            id="default tbc-process-vbi opts",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=["--process-vbi"],
             expected_opts=[
@@ -198,11 +198,11 @@ class TestWrappersProcessVBI:
 
 
 class TestWrappersDropoutCorrect:
-    """Tests for ld-dropout-correct wrapper."""
+    """Tests for tbc-dropout-correct wrapper."""
 
     test_cases = [
         WrapperTestCase(
-            id="default ld-dropout-correct luma opts",
+            id="default tbc-dropout-correct luma opts",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=[],
             expected_opts=[
@@ -215,7 +215,7 @@ class TestWrappersDropoutCorrect:
             tbc_type=TBCType.LUMA,
         ),
         WrapperTestCase(
-            id="default ld-dropout-correct chroma opts",
+            id="default tbc-dropout-correct chroma opts",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=[],
             expected_opts=[
@@ -311,7 +311,7 @@ class TestWrappersDropoutCorrect:
 
 
 class TestWrappersChromaDecoder:
-    """Tests for ld-chroma-decoder wrapper."""
+    """Tests for tbc-chroma-decoder wrapper."""
 
     test_cases = [
         # PAL

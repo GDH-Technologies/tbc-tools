@@ -29,7 +29,7 @@ LINUX_PYINSTALLER_SCRIPT = ROOT / "src/tbc-video-export/pyinstaller/build_linux.
 BUNDLE_VERIFY_SCRIPT = ROOT / "ci/verify_linux_bundle.sh"
 AAA_LINUX_BUILD_SCRIPT = ROOT / "scripts/build-aaa-linux.sh"
 AAA_LINUX_PACKAGE_SCRIPT = ROOT / "scripts/package-aaa-appimage.sh"
-LD_ANALYSE_EXPORT_DIALOG = ROOT / "src/ld-analyse/exportdialog.cpp"
+TBC_ANALYSE_EXPORT_DIALOG = ROOT / "src/tbc-analyse/exportdialog.cpp"
 TBC_VIDEO_EXPORT_OPTS_FFMPEG = ROOT / "src/tbc-video-export/src/tbc_video_export/opts/opts_ffmpeg.py"
 TBC_VIDEO_EXPORT_FIELD_ORDER = ROOT / "src/tbc-video-export/src/tbc_video_export/common/field_order.py"
 AGENTS_RULES_FILE = ROOT / "AGENTS.md"
@@ -153,7 +153,7 @@ BUNDLE_VERIFY_REQUIRED_SNIPPETS = (
     # AppImage is present, executable, and runs without host mono.
     'run_smoke_test "x86-appimage-aaa-no-host-mono"',
     'run_smoke_test "arm64-aaa-no-host-mono"',
-    # AAA detection: the verifier must confirm ld-analyse's appDir-relative
+    # AAA detection: the verifier must confirm tbc-analyse's appDir-relative
     # resolver path actually reaches the AAA AppImage (not just that the file
     # exists at an absolute path) and launches it via the resolver's
     # `env APPIMAGE_EXTRACT_AND_RUN=1` mechanism. Catches a bundle that placed
@@ -162,7 +162,7 @@ BUNDLE_VERIFY_REQUIRED_SNIPPETS = (
     'run_smoke_test "x86-appimage-aaa-detection"',
     'run_smoke_test "arm64-aaa-detection"',
     # AAA usability: the verifier must drive the bundled AAA AppImage's
-    # `stream-align` (the exact codepath ld-analyse runs on Align) against a
+    # `stream-align` (the exact codepath tbc-analyse runs on Align) against a
     # synthesized fixture and assert non-empty aligned output — proving AAA is
     # callable AND usable, not merely detectable via show-build-info.
     'run_aaa_stream_align_smoke "x86-appimage"',
@@ -375,7 +375,7 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     "*/*-tbc-tools-*)",
     # macOS installs the GUI as a bundle, Linux as a plain binary. Checking
     # only the Linux path failed every air0 deploy for a build that was fine.
-    "$STORE/bin/ld-analyse.app/Contents/MacOS/ld-analyse",
+    "$STORE/bin/tbc-analyse.app/Contents/MacOS/tbc-analyse",
     # The Windows swap must be atomic and must refuse a locked install dir.
     "Programs\\tbc-tools",
     "Refusing to deploy: tbc-tools is running from",
@@ -582,15 +582,15 @@ AGENTS_HARD_RULE_REQUIRED_SNIPPETS = (
     "Hard rule: the guardrails workflow stays unfiltered and is the only viable required check",
 )
 
-# ld-analyse must route all deinterlace/proxy output through tbc-video-export web profiles
+# tbc-analyse must route all deinterlace/proxy output through tbc-video-export web profiles
 # instead of hand-rolling ffmpeg bwdif/parity filter graphs. The field-order (parity)
 # resolution lives in tbc-video-export (common/field_order.py) and is inherited by the
 # h264_web/h265_web/av1_web profiles. See AGENTS.md "Hard rule" entries.
-LD_ANALYSE_FORBIDDEN_SNIPPETS = (
+TBC_ANALYSE_FORBIDDEN_SNIPPETS = (
     # Hand-rolled bwdif parity=auto graph that bypassed field-order resolution and jittered.
     "bwdif=mode=send_frame:parity=auto:deint=all",
 )
-LD_ANALYSE_REQUIRED_SNIPPETS = (
+TBC_ANALYSE_REQUIRED_SNIPPETS = (
     # Marker anchoring the refactored proxy path that routes via tbc-video-export web profile.
     "proxy deinterlace routed via tbc-video-export web profile",
     # Web profile selection helper used by both parallel and fallback proxy paths.
@@ -683,11 +683,11 @@ CUDA_PLUGIN_PACKAGE_SCRIPT_REQUIRED_SNIPPETS = (
     "--deps-dir",
 )
 # Windows release must bundle the vendored vhs-teletext Python tree at
-# release\vendor\vhs-teletext so ld-process-vbi's teletextintegration.cpp
+# release\vendor\vhs-teletext so tbc-process-vbi's teletextintegration.cpp
 # resolveTeletextVendorDirectory() finds teletext\__main__.py next to the exe.
 # The "Copy binaries" step flattens only *.exe/*.dll to the release root and
 # drops the Python source tree, so an explicit restore step is required (same
-# pattern as the AAA vendor payload). Without it, ld-analyse's Process VBI ->
+# pattern as the AAA vendor payload). Without it, tbc-analyse's Process VBI ->
 # --teletext-html-dir export fails on a clean Windows install with "Could not
 # locate vendored vhs-teletext runtime directory." The step is not arch-gated
 # (the tree is arch-independent Python source, same as AAA) and must appear
@@ -764,7 +764,7 @@ def main() -> int:
         BUNDLE_VERIFY_SCRIPT,
         AAA_LINUX_BUILD_SCRIPT,
         AAA_LINUX_PACKAGE_SCRIPT,
-        LD_ANALYSE_EXPORT_DIALOG,
+        TBC_ANALYSE_EXPORT_DIALOG,
         TBC_VIDEO_EXPORT_OPTS_FFMPEG,
         TBC_VIDEO_EXPORT_FIELD_ORDER,
         AGENTS_RULES_FILE,
@@ -883,10 +883,10 @@ def main() -> int:
         check_count_at_least(LINUX_WORKFLOW, runtime_lib, 2, errors)
         check_contains(BUNDLE_VERIFY_SCRIPT, runtime_lib, errors)
 
-    for snippet in LD_ANALYSE_FORBIDDEN_SNIPPETS:
-        check_not_contains(LD_ANALYSE_EXPORT_DIALOG, snippet, errors)
-    for snippet in LD_ANALYSE_REQUIRED_SNIPPETS:
-        check_contains(LD_ANALYSE_EXPORT_DIALOG, snippet, errors)
+    for snippet in TBC_ANALYSE_FORBIDDEN_SNIPPETS:
+        check_not_contains(TBC_ANALYSE_EXPORT_DIALOG, snippet, errors)
+    for snippet in TBC_ANALYSE_REQUIRED_SNIPPETS:
+        check_contains(TBC_ANALYSE_EXPORT_DIALOG, snippet, errors)
     for snippet in TBC_VIDEO_EXPORT_REQUIRED_SNIPPETS:
         check_contains(TBC_VIDEO_EXPORT_OPTS_FFMPEG, snippet, errors)
     check_contains(TBC_VIDEO_EXPORT_FIELD_ORDER, "def compute_is_tff", errors)
@@ -905,7 +905,7 @@ def main() -> int:
             f"(arm64 only), found {gp_step_count}"
         )
     # Windows release must bundle the vendored vhs-teletext Python tree
-    # (release\vendor\vhs-teletext) so ld-process-vbi's teletext HTML export can
+    # (release\vendor\vhs-teletext) so tbc-process-vbi's teletext HTML export can
     # resolve the vendor directory next to the exe. The step is not arch-gated
     # (arch-independent Python source) and must appear exactly once.
     for snippet in WINDOWS_TELETEXT_VENDOR_REQUIRED_SNIPPETS:

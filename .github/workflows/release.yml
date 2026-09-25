@@ -120,13 +120,7 @@ jobs:
           ALLOW_EXISTING_TAG_REBUILD: ${{ inputs.allow_existing_tag_rebuild }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          TAG_EXISTS=false
           if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            TAG_EXISTS=true
-          fi
-          echo "tag_exists=${TAG_EXISTS}" >> "$GITHUB_OUTPUT"
-
-          if [ "${TAG_EXISTS}" = "true" ]; then
             if [ "${ALLOW_EXISTING_TAG_REBUILD}" != "true" ]; then
               echo "Tag '${RELEASE_TAG}' already exists on origin. Refusing to rebuild by default to prevent stale releases." >&2
               echo "To re-cut this version from current main, delete the stale tag first:" >&2
@@ -134,16 +128,24 @@ jobs:
               echo "or explicitly set allow_existing_tag_rebuild=true for an intentional in-place rebuild." >&2
               exit 1
             fi
-            echo "Tag '${RELEASE_TAG}' already exists on origin; allow_existing_tag_rebuild=true so continuing intentionally."
-          else
-            # Tag was deleted (e.g. for a re-cut) but a GitHub Release object may
-            # still exist. Delete the orphaned release so the re-cut publishes
-            # cleanly instead of failing; the upload job recreates it fresh.
-            if gh release view "${RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-              echo "Release '${RELEASE_TAG}' exists without a tag (tag was deleted for a re-cut); deleting the orphaned release so the re-cut publishes cleanly." >&2
-              gh release delete "${RELEASE_TAG}" --repo "${{ github.repository }}" --yes
-            fi
+            # Intentional re-cut: delete the stale tag (remote + local) so the
+            # tag-creation step re-points it at the current HEAD. Skipping the
+            # re-point here previously left the old tag in place and failed the
+            # source-commit vs tag-commit integrity check below.
+            echo "Tag '${RELEASE_TAG}' already exists on origin; allow_existing_tag_rebuild=true so deleting the stale tag for an intentional re-cut from the current HEAD."
+            git push origin ":refs/tags/${RELEASE_TAG}"
+            git tag -d "${RELEASE_TAG}" 2>/dev/null || true
           fi
+
+          # Tag is absent at this point (never existed, or just deleted for a
+          # re-cut): remove any orphaned release object so the re-cut publishes
+          # cleanly instead of failing; the upload job recreates it fresh.
+          if gh release view "${RELEASE_TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release '${RELEASE_TAG}' exists without a tag (tag was deleted for a re-cut); deleting the orphaned release so the re-cut publishes cleanly." >&2
+            gh release delete "${RELEASE_TAG}" --repo "${{ github.repository }}" --yes
+          fi
+
+          echo "tag_exists=false" >> "$GITHUB_OUTPUT"
 
       - name: Configure git identity
         if: ${{ steps.mode.outputs.mode == 'manual_release' && steps.existing.outputs.tag_exists != 'true' }}

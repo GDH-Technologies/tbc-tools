@@ -43,7 +43,7 @@ enum class FfmetadataSegmentMode {
     Write an FFMETADATA1 file containing navigation information.
 
     When the metadata holds recording segments (written by vhs-decode's
-    consumers: tbc-segments --write-segments, ld-analyse's Segments viewer)
+    consumers: tbc-segments --write-segments, tbc-analyse's Segments viewer)
     each selected segment becomes one [CHAPTER] and the LaserDisc navigation
     chapters are not written; START/END are the segment's 0-based fields
     rebased to the export start field, so a per-segment export carries

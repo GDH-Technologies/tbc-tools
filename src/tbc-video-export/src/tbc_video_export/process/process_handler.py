@@ -333,7 +333,7 @@ class ProcessHandler:
         This watches proc states and kills if the only remaining procs are flagged with
         stop_on_last_alive.
 
-        Some procs (ld-dropout-correct) do not support certain arguments (-s/-l) will
+        Some procs (tbc-dropout-correct) do not support certain arguments (-s/-l) will
         run until finished. This is solved on POSIX systems by closing the pipe once the
         consumer is finished, but this does not work on NT systems. This ensures they do
         not keep running.

@@ -123,7 +123,7 @@ class FileHelper:
     def tbc_json(self, file_name: Path) -> None:
         """Set the TBCJson Helper.
 
-        This can be used when ld-process-vbi generates a new JSON file.
+        This can be used when tbc-process-vbi generates a new JSON file.
         """
         self._tbc_json = TBCJsonHelper(file_name)
 

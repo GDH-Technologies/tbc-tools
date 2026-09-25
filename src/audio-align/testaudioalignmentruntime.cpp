@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
 
     QCommandLineOption detectAaaOption(
         QStringList() << QStringLiteral("detect-aaa"),
-        QStringLiteral("Resolve the VhsDecodeAutoAudioAlign executable the way ld-analyse does "
+        QStringLiteral("Resolve the VhsDecodeAutoAudioAlign executable the way tbc-analyse does "
                        "(application-dir-relative vendor lookup, then PATH) and launch it with "
                        "show-build-info to confirm it is actually found and runnable. Exits 0 on "
                        "success, 1 if not found/launchable. No fixtures or ffmpeg required."));
@@ -206,7 +206,7 @@ int main(int argc, char *argv[])
 
     if (parser.isSet(detectAaaOption)) {
         // Detection (must succeed): the resolver must find the AAA executable
-        // the same way ld-analyse does (application-dir-relative vendor lookup,
+        // the same way tbc-analyse does (application-dir-relative vendor lookup,
         // then PATH). This is the core check — a broken bundle layout or
         // resolver regression makes this FAIL, not skip.
         QString detectError;

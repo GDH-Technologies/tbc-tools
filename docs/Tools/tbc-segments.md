@@ -5,7 +5,7 @@ stopped, or interrupted on a captured tape or disc. It reads the decode metadata
 (`.tbc.db`, or the legacy `.tbc.json`; a `.tbc.json` with a `.tbc.db` sibling
 opens the database) and emits a JSON report of gapless sections, boundary
 events and the recording segments derived from them. The rules live in the TBC
-library (`src/library/tbc/segments.h`), so ld-analyse and tbc-export-metadata
+library (`src/library/tbc/segments.h`), so tbc-analyse and tbc-export-metadata
 derive exactly the same segments.
 
 ## What it detects
@@ -43,7 +43,7 @@ under the mixed-frame rule: a frame whose second field starts a segment
 belongs to the segment that owns its first field, so contiguous segments tile
 the frame range exactly once.
 
-Segments stored in the metadata (by ld-analyse's Segments viewer or a
+Segments stored in the metadata (by tbc-analyse's Segments viewer or a
 previous `--write-segments`) are reported as they are; the derivation runs only
 when none are stored.
 

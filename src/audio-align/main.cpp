@@ -85,7 +85,7 @@ int main(int argc, char *argv[])
     parser.addOption(rfVideoSampleRateOption);
 
     QCommandLineOption exportTrackFileOption(QStringList() << "export-track-file",
-                                             QCoreApplication::translate("main", "Write aligned track details for ld-analyse export auto-load"),
+                                             QCoreApplication::translate("main", "Write aligned track details for tbc-analyse export auto-load"),
                                              QCoreApplication::translate("main", "filename"));
     parser.addOption(exportTrackFileOption);
     parser.addOption(QCommandLineOption("headless",

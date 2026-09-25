@@ -223,7 +223,7 @@ class ContractCoverageTests(unittest.TestCase):
             "bwdif=mode=send_frame:parity=auto:deint=all",
         }
         self.assertTrue(
-            expected_forbidden.issubset(set(check_ci_contracts.LD_ANALYSE_FORBIDDEN_SNIPPETS))
+            expected_forbidden.issubset(set(check_ci_contracts.TBC_ANALYSE_FORBIDDEN_SNIPPETS))
         )
 
     def test_ld_analyse_contract_requires_tbc_video_export_web_profile_routing(self) -> None:
@@ -231,7 +231,7 @@ class ContractCoverageTests(unittest.TestCase):
             "proxy deinterlace routed via tbc-video-export web profile",
             "proxyExportProfileName",
         }
-        self.assertTrue(expected.issubset(set(check_ci_contracts.LD_ANALYSE_REQUIRED_SNIPPETS)))
+        self.assertTrue(expected.issubset(set(check_ci_contracts.TBC_ANALYSE_REQUIRED_SNIPPETS)))
 
     def test_tbc_video_export_contract_requires_auto_field_order_default(self) -> None:
         expected = {
@@ -443,7 +443,7 @@ class ContractCoverageTests(unittest.TestCase):
 
     def test_windows_teletext_vendor_contract_requires_bundle_step(self) -> None:
         # The Windows release must bundle the vendored vhs-teletext Python tree
-        # at release\vendor\vhs-teletext or ld-process-vbi's teletext HTML export
+        # at release\vendor\vhs-teletext or tbc-process-vbi's teletext HTML export
         # fails with "Could not locate vendored vhs-teletext runtime directory."
         expected = {
             "Copy vhs-teletext vendor payload to release directory",

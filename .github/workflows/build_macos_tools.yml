@@ -75,14 +75,14 @@ jobs:
         run: |
           nix build .#
           mkdir -p dist/bin
-          if [ ! -f result/bin/ld-analyse.app/Contents/MacOS/.ld-analyse-wrapped ]; then
-            echo "Missing wrapped GUI binary: result/bin/ld-analyse.app/Contents/MacOS/.ld-analyse-wrapped"
+          if [ ! -f result/bin/tbc-analyse.app/Contents/MacOS/.tbc-analyse-wrapped ]; then
+            echo "Missing wrapped GUI binary: result/bin/tbc-analyse.app/Contents/MacOS/.tbc-analyse-wrapped"
             exit 1
           fi
           
           # Copy wrapped GUI binary (avoid Nix wrapper with hardcoded paths)
-          cp result/bin/ld-analyse.app/Contents/MacOS/.ld-analyse-wrapped dist/bin/ld-analyse
-          chmod +x dist/bin/ld-analyse
+          cp result/bin/tbc-analyse.app/Contents/MacOS/.tbc-analyse-wrapped dist/bin/tbc-analyse
+          chmod +x dist/bin/tbc-analyse
           
           # Copy wrapped CLI tools (strip leading dot and -wrapped suffix)
           for wrapped in result/bin/.*-wrapped; do
@@ -157,7 +157,7 @@ jobs:
               <key>CFBundleDisplayName</key>
               <string>TBC Tools</string>
               <key>CFBundleExecutable</key>
-              <string>ld-analyse</string>
+              <string>tbc-analyse</string>
               <key>CFBundleIconFile</key>
               <string>tbc-tools.icns</string>
               <key>CFBundleIdentifier</key>
@@ -209,7 +209,7 @@ jobs:
           # result/bin/vendor directory, so the vendored vhs-teletext Python
           # tree is missing from the .app. teletextintegration.cpp resolves it
           # relative to the app dir (Contents/MacOS) at vendor/vhs-teletext, so
-          # bundle it there or ld-process-vbi's --teletext-html-dir export fails
+          # bundle it there or tbc-process-vbi's --teletext-html-dir export fails
           # with "Could not locate vendored vhs-teletext runtime directory."
           TELETEXT_VENDOR_SRC="result/bin/vendor/vhs-teletext"
           TELETEXT_VENDOR_DST="dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext"
@@ -258,7 +258,7 @@ jobs:
 
       - name: Verify app executable architecture
         run: |
-          BIN="dist/tbc-tools.app/Contents/MacOS/ld-analyse"
+          BIN="dist/tbc-tools.app/Contents/MacOS/tbc-analyse"
           if [ ! -f "$BIN" ]; then
             echo "Expected app executable missing: $BIN"
             exit 1
@@ -318,22 +318,22 @@ jobs:
       - name: Create app icon
         run: |
           ICONSET_ROOT="$(mktemp -d)"
-          ICONSET="$ICONSET_ROOT/ld-analyse.iconset"
+          ICONSET="$ICONSET_ROOT/tbc-analyse.iconset"
           mkdir -p "$ICONSET"
-          cp src/ld-analyse/Graphics/16-analyse.png "$ICONSET/icon_16x16.png"
-          cp src/ld-analyse/Graphics/32-analyse.png "$ICONSET/icon_16x16@2x.png"
-          cp src/ld-analyse/Graphics/32-analyse.png "$ICONSET/icon_32x32.png"
-          cp src/ld-analyse/Graphics/64-analyse.png "$ICONSET/icon_32x32@2x.png"
-          cp src/ld-analyse/Graphics/128-analyse.png "$ICONSET/icon_128x128.png"
-          cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_128x128@2x.png"
-          cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_256x256.png"
+          cp src/tbc-analyse/Graphics/16-analyse.png "$ICONSET/icon_16x16.png"
+          cp src/tbc-analyse/Graphics/32-analyse.png "$ICONSET/icon_16x16@2x.png"
+          cp src/tbc-analyse/Graphics/32-analyse.png "$ICONSET/icon_32x32.png"
+          cp src/tbc-analyse/Graphics/64-analyse.png "$ICONSET/icon_32x32@2x.png"
+          cp src/tbc-analyse/Graphics/128-analyse.png "$ICONSET/icon_128x128.png"
+          cp src/tbc-analyse/Graphics/256-analyse.png "$ICONSET/icon_128x128@2x.png"
+          cp src/tbc-analyse/Graphics/256-analyse.png "$ICONSET/icon_256x256.png"
           if command -v sips >/dev/null 2>&1; then
-            sips -z 512 512 src/ld-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_256x256@2x.png"
-            sips -z 512 512 src/ld-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_512x512.png"
-            sips -z 1024 1024 src/ld-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_512x512@2x.png"
+            sips -z 512 512 src/tbc-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_256x256@2x.png"
+            sips -z 512 512 src/tbc-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_512x512.png"
+            sips -z 1024 1024 src/tbc-analyse/Graphics/256-analyse.png --out "$ICONSET/icon_512x512@2x.png"
           else
-            cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_256x256@2x.png"
-            cp src/ld-analyse/Graphics/256-analyse.png "$ICONSET/icon_512x512.png"
+            cp src/tbc-analyse/Graphics/256-analyse.png "$ICONSET/icon_256x256@2x.png"
+            cp src/tbc-analyse/Graphics/256-analyse.png "$ICONSET/icon_512x512.png"
           fi
           iconutil -c icns "$ICONSET" -o dist/tbc-tools.app/Contents/Resources/tbc-tools.icns
 
@@ -342,9 +342,9 @@ jobs:
           mkdir -p dist/tbc-tools.app/Contents/PlugIns
           
           # Extract plugin paths from Nix wrapper and copy plugins
-          PLUGIN_PATHS=$(strings -n 8 result/bin/ld-analyse.app/Contents/MacOS/ld-analyse | grep "/qt-6/plugins" | sort -u || true)
+          PLUGIN_PATHS=$(strings -n 8 result/bin/tbc-analyse.app/Contents/MacOS/tbc-analyse | grep "/qt-6/plugins" | sort -u || true)
           if [ -z "$PLUGIN_PATHS" ]; then
-            echo "No Qt plugin paths detected in Nix-built ld-analyse binary"
+            echo "No Qt plugin paths detected in Nix-built tbc-analyse binary"
             exit 1
           fi
           while IFS= read -r p; do
@@ -561,7 +561,7 @@ jobs:
             exit 1
           fi
           # vhs-teletext vendor payload must be bundled at the resolver path so
-          # ld-process-vbi's teletext HTML export can find teletext/__main__.py.
+          # tbc-process-vbi's teletext HTML export can find teletext/__main__.py.
           if [ ! -f "dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext/teletext/__main__.py" ]; then
             echo "Missing vhs-teletext vendor payload: dist/tbc-tools.app/Contents/MacOS/vendor/vhs-teletext/teletext/__main__.py"
             exit 1
@@ -669,11 +669,11 @@ jobs:
             exit 1
           fi
           echo "\nMain executable dependencies:"
-          otool -L dist/tbc-tools.app/Contents/MacOS/ld-analyse 2>/dev/null | head -10 || echo "Could not check dependencies"
+          otool -L dist/tbc-tools.app/Contents/MacOS/tbc-analyse 2>/dev/null | head -10 || echo "Could not check dependencies"
           echo "\nMain executable rpaths:"
-          otool -l dist/tbc-tools.app/Contents/MacOS/ld-analyse | grep -A2 LC_RPATH || true
-          if ! otool -l dist/tbc-tools.app/Contents/MacOS/ld-analyse | grep -q LC_RPATH; then
-            echo "No LC_RPATH entries found in ld-analyse"
+          otool -l dist/tbc-tools.app/Contents/MacOS/tbc-analyse | grep -A2 LC_RPATH || true
+          if ! otool -l dist/tbc-tools.app/Contents/MacOS/tbc-analyse | grep -q LC_RPATH; then
+            echo "No LC_RPATH entries found in tbc-analyse"
             exit 1
           fi
           echo "\nScanning for /nix/store references:"
@@ -791,7 +791,7 @@ jobs:
             fi
           done < <(find "$APP_ARM" -type f -print0)
 
-          BIN="$APP_UNI/Contents/MacOS/ld-analyse"
+          BIN="$APP_UNI/Contents/MacOS/tbc-analyse"
           if [ ! -f "$BIN" ]; then
             echo "Missing merged main executable: $BIN"
             exit 1

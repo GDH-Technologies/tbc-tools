@@ -208,7 +208,7 @@ class ProgramState:
     def source_field_order(self) -> FieldOrder:
         """Derive the output field order (TFF/BFF) from the source + output framing.
 
-        Replicates ld-chroma-decoder's OutputWriter field-order logic
+        Replicates tbc-chroma-decoder's OutputWriter field-order logic
         (outputwriter.cpp:174): the weaved frame is TFF when
         ``firstActiveFrameLine % 2 == topPadLines % 2``, else BFF. Computing
         this here lets the ``--field-order auto`` default feed ``setfield`` the

@@ -798,7 +798,7 @@ void testFieldNumberingIntegrity()
 
     // An out-of-range field number logs and hands back empty metadata. It used
     // to log and then index the vector anyway, which is what crashed
-    // ld-analyse on a damaged database. The qCritical lines below are the
+    // tbc-analyse on a damaged database. The qCritical lines below are the
     // expected output of this block, not a failure.
     {
         TbcMetaData metaData;

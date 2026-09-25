@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class ParserLDDropoutCorrect(Parser):
-    """Parser for ld-dropout-correct process."""
+    """Parser for tbc-dropout-correct process."""
 
     def __init__(self, process_name: ProcessName) -> None:
         super().__init__(process_name)

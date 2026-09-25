@@ -71,8 +71,8 @@ bool parseInt(const QCommandLineParser &parser, const QCommandLineOption &option
     return true;
 }
 
-// The chroma TBC beside a luma one, paired the way ld-analyse pairs them when
-// it opens a luma file (TbcSource::startBackgroundLoad, src/ld-analyse/
+// The chroma TBC beside a luma one, paired the way tbc-analyse pairs them when
+// it opens a luma file (TbcSource::startBackgroundLoad, src/tbc-analyse/
 // tbcsource.cpp): a .tbcy/.ytbc luma takes the matching .tbcc/.ctbc, and a
 // plain .tbc luma takes tbc-video-export's <stem>_chroma.tbc, vhs-decode's
 // chroma_<stem>.tbc, or an alternate-extension sibling, in that order.

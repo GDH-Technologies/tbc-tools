@@ -436,7 +436,7 @@ jobs:
         id: smoke
         # Resolve the binaries from the store path that was just installed,
         # not from PATH. The PATH form passed on wm and failed on air0 for a
-        # deploy that had entirely succeeded: `command -v ld-analyse` returned
+        # deploy that had entirely succeeded: `command -v tbc-analyse` returned
         # nothing in 30ms because the runner service there does not have the
         # nix profile's bin on PATH. That is a property of the runner's
         # environment, not of the deployment, and it must not fail a good
@@ -450,7 +450,7 @@ jobs:
           # Scope this to the tbc-tools record. `nix profile list` prints every
           # entry in the profile, and taking the first "Store paths:" line
           # anywhere picked up decode-orc on wm, which sorts first -- so the
-          # check looked for ld-analyse inside the wrong package and failed a
+          # check looked for tbc-analyse inside the wrong package and failed a
           # deploy that had succeeded. Reading the first match was an ordering
           # assumption, the same shape of mistake as the PATH assumption this
           # block replaced.
@@ -471,22 +471,22 @@ jobs:
           esac
           echo "Installed store path: $STORE"
           # The GUI binary is laid out differently per platform, so check both
-          # rather than assume: Linux installs bin/ld-analyse, macOS installs a
-          # bundle at bin/ld-analyse.app/Contents/MacOS/ld-analyse. Asserting
+          # rather than assume: Linux installs bin/tbc-analyse, macOS installs a
+          # bundle at bin/tbc-analyse.app/Contents/MacOS/tbc-analyse. Asserting
           # the Linux path failed every air0 deploy -- correctly reporting a
           # file that genuinely is not there, for a build that was perfectly
           # fine.
           GUI=""
           for candidate in \
-            "$STORE/bin/ld-analyse" \
-            "$STORE/bin/ld-analyse.app/Contents/MacOS/ld-analyse"; do
+            "$STORE/bin/tbc-analyse" \
+            "$STORE/bin/tbc-analyse.app/Contents/MacOS/tbc-analyse"; do
             if [ -x "$candidate" ]; then
               GUI="$candidate"
               break
             fi
           done
           if [ -z "$GUI" ]; then
-            echo "No ld-analyse in $STORE/bin (checked the plain and .app layouts):" >&2
+            echo "No tbc-analyse in $STORE/bin (checked the plain and .app layouts):" >&2
             ls -la "$STORE/bin" >&2 || true
             exit 1
           fi
@@ -496,7 +496,7 @@ jobs:
           # the one that can actually be executed here as a launch test.
           "$STORE/bin/tbc-video-export" --version
 
-          # Non-fatal, and probed with tbc-video-export rather than ld-analyse:
+          # Non-fatal, and probed with tbc-video-export rather than tbc-analyse:
           # on macOS the GUI is only ever a bundle, so its absence from PATH
           # says nothing, whereas the CLI tool should be reachable on both.
           if ! command -v tbc-video-export >/dev/null 2>&1; then
@@ -566,7 +566,7 @@ jobs:
       - name: Smoke test and report
         # Resolve the binaries from the store path that was just installed,
         # not from PATH. The PATH form passed on wm and failed on air0 for a
-        # deploy that had entirely succeeded: `command -v ld-analyse` returned
+        # deploy that had entirely succeeded: `command -v tbc-analyse` returned
         # nothing in 30ms because the runner service there does not have the
         # nix profile's bin on PATH. That is a property of the runner's
         # environment, not of the deployment, and it must not fail a good
@@ -580,7 +580,7 @@ jobs:
           # Scope this to the tbc-tools record. `nix profile list` prints every
           # entry in the profile, and taking the first "Store paths:" line
           # anywhere picked up decode-orc on wm, which sorts first -- so the
-          # check looked for ld-analyse inside the wrong package and failed a
+          # check looked for tbc-analyse inside the wrong package and failed a
           # deploy that had succeeded. Reading the first match was an ordering
           # assumption, the same shape of mistake as the PATH assumption this
           # block replaced.
@@ -601,22 +601,22 @@ jobs:
           esac
           echo "Installed store path: $STORE"
           # The GUI binary is laid out differently per platform, so check both
-          # rather than assume: Linux installs bin/ld-analyse, macOS installs a
-          # bundle at bin/ld-analyse.app/Contents/MacOS/ld-analyse. Asserting
+          # rather than assume: Linux installs bin/tbc-analyse, macOS installs a
+          # bundle at bin/tbc-analyse.app/Contents/MacOS/tbc-analyse. Asserting
           # the Linux path failed every air0 deploy -- correctly reporting a
           # file that genuinely is not there, for a build that was perfectly
           # fine.
           GUI=""
           for candidate in \
-            "$STORE/bin/ld-analyse" \
-            "$STORE/bin/ld-analyse.app/Contents/MacOS/ld-analyse"; do
+            "$STORE/bin/tbc-analyse" \
+            "$STORE/bin/tbc-analyse.app/Contents/MacOS/tbc-analyse"; do
             if [ -x "$candidate" ]; then
               GUI="$candidate"
               break
             fi
           done
           if [ -z "$GUI" ]; then
-            echo "No ld-analyse in $STORE/bin (checked the plain and .app layouts):" >&2
+            echo "No tbc-analyse in $STORE/bin (checked the plain and .app layouts):" >&2
             ls -la "$STORE/bin" >&2 || true
             exit 1
           fi
@@ -626,7 +626,7 @@ jobs:
           # the one that can actually be executed here as a launch test.
           "$STORE/bin/tbc-video-export" --version
 
-          # Non-fatal, and probed with tbc-video-export rather than ld-analyse:
+          # Non-fatal, and probed with tbc-video-export rather than tbc-analyse:
           # on macOS the GUI is only ever a bundle, so its absence from PATH
           # says nothing, whereas the CLI tool should be reachable on both.
           if ! command -v tbc-video-export >/dev/null 2>&1; then
@@ -702,7 +702,7 @@ jobs:
           $staging = "$dest.new"
           $backup  = "$dest.prev"
 
-          if (-not (Test-Path (Join-Path $src 'ld-analyse.exe'))) {
+          if (-not (Test-Path (Join-Path $src 'tbc-analyse.exe'))) {
             throw "Source tree does not look like a tbc-tools release: $src"
           }
           # Whatever the source, workspace or artifact, it must have been built
@@ -745,7 +745,7 @@ jobs:
           }
           Remove-Item -Recurse -Force $backup -ErrorAction SilentlyContinue
 
-          # tbc-video-export, not ld-analyse: the latter is a GUI app and can
+          # tbc-video-export, not tbc-analyse: the latter is a GUI app and can
           # block or pop a window on an interactive session.
           & (Join-Path $dest 'tbc-video-export.exe') --version
 

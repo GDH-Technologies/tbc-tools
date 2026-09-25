@@ -7,7 +7,7 @@ ACTIONLINT_FALLBACK_VERSION="1.7.12"
 MODE="${1:---all}"
 
 usage() {
-  echo "Usage: $0 [--all|--guardrails-only|--build-test-only]" >&2
+  echo "Usage: $0 [--all|--guardrails-only|--build-test-only|--python-tests-only]" >&2
 }
 
 require_cmd() {
@@ -162,6 +162,21 @@ run_full_build_and_test() {
   nix develop -c ctest --test-dir build --output-on-failure
 }
 
+run_python_tests() {
+  cd "$ROOT_DIR"
+  require_cmd nix
+  local venv_bin="$ROOT_DIR/src/tbc-video-export/.venv/bin"
+  local build_bin="$ROOT_DIR/build/bin"
+  if [[ ! -x "$venv_bin/pytest" ]]; then
+    echo "Skipping python tests: src/tbc-video-export/.venv has no pytest (create the venv to enable)" >&2
+    return 0
+  fi
+  # Run inside the root Nix dev shell so the tests use the same bundled/pulled
+  # ffmpeg as the release builds (the AV1 profiles need libsvtav1, which the
+  # stock distro ffmpeg lacks), with build/bin providing the renamed tools.
+  nix develop -c sh -c "export PATH=\"$venv_bin:$build_bin:\$PATH\"; cd src/tbc-video-export && pytest tests -q"
+}
+
 if [[ "$#" -gt 1 ]]; then
   usage
   exit 2
@@ -171,12 +186,16 @@ case "$MODE" in
   --all)
     run_guardrails
     run_full_build_and_test
+    run_python_tests
     ;;
   --guardrails-only)
     run_guardrails
     ;;
   --build-test-only)
     run_full_build_and_test
+    ;;
+  --python-tests-only)
+    run_python_tests
     ;;
   *)
     usage

@@ -1,6 +1,6 @@
 """Field-order computation for tbc-video-export.
 
-Replicates the field-order logic from ld-chroma-decoder's OutputWriter
+Replicates the field-order logic from tbc-chroma-decoder's OutputWriter
 (``outputwriter.cpp``): the weaved output frame is Top-Field-First (TFF) when
 ``firstActiveFrameLine % 2 == topPadLines % 2``, otherwise Bottom-Field-First
 (BFF).
@@ -15,7 +15,7 @@ ProgramState.
 """
 from __future__ import annotations
 
-# Default output padding used by ld-chroma-decoder when neither the user nor
+# Default output padding used by tbc-chroma-decoder when neither the user nor
 # the active-line preset overrides it (OutputWriter::Configuration::paddingAmount).
 DEFAULT_PADDING = 8
 
