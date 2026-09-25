@@ -3,8 +3,7 @@
 
 This is the complete suite of tools for processing TBC (Time Base Corrected) files from the decode projects
 
--
-[vhs-decode](https://github.com/oyvindln/vhs-decode/wiki) & [cvbs-decode](https://github.com/oyvindln/vhs-decode/wiki/CVBS-Composite-Decode)
+- [vhs-decode](https://github.com/oyvindln/vhs-decode/wiki) & [cvbs-decode](https://github.com/oyvindln/vhs-decode/wiki/CVBS-Composite-Decode)
 - [Tape Decode Rust](https://github.com/harrypm/tape-decode-rust)
 - [Decode Dot Net](https://github.com/JunliangRen/vhs-decode-dotnet)
 
