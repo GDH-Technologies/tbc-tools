@@ -163,8 +163,11 @@ jobs:
           fleet_json="[]"
           rows=""
           for host in $FLEET; do
-            timeout 20 "${SSH[@]}" "$host" 'command -v nix' >/dev/null 2>&1
-            rc=$?
+            # The runner's default shell is `bash -e`, which `set -uo pipefail`
+            # does not turn off: a bare failing ssh here aborted the whole step
+            # with 255 on the first offline host instead of recording it.
+            rc=0
+            timeout 20 "${SSH[@]}" "$host" 'command -v nix' >/dev/null 2>&1 || rc=$?
             if [ "$rc" -eq 0 ]; then
               status="online"
               fleet_json="$(jq -c --arg h "$host" '. + [$h]' <<<"$fleet_json")"
