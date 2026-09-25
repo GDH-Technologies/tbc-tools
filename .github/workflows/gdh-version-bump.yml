@@ -22,6 +22,15 @@ name: "GDH version bump"
 # fleet reporting the previous version. workflow_dispatch is one of the
 # documented exceptions to that rule, so asking for the run directly works
 # where the push does not.
+#
+# That dispatch is optional (input `deploy`). The version is compiled into every
+# binary and .gdh-version is part of the Nix source, so a bump-only commit is a
+# new derivation on every platform with no PR build to reuse: deploying it
+# recompiles tbc-tools on wm, air0 and win0 just to change the number. With
+# deploy=false the tag and .gdh-version still land on main, and the fleet picks
+# the new version up with the next real code deploy, whose rebuild happens
+# anyway. Until then hosts report the previous version plus the source hash,
+# and the code is identical -- only .gdh-version differs.
 
 permissions:
   contents: write
@@ -39,6 +48,11 @@ on:
         options: ["auto", "minor", "major"]
       dry_run:
         description: "Only print the proposal; do not create or push a tag"
+        required: false
+        default: true
+        type: boolean
+      deploy:
+        description: "Dispatch the fleet deploy after tagging (a full rebuild on every platform); false ships the version with the next code deploy"
         required: false
         default: true
         type: boolean
@@ -127,7 +141,7 @@ jobs:
         # this point, and a missed deploy is recoverable by dispatching the
         # workflow by hand, whereas failing here would report a version cut
         # that in fact succeeded.
-        if: ${{ inputs.dry_run == false && steps.propose.outputs.proceed == 'true' }}
+        if: ${{ inputs.dry_run == false && inputs.deploy && steps.propose.outputs.proceed == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,6 +153,13 @@ jobs:
             echo "Could not dispatch self-hosted-deploy.yml. The version is cut and pushed;" \
                  "run that workflow by hand to update the fleet." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Note that the deploy was deferred
+        if: ${{ inputs.dry_run == false && !inputs.deploy && steps.propose.outputs.proceed == 'true' }}
+        run: |
+          echo "Deploy not dispatched (deploy=false): the fleet picks up the new version" \
+               "with the next code deploy, or dispatch self-hosted-deploy.yml by hand." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Note that this was a dry run
         if: ${{ inputs.dry_run == true && steps.propose.outputs.proceed == 'true' }}
