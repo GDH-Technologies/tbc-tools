@@ -55,7 +55,15 @@ def parse_opts(
 
     # general
     general_opts = parser.add_argument_group("general")
-    general_opts.add_argument("input_file", type=str, help="Path to the TBC file.\n\n")
+    general_opts.add_argument(
+        "input_file",
+        type=str,
+        help=(
+            "Path to the TBC file: X.tbc, X.tbcy or X.ytbc.\n"
+            "The chroma file (X_chroma.tbc, X.tbcc or X.ctbc) may be given\n"
+            "instead; its luma is found beside it.\n\n"
+        ),
+    )
     general_opts.add_argument(
         "output_file",
         type=str,
