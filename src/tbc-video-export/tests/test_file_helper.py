@@ -280,3 +280,96 @@ class TestTBCJson:
                 assert (
                     e.value == f"{file.name} exists, use --overwrite or move the file."
                 )
+
+
+@pytest.mark.parametrize(
+    ("files", "input_file", "expected"),
+    [
+        pytest.param(
+            ["X.tbcy", "X.tbcc"],
+            "X.tbcy",
+            {TBCType.LUMA: "X.tbcy", TBCType.CHROMA: "X.tbcc"},
+            id="orc_pair",
+        ),
+        pytest.param(
+            ["X.tbcy", "X.tbcc"],
+            "X.tbcc",
+            {TBCType.LUMA: "X.tbcy", TBCType.CHROMA: "X.tbcc"},
+            id="orc_pair_chroma_input",
+        ),
+        pytest.param(
+            ["X.ytbc", "X.ctbc"],
+            "X.ytbc",
+            {TBCType.LUMA: "X.ytbc", TBCType.CHROMA: "X.ctbc"},
+            id="decode_orc_pair",
+        ),
+        pytest.param(
+            ["X.ytbc", "X.ctbc"],
+            "X.ctbc",
+            {TBCType.LUMA: "X.ytbc", TBCType.CHROMA: "X.ctbc"},
+            id="decode_orc_pair_chroma_input",
+        ),
+        pytest.param(
+            ["X.tbcy"],
+            "X.tbcy",
+            {TBCType.COMBINED: "X.tbcy"},
+            id="orc_lone_luma",
+        ),
+        pytest.param(
+            ["X.tbc", "X_chroma.tbc"],
+            "X_chroma.tbc",
+            {TBCType.LUMA: "X.tbc", TBCType.CHROMA: "X_chroma.tbc"},
+            id="legacy_pair_chroma_input",
+        ),
+        pytest.param(
+            ["X.tbc", "X_chroma.tbc", "X.tbcy", "X.tbcc"],
+            "X.tbcy",
+            {TBCType.LUMA: "X.tbcy", TBCType.CHROMA: "X.tbcc"},
+            id="suffix_picks_scheme",
+        ),
+        pytest.param(
+            ["X.tbc", "X_chroma.tbc", "X.tbcy", "X.tbcc"],
+            "X",
+            {TBCType.LUMA: "X.tbc", TBCType.CHROMA: "X_chroma.tbc"},
+            id="bare_name_prefers_legacy",
+        ),
+        pytest.param(
+            ["X.tbcy", "X.tbcc"],
+            "X",
+            {TBCType.LUMA: "X.tbcy", TBCType.CHROMA: "X.tbcc"},
+            id="bare_name_falls_back_to_orc",
+        ),
+    ],
+)
+def test_tbc_name_schemes(  # noqa: D103
+    program_state: Callable[[list[str], Path, str | None], ProgramState],
+    tmp_path: Path,
+    files: list[str],
+    input_file: str,
+    expected: dict[TBCType, str],
+) -> None:
+    for name in files:
+        tmp_path.joinpath(name).touch()
+    tmp_path.joinpath("X.tbc.json").write_bytes(
+        Path("tests/files/pal_svideo.tbc.json").read_bytes()
+    )
+
+    state = program_state([], tmp_path / input_file, None)
+    helper = state.file_helper
+
+    assert helper.tbcs == {k: tmp_path / v for k, v in expected.items()}
+    assert helper.input_name == tmp_path / "X"
+    assert helper.output_video_file == tmp_path / "X.mkv"
+    assert helper.tbc_json.file_name == tmp_path / "X.tbc.json"
+
+
+def test_tbc_name_schemes_lone_chroma(  # noqa: D103
+    program_state: Callable[[list[str], Path, str | None], ProgramState],
+    tmp_path: Path,
+) -> None:
+    tmp_path.joinpath("X.tbcc").touch()
+
+    with pytest.raises(exceptions.TBCError) as e:
+        program_state([], tmp_path / "X.tbcc", None)
+
+    assert str(e.value) == "Location contains chroma TBC but no luma TBC."

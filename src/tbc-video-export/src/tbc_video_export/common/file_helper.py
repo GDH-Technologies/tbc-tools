@@ -15,6 +15,33 @@ if TYPE_CHECKING:
     from tbc_video_export.config.config import Config
     from tbc_video_export.opts import Opts
 
+# (luma suffix, chroma suffix) of each TBC naming scheme, in the order a bare
+# input name (no known suffix) tries them: legacy, vhs-decode --orc, decode-orc.
+TBC_NAME_SCHEMES: list[tuple[str, str]] = [
+    (".tbc", "_chroma.tbc"),
+    (".tbcy", ".tbcc"),
+    (".ytbc", ".ctbc"),
+]
+
+
+def _resolve_input(input_file: str) -> tuple[str, list[tuple[str, str]]]:
+    """Return the base name of an input TBC and the naming schemes to try.
+
+    A known luma or chroma suffix picks its scheme, so a chroma file resolves to
+    the luma beside it. Chroma suffixes are matched first so that _chroma.tbc
+    is not read as a .tbc luma.
+    """
+    name = Path(input_file).name
+    lower_name = name.lower()
+
+    for suffix_idx in (1, 0):
+        for scheme in TBC_NAME_SCHEMES:
+            suffix = scheme[suffix_idx]
+            if lower_name.endswith(suffix) and len(name) > len(suffix):
+                return name[: -len(suffix)], [scheme]
+
+    return Path(input_file).stem, TBC_NAME_SCHEMES
+
 
 class FileHelper:
     """Helper for files.
@@ -38,9 +65,10 @@ class FileHelper:
         self._input_path = self._output_path = Path(self._opts.input_file).parent
 
         # path to file
-        self._input_file_name = self._output_file_name = Path(
+        self._input_file_name, self._tbc_name_schemes = _resolve_input(
             self._opts.input_file
-        ).stem
+        )
+        self._output_file_name = self._input_file_name
 
         # set output file path/name if set to new path
         if self._opts.output_file is not None:
@@ -213,18 +241,22 @@ class FileHelper:
         """Create a dict containing the absolute path to the TBC files based on type."""
         tbcs: dict[TBCType, Path] = {}
 
-        # input files
-        tbc = f"{self.input_name}.tbc"
-        tbc_chroma = f"{self.input_name}_chroma.tbc"
+        # input files, from the first naming scheme with any file present
+        for luma_suffix, chroma_suffix in self._tbc_name_schemes:
+            tbc = Path(f"{self.input_name}{luma_suffix}")
+            tbc_chroma = Path(f"{self.input_name}{chroma_suffix}")
 
-        if (tbc_chroma := Path(tbc_chroma)).is_file():
-            tbcs[TBCType.CHROMA] = tbc_chroma
+            if tbc_chroma.is_file():
+                tbcs[TBCType.CHROMA] = tbc_chroma
 
-        if (tbc := Path(tbc)).is_file():
-            if TBCType.CHROMA in tbcs:
-                tbcs[TBCType.LUMA] = tbc
-            else:
-                tbcs[TBCType.COMBINED] = tbc
+            if tbc.is_file():
+                if TBCType.CHROMA in tbcs:
+                    tbcs[TBCType.LUMA] = tbc
+                else:
+                    tbcs[TBCType.COMBINED] = tbc
+
+            if tbcs:
+                break
 
         # ensure tbcs exist
         if len(tbcs) == 0:
