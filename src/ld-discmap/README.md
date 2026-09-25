@@ -74,7 +74,7 @@ ld-discmap -n input.tbc output.tbc
 ## Troubleshooting
 
 ### VBI mapping errors
-- Ensure ld-process-vbi was run first
+- Ensure tbc-process-vbi was run first
 - Check that VBI data is present in metadata
 - Some discs have poor VBI data quality
 
@@ -86,7 +86,7 @@ ld-discmap -n input.tbc output.tbc
 ### Field order issues
 - Try --reverse option
 - Verify metadata has correct field order
-- Check with ld-analyse
+- Check with tbc-analyse
 
 ### Audio sync problems
 - Ensure audio processing is enabled (remove -n)

@@ -1,7 +1,7 @@
 # PAL decode guide
 
 
-The following is a series of notes about how to use FFmpeg to convert the output from ld-decode (and ld-chroma-decoder) into usable video that can be watched using any compatible video player such as [VLC](https://www.videolan.org/) or [MPC](https://mpc-hc.org/).
+The following is a series of notes about how to use FFmpeg to convert the output from ld-decode (and tbc-chroma-decoder) into usable video that can be watched using any compatible video player such as [VLC](https://www.videolan.org/) or [MPC](https://mpc-hc.org/).
 
 Information is compiled from a number of sources; however the project would like to thank Stephen Neal for his valuable advice on this subject.
 
@@ -60,7 +60,7 @@ To convert the TBC output to playable video, you need to do the following:
 ## Chroma-Decoder basic use
 
 
-See the [ld-chroma-decoder wiki page](../Tools/ld-chroma-decoder.md) for full possible options.
+See the [tbc-chroma-decoder wiki page](../Tools/tbc-chroma-decoder.md) for full possible options.
 
 The majorty of users today will just want to use a YUV stream via y4m output from the chroma-decoder and a pipe to FFmpeg allowing easy creation of standard video files.
 
@@ -72,15 +72,15 @@ Lets breakdown a combined command that decodes the chroma and encodes a V210 unc
 
 `INPUT.tbc` & `OUTPUT.mov` just need to be changed to use this command right now on your decoded media!
 
-`ld-chroma-decoder --decoder transform3d -p y4m -q INPUT.tbc| ffmpeg -i - -c:v v210 -f mov -top 1 -vf setfield=tff -flags +ilme+ildct -pix_fmt yuv422p10le -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf setdar=4/3,setfield=tff OUTPUT.mov`
+`tbc-chroma-decoder --decoder transform3d -p y4m -q INPUT.tbc| ffmpeg -i - -c:v v210 -f mov -top 1 -vf setfield=tff -flags +ilme+ildct -pix_fmt yuv422p10le -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf setdar=4/3,setfield=tff OUTPUT.mov`
 
 ----
 
 The first stage is the chroma-decoder arguments.
 
-`ld-chroma-decoder --decoder transform3d --output-format y4m input.tbc| ffmpeg -i -`
+`tbc-chroma-decoder --decoder transform3d --output-format y4m input.tbc| ffmpeg -i -`
 
-`ld-chroma-decoder` - Calls the application a `./` might be needed at the start (ld-chroma-decoder.exe in windows)
+`tbc-chroma-decoder` - Calls the application a `./` might be needed at the start (tbc-chroma-decoder.exe in windows)
 
 `--decoder transform3d` - Tells the chroma-decoder to use the PAL Transform 3D decoder on the signal.
 
@@ -148,11 +148,11 @@ TBC Video Export:
 
 NTSC:
 
-    ld-chroma-decoder --ffll 1 --lfll 259 --ffrl 2 --lfrl 525 --decoder ntsc3d -p y4m -q INPUT.tbc OUTPUT.mov
+    tbc-chroma-decoder --ffll 1 --lfll 259 --ffrl 2 --lfrl 525 --decoder ntsc3d -p y4m -q INPUT.tbc OUTPUT.mov
 
 PAL:
 
-    ld-chroma-decoder --ffll 2 --lfll 308 --ffrl 2 --lfrl 620 --decoder transform3d -p y4m -q INPUT.tbc OUTPUT.mov
+    tbc-chroma-decoder --ffll 2 --lfll 308 --ffrl 2 --lfrl 620 --decoder transform3d -p y4m -q INPUT.tbc OUTPUT.mov
 
 
 # Complete FFmpeg examples
@@ -176,11 +176,11 @@ To add PCM analogue audio to the encoding add the following parameters before th
 
 To chroma decode the .tbc file and combine analogue sound (pcm) with the video, use the following command line:
 
-`ld-chroma-decoder --decoder transform3d input.tbc -p y4m | ffmpeg -f s16le -ar 44.1k -ac 2 -i input.pcm -i - -pix_fmt yuv420p -vcodec libx264 -crf 18 -flags +ildct+ilme -aspect 768:576 output.576i25.mp4`
+`tbc-chroma-decoder --decoder transform3d input.tbc -p y4m | ffmpeg -f s16le -ar 44.1k -ac 2 -i input.pcm -i - -pix_fmt yuv420p -vcodec libx264 -crf 18 -flags +ildct+ilme -aspect 768:576 output.576i25.mp4`
 
 To export a more practical codec for editing or post production you can encode to ProRes HQ.
 
-`ld-chroma-decoder --decoder transform3d -p y4m -q input.tbc | ffmpeg -i - -c:v prores -profile:v 3 -vendor apl0 -bits_per_mb 8000 -quant_mat hq -f mov -top 1 -vf setfield=tff -flags +ilme+ildct -pix_fmt yuv422p10 -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf setdar=4/3,setfield=tff OUTPUT.mov`
+`tbc-chroma-decoder --decoder transform3d -p y4m -q input.tbc | ffmpeg -i - -c:v prores -profile:v 3 -vendor apl0 -bits_per_mb 8000 -quant_mat hq -f mov -top 1 -vf setfield=tff -flags +ilme+ildct -pix_fmt yuv422p10 -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf setdar=4/3,setfield=tff OUTPUT.mov`
 
 
 ## Encode with deinterlacing
@@ -190,11 +190,11 @@ To export a more practical codec for editing or post production you can encode t
 
 Decode the .tbc file, deinterlace with w3fdif, and combine analogue sound (pcm) with the video:
 
-`ld-chroma-decoder -p y4m --decoder transform3d input.tbc | ffmpeg -f s16le -ar 44.1k -ac 2 -i input.pcm -i - -filter:v "w3fdif=complex:all" -pix_fmt yuv420p -c:v libx264 -crf 18 -aspect 768:576 "output.576p50.mp4"`
+`tbc-chroma-decoder -p y4m --decoder transform3d input.tbc | ffmpeg -f s16le -ar 44.1k -ac 2 -i input.pcm -i - -filter:v "w3fdif=complex:all" -pix_fmt yuv420p -c:v libx264 -crf 18 -aspect 768:576 "output.576p50.mp4"`
 
 Decode the .tbc file, deinterlace with bwdif, and combine analogue sound (pcm) with the video:
 
-`ld-chroma-decoder -p y4m --decoder transform3d input.tbc| ffmpeg -f s16le -ar 44.1k -ac 2 -i input.pcm -i - -filter:v "bwdif=1" -pix_fmt yuv420p -c:v libx264 -crf 16 -flags +ildct+ilme -aspect 768:576 output.576p50.mp4`
+`tbc-chroma-decoder -p y4m --decoder transform3d input.tbc| ffmpeg -f s16le -ar 44.1k -ac 2 -i input.pcm -i - -filter:v "bwdif=1" -pix_fmt yuv420p -c:v libx264 -crf 16 -flags +ildct+ilme -aspect 768:576 output.576p50.mp4`
 
 
 ## Online Usage
@@ -205,14 +205,14 @@ For upload to YouTube (deinterlaced files only) it is recommended to scale the v
 - FFV1 (If under size limit)
 - HEVC (120mbps for 50/59.97p)
 
-`ld-chroma-decoder --decoder transform3d -p y4m -q input.tbc | ffmpeg -i - -f s16le -ar 44.1k -ac 2 -c:v prores -profile:v 3 -vendor apl0 -bits_per_mb 8000 -quant_mat hq -f mov -top 1 -pix_fmt yuv422p10 -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf bwdif=1:0:0 -vf scale=2880x2176:flags=lanczos -aspect 768:576 output_ProRes_HQ_YT.mov`
+`tbc-chroma-decoder --decoder transform3d -p y4m -q input.tbc | ffmpeg -i - -f s16le -ar 44.1k -ac 2 -c:v prores -profile:v 3 -vendor apl0 -bits_per_mb 8000 -quant_mat hq -f mov -top 1 -pix_fmt yuv422p10 -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf bwdif=1:0:0 -vf scale=2880x2176:flags=lanczos -aspect 768:576 output_ProRes_HQ_YT.mov`
 
 
 The `.mov` container is used for compliance as the codec used is ProRes HQ which is natively supported by YouTube in either container so if you do not need it for complince on editing or playback hardware or are storing the file long term you are better off using the `.mkv` container which is harder to damage and easyer to stream/upload due to not being headder dependent.
 
 For platforms that don't re-encode their uploaded files like [Odysee](https://odysee.com/), you can use a lower bitrate native SD file with this re-encoding script:
 
-`ld-chroma-decoder --decoder transform3d -p y4m -q input.tbc | ffmpeg -i - -f s16le -ar 44.1k -ac 2 -c:v libx264 -bufsize 16000k -crf 20 -maxrate 8000k -movflags +faststart -pix_fmt yuv420p -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf bwdif=1:0:0 -vf -aspect 768:576 output_web.mov`
+`tbc-chroma-decoder --decoder transform3d -p y4m -q input.tbc | ffmpeg -i - -f s16le -ar 44.1k -ac 2 -c:v libx264 -bufsize 16000k -crf 20 -maxrate 8000k -movflags +faststart -pix_fmt yuv420p -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg -color_range tv -vf bwdif=1:0:0 -vf -aspect 768:576 output_web.mov`
 
 The mov or mp4 container is recommended for web-browser support.
 
@@ -411,7 +411,7 @@ Then you can `-map "[left]"` to only include the left channel analog audio chann
 
 --------------
 
-    ld-chroma-decoder --decoder ntsc3d -p y4m -q "$input" | ffmpeg -y -i - \
+    tbc-chroma-decoder --decoder ntsc3d -p y4m -q "$input" | ffmpeg -y -i - \
     -i digital-audio.dts \
     -f s16le -ar $analog_rate -ac 2 -i output.pcm \
     -i ffdata \

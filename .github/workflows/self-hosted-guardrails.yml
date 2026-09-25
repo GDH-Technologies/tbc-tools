@@ -13,7 +13,7 @@ name: "Self-hosted CI guardrails (wm)"
 # in the platform workflows and only the guardrails live here.
 #
 # Deliberately UNFILTERED, unlike the platform workflows. It costs seconds, and
-# check_ci_contracts.py validates source files too -- src/ld-analyse's export
+# check_ci_contracts.py validates source files too -- src/tbc-analyse's export
 # dialog, tbc-video-export's field-order helpers -- so a paths filter would
 # create blind spots. It is also the only workflow here eligible to be a
 # required status check: the path-gated ones produce no run at all for a PR

@@ -1,14 +1,14 @@
 title: Tools
 nav:
   - ld-decode.md
-  - ld-analyse.md
-  - ld-chroma-decoder.md
-  - ld-chroma-encoder.md
+  - tbc-analyse.md
+  - tbc-chroma-decoder.md
+  - tbc-chroma-encoder.md
   - ld-disc-stacker.md
   - ld-discmap.md
-  - ld-dropout-correct.md
+  - tbc-dropout-correct.md
   - tbc-export-metadata.md
   - tbc-segments.md
   - ld-lds-converter.md
   - ld-process-efm.md
-  - ld-process-vbi.md
+  - tbc-process-vbi.md

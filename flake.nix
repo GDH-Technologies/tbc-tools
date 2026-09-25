@@ -169,7 +169,7 @@
               # CMake file references cc_decoder), so they are always dropped.
               isSubmoduleMount = type == "directory"
                 && (pkgs.lib.hasSuffix "/src/efm-decoder/libs/ezpwd" path
-                    || pkgs.lib.hasSuffix "/src/ld-process-vbi/vendor/cc_decoder" path);
+                    || pkgs.lib.hasSuffix "/src/tbc-process-vbi/vendor/cc_decoder" path);
             in
               !(base == ".git" || base == "build" || base == "result" || isSubmoduleMount || notBuildInput);
         };

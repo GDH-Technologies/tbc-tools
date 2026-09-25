@@ -51,7 +51,7 @@ class WrapperLDChromaDecoder(Wrapper):
         )
 
     def _get_gain_nr_opts(self) -> FlatList:
-        """Return ld-chroma-decoder opts."""
+        """Return tbc-chroma-decoder opts."""
         gain_nr_opts = FlatList()
 
         if self._config.tbc_type in (TBCType.LUMA, TBCType.COMBINED):
@@ -195,7 +195,7 @@ class WrapperLDChromaDecoder(Wrapper):
         return None
 
     def _get_misc_opts(self) -> FlatList:
-        """Return ld-chroma-decoder opts."""
+        """Return tbc-chroma-decoder opts."""
         decoder_opts = FlatList()
 
         thread_count = self._state.opts.threads

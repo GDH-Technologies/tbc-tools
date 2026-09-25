@@ -28,10 +28,10 @@ The build output will be available under `./result`.
 ### Run from the build output
 
 ```bash
-./result/bin/ld-analyse
+./result/bin/tbc-analyse
 ```
 
-Replace `ld-analyse` with any other tool from the suite.
+Replace `tbc-analyse` with any other tool from the suite.
 
 ## Notes
 
@@ -41,12 +41,12 @@ Replace `ld-analyse` with any other tool from the suite.
 ## Desktop integration (Linux)
 
 The Linux build ships file associations for the decode toolchain: the
-shared-mime-info packages that define the types, `ld-analyse.desktop`, the
+shared-mime-info packages that define the types, `tbc-analyse.desktop`, the
 application and mimetype icons, and `decode-desktop-sync`, which registers them.
 
 | Family | Types | Opened by |
 | --- | --- | --- |
-| TBC | `.tbc` `.tbcy` `.tbcc` `.ytbc` `.ctbc` `.tbc.db` `.tbc.json` | `ld-analyse` |
+| TBC | `.tbc` `.tbcy` `.tbcc` `.ytbc` `.ctbc` `.tbc.db` `.tbc.json` | `tbc-analyse` |
 | RF | video / hifi / combined captures, `.u8` and `.flac` | `decode-launcher`, `hifi-decode --gui` |
 | ORC | `.orcprj` | `orc-gui` |
 
@@ -78,7 +78,7 @@ Re-run it after upgrading, to pick up new application artwork.
 
 The assets come from `<prefix>/share/decode-desktop`; set
 `DECODE_DESKTOP_ASSET_DIR` to run against a checkout's
-`src/ld-analyse/install/` instead.
+`src/tbc-analyse/install/` instead.
 
 A `cmake --install` to a live prefix such as `/usr/local` refreshes the caches
 itself and needs no extra step. That is skipped when `DESTDIR` is set (the
@@ -88,7 +88,7 @@ packager owns the caches) or when the prefix is a nix store path; pass
 ### Entries for tools tbc-tools does not build
 
 `decode-launcher`, `hifi-decode` and `orc-gui` ship their own desktop entries
-from their own packages. The copies in `src/ld-analyse/install/` are *overrides*
+from their own packages. The copies in `src/tbc-analyse/install/` are *overrides*
 that add the `%f` placeholder and the `MimeType=` list those entries lack, and
 they are deliberately never installed into `share/applications` — decode-orc
 installs a file of the same name into the same profile, and two packages

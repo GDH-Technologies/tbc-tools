@@ -37,7 +37,7 @@ from field 0 of the file (`range.startField` lets a consumer rebase a
 I/O-bound (about 478 KB per NTSC field), which is why the results are stored.
 
 The analysis itself lives in the tbc library (`src/library/tbc/segments.h`);
-this command is a thin front end so ld-analyse and tbc-export-metadata derive
+this command is a thin front end so tbc-analyse and tbc-export-metadata derive
 exactly the same segments.
 
 ## Usage
@@ -96,7 +96,7 @@ stopped early leaves a described prefix and an undescribed tail.
 ### Finding the chroma TBC
 
 `--chroma-tbc` is normally unnecessary: the chroma beside the luma is found the
-same way ld-analyse finds it. A `.tbcy` luma pairs with `.tbcc` and a `.ytbc`
+same way tbc-analyse finds it. A `.tbcy` luma pairs with `.tbcc` and a `.ytbc`
 with `.ctbc`; a plain `.tbc` luma tries `<stem>_chroma.tbc`, then
 `chroma_<stem>.tbc`, then `<stem>.ctbc`, then `<stem>.tbcc`.
 
@@ -143,7 +143,7 @@ treatment once, with `--tbc … --write`: the walked metrics are stored (a
 projection), reconstructed `gap` / `skipped_field` / `duplicate_field` events
 are stored with `source: "tbc-segments"` (never when the decoder wrote its
 own), and `--write-segments` stores the derived segments. Segments stored in
-the metadata, by this tool or by ld-analyse's Segments viewer, are what the
+the metadata, by this tool or by tbc-analyse's Segments viewer, are what the
 report shows; the derivation runs only when none are stored.
 
 ### Why the RF rate matters

@@ -1,7 +1,7 @@
 # tbc-tools Plugin System
 
 This document describes the plugin support model, user experience, and
-integration architecture for **ld-analyse's Plugin Manager**. It is the
+integration architecture for **tbc-analyse's Plugin Manager**. It is the
 canonical reference for how plugins are discovered, downloaded, verified,
 installed, removed, and routed — and for how to add a new plugin without
 rebuilding the application.
@@ -37,7 +37,7 @@ change, for any plugin that fits the `generic` backend.
 The catalog is a single JSON file committed to this repository at
 `plugins/catalog.json`. It is both:
 
-- **Bundled** into ld-analyse as a Qt resource (`:/plugins/catalog.json`),
+- **Bundled** into tbc-analyse as a Qt resource (`:/plugins/catalog.json`),
   so the manager always has a baseline list even with no network; and
 - **Fetched fresh** from the web every time the Plugin Manager window is
   opened, so newly-published plugins appear immediately.
@@ -189,7 +189,7 @@ enable/disable according to the selected plugin's backend and state.
    code-signed**, and shows the install path.
 3. Progress bar tracks the download; the log names each file as it
    downloads.
-4. On success: a message box prompts to **restart ld-analyse** for the
+4. On success: a message box prompts to **restart tbc-analyse** for the
    change to take effect. On failure: the error is shown and (for SHA-256
    mismatch) the partial install is quarantined.
 
@@ -197,7 +197,7 @@ enable/disable according to the selected plugin's backend and state.
 
 1. User clicks **Remove** and confirms.
 2. The install directory tree is deleted.
-3. A message box prompts to **restart ld-analyse**.
+3. A message box prompts to **restart tbc-analyse**.
 
 ### Offline / failure behaviour
 
@@ -220,7 +220,7 @@ PluginManagerDialog  (UI; backend-agnostic routing)
    '-- GenericPluginInstaller   (backend: generic; NEW)
 ```
 
-### `PluginCatalog` (`src/ld-analyse/plugincatalog.{h,cpp}`)
+### `PluginCatalog` (`src/tbc-analyse/plugincatalog.{h,cpp}`)
 
 Owns plugin discovery. Holds `PluginCatalogEntry` records parsed from the
 catalog JSON. Public surface:
@@ -235,11 +235,11 @@ catalog JSON. Public surface:
 - Signals: `catalogFetched(QList<PluginCatalogEntry>)`,
   `fetchFailed(QString)`.
 
-Uses the same `User-Agent` (`tbc-tools/<version> (ld-analyse plugin
+Uses the same `User-Agent` (`tbc-tools/<version> (tbc-analyse plugin
 catalog)`) and `NoLessSafeRedirectPolicy` request setup as the rest of
-ld-analyse's network code.
+tbc-analyse's network code.
 
-### `GenericPluginInstaller` (`src/ld-analyse/genericplugininstaller.{h,cpp}`)
+### `GenericPluginInstaller` (`src/tbc-analyse/genericplugininstaller.{h,cpp}`)
 
 Owns the `generic` backend lifecycle. Self-contained; does not touch
 `CudaPluginManager` or the `cudaPlugin` Configuration group.
@@ -259,7 +259,7 @@ Owns the `generic` backend lifecycle. Self-contained; does not touch
   currentFile)`, `installSucceeded(path)`, `installFailed(error)`,
   `removeSucceeded()`, `removeFailed(error)`.
 
-### `PluginManagerDialog` (`src/ld-analyse/pluginmanagerdialog.{h,cpp}`)
+### `PluginManagerDialog` (`src/tbc-analyse/pluginmanagerdialog.{h,cpp}`)
 
 - Replaced its hardcoded `QList<PluginDescriptor>` with the catalog-driven
   `QList<PluginCatalogEntry>` from `PluginCatalog`.
@@ -272,7 +272,7 @@ Owns the `generic` backend lifecycle. Self-contained; does not touch
   handlers (log + `updateStatusDisplay()` + restart-prompt message box).
 - The dialog is parented to the main window, so the shared
   `MainWindow` application-wide `QEvent::Show` filter already centers it
-  over the main window (see AGENTS.md "ld-analyse sub-windows open
+  over the main window (see AGENTS.md "tbc-analyse sub-windows open
   centered"). No per-dialog `move()` centering is added.
 
 ## On-disk layout
@@ -358,10 +358,10 @@ this feature.
 
 ## Build wiring
 
-- `src/ld-analyse/ld-analyse-resources.qrc` embeds `plugins/catalog.json`
+- `src/tbc-analyse/tbc-analyse-resources.qrc` embeds `plugins/catalog.json`
   at resource path `:/plugins/catalog.json`.
-- `src/ld-analyse/CMakeLists.txt` lists `plugincatalog.cpp/.h` and
-  `genericplugininstaller.cpp/.h` in `ld-analyse_SOURCES`. The qrc is
+- `src/tbc-analyse/CMakeLists.txt` lists `plugincatalog.cpp/.h` and
+  `genericplugininstaller.cpp/.h` in `tbc-analyse_SOURCES`. The qrc is
   already processed by the existing `qt_add_resources` call, so no
   additional CMake change is needed for the resource.
 

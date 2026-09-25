@@ -384,7 +384,7 @@ inline void centerDialogOverParent(QWidget *dialog)
 // File dialogs
 //
 // One implementation for every GUI tool. This block previously existed as three
-// byte-identical copies (ld-analyse's exportdialog.cpp and
+// byte-identical copies (tbc-analyse's exportdialog.cpp and
 // metadataconversiondialog.cpp, plus tbc-export-metadata's
 // metadataexportdialog.cpp), which meant three places to keep in step and three
 // places deciding whether the dialog is native.

@@ -1,7 +1,7 @@
 # NTSC decode guide
 
 
-The following is a series of notes about how to use FFmpeg to convert the output from ld-decode (and ld-chroma-decoder) into usable video that can be watched using any compatible video player such as [VLC](https://www.videolan.org/) or [MPC](https://mpc-hc.org/).
+The following is a series of notes about how to use FFmpeg to convert the output from ld-decode (and tbc-chroma-decoder) into usable video that can be watched using any compatible video player such as [VLC](https://www.videolan.org/) or [MPC](https://mpc-hc.org/).
 
 
 # Identifying NTSC Material
@@ -73,7 +73,7 @@ Just edit the `input.doc.tbc` & `input.efm.pcm` with your input file names and `
 
 V210 4:2:2 YUV Uncompressed - The universal standard for uncompressed capture and encoding and is a supported codec in broadcast, sutible for editing or playback in the QuickTime MOV container.
 
-`ld-chroma-decoder input.doc.tbc -f ntsc2d -p y4m - | ffmpeg -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec v210 -f mov -top 1 -vf setfield=tff -flags +ilme+ildct -pix_fmt yuv422p10le -acodec copy -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv422p10 output.mov`
+`tbc-chroma-decoder input.doc.tbc -f ntsc2d -p y4m - | ffmpeg -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec v210 -f mov -top 1 -vf setfield=tff -flags +ilme+ildct -pix_fmt yuv422p10le -acodec copy -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv422p10 output.mov`
 
 
 ### Lossless Compressed Export
@@ -82,7 +82,7 @@ V210 4:2:2 YUV Uncompressed - The universal standard for uncompressed capture an
 While FFmpeg's video filters are convenient, for better results one can compress the video losslessly and work on it with more powerful video software such as avisynth/vpaoursynth via Hybrid, StaxRip today.
 
 
-`ld-chroma-decoder input.tbc -f ntsc2d -p y4m - | ffmpeg -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec ffv1 -level 3 -threads 8 -slices 8 -coder 1 -context 1 -g 1 -slicecrc 1 -acodec flac -compression_level 11 -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv422p10 output.mkv`
+`tbc-chroma-decoder input.tbc -f ntsc2d -p y4m - | ffmpeg -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec ffv1 -level 3 -threads 8 -slices 8 -coder 1 -context 1 -g 1 -slicecrc 1 -acodec flac -compression_level 11 -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv422p10 output.mkv`
 
 This example will convert the video to YUV422P10 (equivalent to 10-bit 4:2:2 SDI) and compress it losslessly with FFV1 in the `.mkv` mastroska container with `FLAC` 2:1 lossless compressed audio.
 
@@ -98,19 +98,19 @@ You can replace `ffv1` with `huffyuv` to use Huffyuv (another lossless intra cod
 
 A fair substitute using FFmpeg-only filters is:
 
-`ld-chroma-decoder input.tbc -f ntsc2d -p y4m - | ffmpeg -hide_banner -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec libx264 -preset slow -crf 16 -acodec flac -strict -2 -compression_level 8 -vf dedot=m=rainbows,yadif=mode=send_field:parity=auto -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv420p output.yadif.mcdeint.mp4 -y`
+`tbc-chroma-decoder input.tbc -f ntsc2d -p y4m - | ffmpeg -hide_banner -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec libx264 -preset slow -crf 16 -acodec flac -strict -2 -compression_level 8 -vf dedot=m=rainbows,yadif=mode=send_field:parity=auto -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv420p output.yadif.mcdeint.mp4 -y`
 
 This will output a 59.94p AVC/H.264 file, in the MP4 container. To output 29.97p, change `yadif=mode=send_field` to `yadif=mode=send_frame`.
 
 Pull-down material will look best restored to its original 23.976 framerate. This process is called inverse telecine (IVTC). FFmpeg has an IVTC filter ported from AviSynth and can do a fair job in most cases.
 
-`ld-chroma-decoder input.tbc -f ntsc2d -p y4m - | ffmpeg -hide_banner -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec libx264 -preset slow -crf 16 -acodec flac -strict -2 -compression_level 8 -vf dedot=m=rainbows,fieldmatch=order=auto:field=auto,decimate -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv420p output.ivtc.mp4 -y`
+`tbc-chroma-decoder input.tbc -f ntsc2d -p y4m - | ffmpeg -hide_banner -i - -f s16le -r 44.1k -ac 2 -i input.efm.pcm -vcodec libx264 -preset slow -crf 16 -acodec flac -strict -2 -compression_level 8 -vf dedot=m=rainbows,fieldmatch=order=auto:field=auto,decimate -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m -color_range tv -pix_fmt yuv420p output.ivtc.mp4 -y`
 
 This will output a 23.976p AVC/H.264 file, in the MP4 container.
 
 If there are many messages stating that fields are still interlaced and you see interlaced lines in the output, try changing the order from `auto` to `tff` or `bff` and `field` from `auto` to `bottom` or `top`.  If interlacing still remains, you may be dealing with hybrid film/video content and more advanced processing will be required. Nevertheless, you can use yadif `fieldmatch=order=tff:combmatch=full,yadif=deint=interlaced,decimate` but you may need to remove `,decimate` if the output is jerky.
 
-`dedot=m=rainbows` is a derainbowing filter and may cause artifacts.  It should be removed when ld-chroma-decoder has improved NTSC decoding.
+`dedot=m=rainbows` is a derainbowing filter and may cause artifacts.  It should be removed when tbc-chroma-decoder has improved NTSC decoding.
 
 Caveat: not all telecined sources are easy to work with. If there was mishandling in the mastering process, there can be blending of fields, which is more difficult to restore. Such sources can be identified by transparent-looking interlace lines. Either treat it as 59.94i material or see the VapourSynth examples below.
 

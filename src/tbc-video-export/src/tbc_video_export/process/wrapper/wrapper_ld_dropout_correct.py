@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class WrapperLDDropoutCorrect(Wrapper):
-    """Wrapper for ld-dropout-correct."""
+    """Wrapper for tbc-dropout-correct."""
 
     def __init__(self, state: ProgramState, config: WrapperConfig[None, Pipe]) -> None:
         self._config = config
@@ -107,21 +107,21 @@ class WrapperLDDropoutCorrect(Wrapper):
 
     @cached_property
     def ignore_error(self) -> bool:  # noqa: D102
-        # ld-dropout-correct does not support -l or -s flags and will
+        # tbc-dropout-correct does not support -l or -s flags and will
         # be killed when other procs are finished.
         # This is unfortunate as we would have to use more
         # complicated logic to determine a real crash from success.
-        # Currently we do not check any errors from ld-dropout-correct
+        # Currently we do not check any errors from tbc-dropout-correct
         # and assume all returncodes are success.
         return True
 
     @cached_property
     def stop_on_last_alive(self) -> bool:  # noqa: D102
         # On NT systems closing an os.pipe() does not kill the procs using
-        # the pipe. The result of this is ld-dropout-correct continuing
+        # the pipe. The result of this is tbc-dropout-correct continuing
         # to run after other procs have finished when using -l or -s.
         # This will signal to the proc killer to kill the process if it
         # is the only remaining proc type running.
-        # This is essentially a workaround until ld-dropout-correct
+        # This is essentially a workaround until tbc-dropout-correct
         # supports -s/-l or properly supports named pipes.
         return True

@@ -1,7 +1,7 @@
 """Regenerate the closed-caption mimetype icons.
 
 The SVGs and the PNG ladder under
-src/ld-analyse/install/icons/hicolor/*/mimetypes/ are committed artwork; this
+src/tbc-analyse/install/icons/hicolor/*/mimetypes/ are committed artwork; this
 script is what produced them, kept so they stay editable rather than being
 opaque binaries nobody can touch.
 

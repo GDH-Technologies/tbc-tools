@@ -125,7 +125,7 @@ class TBCJsonHelper:
         """Return firstActiveFrameLine from videoParameters when available.
 
         Used to derive the correct output field order (TFF/BFF), matching the
-        logic in ld-chroma-decoder's OutputWriter (outputwriter.cpp:174).
+        logic in tbc-chroma-decoder's OutputWriter (outputwriter.cpp:174).
         """
         return self._get_video_parameter_int("firstActiveFrameLine")
 

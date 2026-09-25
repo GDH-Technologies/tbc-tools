@@ -17,7 +17,7 @@ class VideoSystemData:
     vhs_decode/tools/library/tbc/lddecodemetadata.cpp
 
     Aspect ratio values from (default/widescreen):
-    vhs_decode/tools/ld-chroma-decoder/outputwriter.cpp
+    vhs_decode/tools/tbc-chroma-decoder/outputwriter.cpp
     """
 
     size: dict[VideoSizeType, Size]

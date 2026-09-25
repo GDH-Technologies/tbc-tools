@@ -56,12 +56,15 @@ def _matches_any(subject: str, *needles: str) -> bool:
     return any(needle.lower() in lowered for needle in needles)
 
 
-@register("ld-analyse")
-def _ld_analyse(subject: str) -> bool:
-    # Check ld-analyse before ld-lds-converter so a commit that touches both
-    # (e.g. "Add LDS Converter launcher to ld-analyse Tools menu") lands in the
-    # ld-analyse bucket, which is where the change actually lives.
-    return "ld-analyse" in subject.lower() or "ld analyse" in subject.lower()
+@register("tbc-analyse")
+def _tbc_analyse(subject: str) -> bool:
+    # Check tbc-analyse before ld-lds-converter so a commit that touches both
+    # (e.g. "Add LDS Converter launcher to tbc-analyse Tools menu") lands in the
+    # tbc-analyse bucket, which is where the change actually lives.
+    # "ld-analyse" is still accepted so commits from before the rename keep
+    # bucketing correctly.
+    lowered = subject.lower()
+    return "tbc-analyse" in lowered or "ld-analyse" in lowered or "ld analyse" in lowered
 
 
 @register("ld-lds-converter")
@@ -219,7 +222,7 @@ def collect_commits(
 # Component display order. "Other" and "Other tools" sort last.
 def component_sort_key(name: str) -> tuple[int, str]:
     preferred = [
-        "ld-analyse",
+        "tbc-analyse",
         "ld-lds-converter",
         "Other tools",
         "CI / packaging",

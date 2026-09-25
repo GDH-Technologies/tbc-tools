@@ -162,7 +162,7 @@ bool parseVideoSystemName(QString name, VideoSystem &system)
     }
 
     // PAL-family aliases currently emitted/accepted by vhs-decode workflows
-    // (mapped to PAL line-system defaults in ld-analyse)
+    // (mapped to PAL line-system defaults in tbc-analyse)
     // NOTE: SECAM and MESECAM are now first-class enum values resolved by
     // the VIDEO_SYSTEM_DEFAULTS loop above, so they are not aliased to PAL here.
     if (normalisedName == "PALN" ||
@@ -1898,7 +1898,7 @@ namespace {
 // number that does not exist. They used to log the out-of-range number and
 // then index the vector with it anyway, which is undefined behaviour -- and
 // is what turned a .tbc.db whose declared field count outran its rows into an
-// ld-analyse crash instead of an error message. The bounds check now stands
+// tbc-analyse crash instead of an error message. The bounds check now stands
 // on its own; a caller that ignores the log gets empty metadata, not a
 // segfault.
 const TbcMetaData::Field &outOfRangeField()

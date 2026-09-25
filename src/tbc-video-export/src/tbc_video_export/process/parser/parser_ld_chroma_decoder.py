@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class ParserLDChromaDecoder(Parser):
-    """Parser for ld-chroma-decoder process."""
+    """Parser for tbc-chroma-decoder process."""
 
     def __init__(self, process_name: ProcessName) -> None:
         super().__init__(process_name)

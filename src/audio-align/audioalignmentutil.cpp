@@ -193,9 +193,9 @@ QString resolveAudioAlignExecutablePath()
     appendUniqueCandidate(pathCandidates, QStandardPaths::findExecutable(QStringLiteral("vhs-decode-auto-audio-align.exe")));
 
     // QCoreApplication::applicationDirPath() returns the directory of the
-    // running executable. In the Linux AppImage the ld-analyse bash wrapper
+    // running executable. In the Linux AppImage the tbc-analyse bash wrapper
     // launches the real ELF via the bundled glibc loader
-    // (exec <usr/lib/ld-linux-x86-64.so.2> --library-path usr/lib <usr/bin/.ld-analyse.real>),
+    // (exec <usr/lib/ld-linux-x86-64.so.2> --library-path usr/lib <usr/bin/.tbc-analyse.real>),
     // so /proc/self/exe (and thus applicationDirPath()) points at usr/lib,
     // NOT usr/bin where the vendored AAA lives. Probe several relative
     // layouts so the bundled AAA is found regardless of which directory Qt

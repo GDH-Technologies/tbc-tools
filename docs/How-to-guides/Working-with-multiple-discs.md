@@ -17,14 +17,14 @@ All required sources must first be decoded using ld-decode.  It's recommended th
 
 # Process the VBI
 
-It is very important that the VBI metadata is as good as possible for any discs used with multi-source tools.  Ensure that ld-process-vbi is used with all source .tbc files:
+It is very important that the VBI metadata is as good as possible for any discs used with multi-source tools.  Ensure that tbc-process-vbi is used with all source .tbc files:
 
-    ld-process-vbi dragonslair_ds1.tbc
-    ld-process-vbi dragonslair_ds2.tbc
-    ld-process-vbi dragonslair_ds3.tbc
-    ld-process-vbi dragonslair_ds4.tbc
+    tbc-process-vbi dragonslair_ds1.tbc
+    tbc-process-vbi dragonslair_ds2.tbc
+    tbc-process-vbi dragonslair_ds3.tbc
+    tbc-process-vbi dragonslair_ds4.tbc
 
-Note that ld-process-vbi is more accurate and comprehensive that the on-the-fly VBI processing in ld-decode; so this extra step is required for the best possible results.
+Note that tbc-process-vbi is more accurate and comprehensive that the on-the-fly VBI processing in ld-decode; so this extra step is required for the best possible results.
 
 # Disc mapping
 
@@ -43,7 +43,7 @@ All sources must be successfully disc mapped before any other multi-source tool 
     ld-discmap dragonslair_ds3.tbc dragonslair_ds3_mapped.tbc
     ld-discmap dragonslair_ds4.tbc dragonslair_ds4_mapped.tbc
 
-As disc-mapping is **highly automated guess-work**; it is important to check and verify each mapped copy using ld-analyse to ensure that the resulting TBC looks correct before continuing with the process - especially if ld-discmap reports a suspected problem with a disc.
+As disc-mapping is **highly automated guess-work**; it is important to check and verify each mapped copy using tbc-analyse to ensure that the resulting TBC looks correct before continuing with the process - especially if ld-discmap reports a suspected problem with a disc.
 
 ## Troublesome discs
 
@@ -53,13 +53,13 @@ If you are unlucky you will find a disc source that doesn't follow the normal 1-
 
 Once a likely pulldown frame is identified, the disc mapper looks 5 frames back and 5 frames forward for another pulldown.  If either is present the current frame is also marked as a pulldown.  This second 'double-check' can fail for discs that do not follow the 1-in-5 pattern causing pulldown frames to be marked incorrectly as normal frames (and therefore the disc mapper does not correctly map the disc).
 
-For sources where this occurs it may be possible to use the --nostrict option which disables the double-check.  If the source is poor (and has multiple skips/jumps) this can have the opposite effect of marking non-pulldown frames as pulldown...  If you use the --nostrict option be sure to manually check the disc map results in ld-analyse for errors.
+For sources where this occurs it may be possible to use the --nostrict option which disables the double-check.  If the source is poor (and has multiple skips/jumps) this can have the opposite effect of marking non-pulldown frames as pulldown...  If you use the --nostrict option be sure to manually check the disc map results in tbc-analyse for errors.
 
 ### Un-mappable frames
 
 In certain cases it may not be possible for the disc mapper to map certain frames; for example, if the player gets stuck on a pulldown frame the resulting .tbc will contain repeating frames with no VBI frame number, so the mapper cannot tell where the frames belong.
 
-The normal action when there are un-mappable frames is to abort the disc mapping process and report the error.  It is possible to override this with the --delete-unmappable-frames which will tell the disc mapper to simply delete any frames that can't be successfully mapped.  If you use the --delete-unmappable-frames option be sure to manually check the disc map results in ld-analyse for errors.
+The normal action when there are un-mappable frames is to abort the disc mapping process and report the error.  It is possible to override this with the --delete-unmappable-frames which will tell the disc mapper to simply delete any frames that can't be successfully mapped.  If you use the --delete-unmappable-frames option be sure to manually check the disc map results in tbc-analyse for errors.
 
 # Stacking multiple discs
 
@@ -93,27 +93,27 @@ If you do not require diffDOD use the --no-diffdod option to turn it off.
 
 # Analysing the resulting SNR (Signal to Noise Ratio) of the stacked TBC
 
-ld-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running ld-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in ld-analyse.
+tbc-process-vbi can update the white and black SNR metadata of a TBC file via its `--vits` processing option.  Each single-source TBC is provided (by the initial ld-decode processing) with the SNR values from the decoding process.  Once multiple TBCs are combined the SNR metadata will be incorrect.  Running tbc-process-vbi with `--vits` against a stacked TBC will update the SNR metadata and allow analysis of the stacking result in tbc-analyse.
 
 A sample command is as follows:
 
-    ld-process-vbi --vits dragonslair_stacked.tbc
+    tbc-process-vbi --vits dragonslair_stacked.tbc
 
 # Multi-Source Dropout Correction
 
 Note: Dropout correction is generally not required when stacking discs unless the --passthrough option was used.  Dropouts will be corrected by the Stacker by substituting data from another source which does not have the dropout.  If, for some reason, you do not wish to use the disc stacker, then multi-source dropout correction is an alternative which only corrects missing pixels (rather than stacking them for greater accuracy).
 
-The ld-dropout-correct tool supports both single source concealment and multi-source correction.  The advantage of multi-source correction is that dropouts can be corrected by copying in good data from another source so, unlike single disc concealment, the data is actually corrected (rather than being substituted using a similar field line).
+The tbc-dropout-correct tool supports both single source concealment and multi-source correction.  The advantage of multi-source correction is that dropouts can be corrected by copying in good data from another source so, unlike single disc concealment, the data is actually corrected (rather than being substituted using a similar field line).
 
 Note that single-source concealment is still possible even with multiple sources.  In the unlikely event that a good replacement can't be found from the other sources (such as errors detected by the luma clip detection mentioned above) the corrector will use the normal inter-field concealment within the same source.
 
 The dropout correction tool corrects only one source at a time; so the first source provided is the 'master' and the following sources are used to correct it (the last specified file is the output .tbc filename).  For example, to dropout correct the ds1 source, you would use the following command:
 
-    ld-dropout-correct dragonslair_ds1_mapped.tbc dragonslair_ds2_mapped.tbc \
+    tbc-dropout-correct dragonslair_ds1_mapped.tbc dragonslair_ds2_mapped.tbc \
     dragonslair_ds3_mapped.tbc dragonslair_ds4_mapped.tbc \
     dragonslair_ds1_mapped_doc.tbc
 
-Once you have the disc images decoded it is possible to use ld-analyse (specifically the SNR and DO graphs) to work out how good each copy is.  Rank them in order of best to worse.  This ranking is important for the dropout-correction tool as it will use all the available sources to 'repair' the initial source.  So the first specified source should always be the best available.
+Once you have the disc images decoded it is possible to use tbc-analyse (specifically the SNR and DO graphs) to work out how good each copy is.  Rank them in order of best to worse.  This ranking is important for the dropout-correction tool as it will use all the available sources to 'repair' the initial source.  So the first specified source should always be the best available.
 
 The simplest way to range discs is based on completeness and SNR - firstly use ld-decode to scan the disc looking for obvious errors or skipped frames then using the black SNR graph function, make a note of the best and worst SNR averages across the disc.
 

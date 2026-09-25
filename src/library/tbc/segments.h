@@ -33,7 +33,7 @@
 #include "tbcmetadata.h"
 
 // The one place the recording-segment rules live. Every tool (tbc-segments,
-// tbc-export-metadata, ld-analyse) derives events and segments through these
+// tbc-export-metadata, tbc-analyse) derives events and segments through these
 // functions; none re-implements the gap, section or frame-range rule.
 
 enum class SegmentSensitivity { Low, Normal, High };
