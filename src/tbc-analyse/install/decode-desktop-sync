@@ -179,6 +179,17 @@ OBSOLETE_DEFAULTS=(
     application/x-orcprj
 )
 
+# Desktop IDs that were renamed. Every mimeapps.list value naming the old ID -
+# a default or an added/removed association, set by this script or by hand -
+# is rewritten to the new one, and the mirrored old entry and its app icons are
+# removed. ld-analyse became tbc-analyse upstream (harrypm, 2026-09-22); left
+# alone, the old ID would keep winning the TBC types on a machine where the
+# binary it launches no longer exists.
+declare -A RENAMED_DESKTOP_IDS=(
+    [ld-analyse.desktop]=tbc-analyse.desktop
+)
+RETIRED_APP_ICONS=(ld-analyse.png)
+
 # Root-owned leftovers from an old `sudo make install`; belong to no package.
 # Harmless once tbc-formats.xml defines application/video-tbc itself, but worth
 # clearing out by hand. We only ever report them - never escalate.
@@ -338,7 +349,8 @@ remove_file() {
 # of the integration that degrades gracefully, since everything else either has
 # a sole declarer or is reachable through "Open With".
 apply_defaults() {
-    [ "${#DEFAULTS[@]}" -gt 0 ] || [ "${#OBSOLETE_DEFAULTS[@]}" -gt 0 ] || return 0
+    [ "${#DEFAULTS[@]}" -gt 0 ] || [ "${#OBSOLETE_DEFAULTS[@]}" -gt 0 ] \
+        || [ "${#RENAMED_DESKTOP_IDS[@]}" -gt 0 ] || return 0
 
     if ! command -v python3 >/dev/null 2>&1; then
         warn "python3 not found; leaving $MIMEAPPS alone"
@@ -346,19 +358,37 @@ apply_defaults() {
         return 0
     fi
 
-    local tmp
+    local tmp id renames=()
     tmp="$(mktemp)"
     TMPFILES+=("$tmp")
+    for id in "${!RENAMED_DESKTOP_IDS[@]}"; do
+        renames+=("$id=${RENAMED_DESKTOP_IDS[$id]}")
+    done
 
     python3 - "$MIMEAPPS" "${#DEFAULTS[@]}" ${DEFAULTS[@]+"${DEFAULTS[@]}"} \
-        ${OBSOLETE_DEFAULTS[@]+"${OBSOLETE_DEFAULTS[@]}"} > "$tmp" <<'PYEOF'
+        "${#OBSOLETE_DEFAULTS[@]}" ${OBSOLETE_DEFAULTS[@]+"${OBSOLETE_DEFAULTS[@]}"} \
+        ${renames[@]+"${renames[@]}"} > "$tmp" <<'PYEOF'
 import sys, pathlib
 
 path = pathlib.Path(sys.argv[1])
 n_set = int(sys.argv[2])
 rest = sys.argv[3:]
 want = dict(pair.split("=", 1) for pair in rest[:n_set])
-drop = set(rest[n_set:])
+rest = rest[n_set:]
+n_drop = int(rest[0])
+drop = set(rest[1:1 + n_drop])
+renamed = dict(pair.split("=", 1) for pair in rest[1 + n_drop:])
+ASSOCIATION_SECTIONS = ("[Default Applications]", "[Added Associations]", "[Removed Associations]")
+
+def rename_ids(value):
+    # Values are ;-separated desktop ID lists. Keep order, drop a duplicate the
+    # rename creates (old and new both listed), and keep the trailing ;.
+    ids, out = value.split(";"), []
+    for i in ids:
+        i = renamed.get(i.strip(), i.strip())
+        if i and i not in out:
+            out.append(i)
+    return ";".join(out) + (";" if value.rstrip().endswith(";") else "")
 
 text = path.read_text(encoding="utf-8") if path.exists() else ""
 section, seen, out = None, set(), []
@@ -383,6 +413,11 @@ for line in text.splitlines():
             seen.add(key)
             out.append(f"{key}={want[key]}")
             continue
+    if section in ASSOCIATION_SECTIONS and "=" in stripped and not stripped.startswith("#"):
+        key, value = stripped.split("=", 1)
+        new_value = rename_ids(value)
+        if new_value != value:
+            line = f"{key.strip()}={new_value}"
     out.append(line)
 
 if section == "[Default Applications]":
@@ -408,7 +443,7 @@ PYEOF
         mkdir -p "$(dirname "$MIMEAPPS")"
         cat "$tmp" > "$MIMEAPPS"
     fi
-    say "  ~ $MIMEAPPS (${#DEFAULTS[@]} default(s))"
+    say "  ~ $MIMEAPPS (${#DEFAULTS[@]} default(s), ${#RENAMED_DESKTOP_IDS[@]} renamed ID(s))"
     changed
 }
 
@@ -488,6 +523,18 @@ do_install() {
     done
     # A stray copy of the old base package would double-define the type.
     remove_file "$MIME_PKG_DIR/application-video-tbc.xml"
+
+    # Retire the mirrored entries and app icons of renamed desktop IDs, so the
+    # old ID stops appearing in "Open With" and in the type->app index.
+    local old icon size
+    for old in "${!RENAMED_DESKTOP_IDS[@]}"; do
+        remove_file "$APPS_DIR/$old"
+    done
+    for icon in "${RETIRED_APP_ICONS[@]}"; do
+        for size in "${APP_ICON_SIZES[@]}"; do
+            remove_file "$ICON_THEME_DIR/${size}x${size}/apps/$icon"
+        done
+    done
 
     # Mimetype and application icons (PNG ladders plus the scalable SVGs).
     local src_icon rel
