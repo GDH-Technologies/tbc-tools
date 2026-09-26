@@ -159,6 +159,47 @@ void testProcessWithoutUpscale()
     CHECK(FrameSnapshot::process(frame, viewer, ntsc, &error).size() == QSize(635, 485));
 }
 
+void testUpscale()
+{
+    const TbcMetaData::VideoParameters ntsc = ntscParameters();
+    QImage frame(910, 525, QImage::Format_RGB32);
+    for (qint32 y = 0; y < frame.height(); y++) {
+        for (qint32 x = 0; x < frame.width(); x++) {
+            frame.setPixel(x, y, ((x / 4 + y / 4) % 2) ? qRgb(230, 200, 40) : qRgb(20, 40, 160));
+        }
+    }
+
+    const QVector<FrameSnapshot::UpscaleMethod> methods = FrameSnapshot::upscaleMethods();
+    CHECK(!methods.isEmpty());
+#if defined(TBC_HAVE_OPENCV)
+    CHECK(methods.constFirst().name == QLatin1String("lanczos4"));
+#endif
+
+    // 760x485 active area, 2x, then 6/7 for square pixels
+    QString error;
+    Options options;
+    options.upscaleFactor = 2;
+    CHECK(FrameSnapshot::process(frame, options, ntsc, &error).size() == QSize(1303, 970));
+
+    // An unknown method falls back to the first available one
+    options.upscaleMethod = QStringLiteral("no-such-method");
+    CHECK(FrameSnapshot::process(frame, options, ntsc, &error).size() == QSize(1303, 970));
+
+    // Every method, including each installed learned model, gives the exact size
+    const QImage small = frame.copy(200, 100, 64, 48);
+    for (const FrameSnapshot::UpscaleMethod &method : methods) {
+        for (const qint32 factor : {2, 3, 4}) {
+            const QImage upscaled = FrameSnapshot::upscale(small, factor, method.name, &error);
+            if (upscaled.size() != small.size() * factor) {
+                std::cerr << "upscale " << method.name.toStdString() << " x" << factor << ": "
+                          << error.toStdString() << "\n";
+            }
+            CHECK(upscaled.size() == small.size() * factor);
+        }
+    }
+    std::cerr << "Upscale methods checked: " << methods.size() << "\n";
+}
+
 QVector<double> texturedPlane(qint32 width, qint32 height, double blur, double noiseSigma, unsigned seed)
 {
     std::mt19937 generator(seed);
@@ -272,6 +313,7 @@ int main(int argc, char *argv[])
     testPixelAspect();
     testOutputSize();
     testProcessWithoutUpscale();
+    testUpscale();
     testFieldMetrics();
     testBestFrameSearch();
 

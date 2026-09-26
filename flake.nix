@@ -196,6 +196,26 @@
         # (runtime DLLs/SOs) is present; withCuda=false simply does not *compile*
         # the nnTransform3D_kernel.cu custom kernel (Path 2), consistent with how
         # macOS/non-CUDA builds already behave.
+        # OpenCV dnn_superres models for tbc-analyse's "Save frame as PNG"
+        # upscale (EDSR, ESPCN, FSRCNN, LapSRN), pinned to commits of the
+        # repositories OpenCV's dnn_superres docs link to. The wrapper hands the directory to
+        # tbc-analyse as TBC_SUPERRES_MODEL_DIR; a model whose files are absent
+        # is simply not offered.
+        superResModels = pkgs.linkFarm "tbc-superres-models" (map
+          (model: { inherit (model) name; path = pkgs.fetchurl { inherit (model) url hash; }; })
+          [
+            { name = "EDSR_x2.pb"; url = "https://raw.githubusercontent.com/Saafke/EDSR_Tensorflow/06c7bd65b0305c2955328f8f2721ea86c341f660/models/EDSR_x2.pb"; hash = "sha256-WFYjIhuqBwJ5oNHn4ROkw/q6DzGMp/3Zpl2a/Adj2bQ="; }
+            { name = "EDSR_x3.pb"; url = "https://raw.githubusercontent.com/Saafke/EDSR_Tensorflow/06c7bd65b0305c2955328f8f2721ea86c341f660/models/EDSR_x3.pb"; hash = "sha256-O6o3QP247pxS8aQdafp0y5/u8Pqb/uwk8O5YuSgGjpo="; }
+            { name = "EDSR_x4.pb"; url = "https://raw.githubusercontent.com/Saafke/EDSR_Tensorflow/06c7bd65b0305c2955328f8f2721ea86c341f660/models/EDSR_x4.pb"; hash = "sha256-3TXOPK5T7O4tFgReCKkyw+ckLWQbtly5cdEj4GkENH8="; }
+            { name = "ESPCN_x2.pb"; url = "https://raw.githubusercontent.com/fannymonori/TF-ESPCN/5c628eca82028161a53e1265cc3a5b571ab8625f/export/ESPCN_x2.pb"; hash = "sha256-WfdzUeHXwAV79v4Ii0qKB+QsRoyMiuu2dKa06hgjIh0="; }
+            { name = "ESPCN_x3.pb"; url = "https://raw.githubusercontent.com/fannymonori/TF-ESPCN/5c628eca82028161a53e1265cc3a5b571ab8625f/export/ESPCN_x3.pb"; hash = "sha256-DmZ9t6Qx0UwyVo7Xm/IXAaZN+LHRYuSMofiACv/iwrM="; }
+            { name = "ESPCN_x4.pb"; url = "https://raw.githubusercontent.com/fannymonori/TF-ESPCN/5c628eca82028161a53e1265cc3a5b571ab8625f/export/ESPCN_x4.pb"; hash = "sha256-5APwYwkinPNgCc2PsNoDK6dkP66fFc+U/lYujt+P70c="; }
+            { name = "FSRCNN_x2.pb"; url = "https://raw.githubusercontent.com/Saafke/FSRCNN_Tensorflow/6a4812c4ef1c4f5947d79beafa32a05a6eb4a94d/models/FSRCNN_x2.pb"; hash = "sha256-Nmsz8AhMez8r9nJPCix3vKlPzsnXttcjidMwBzs4DVw="; }
+            { name = "FSRCNN_x3.pb"; url = "https://raw.githubusercontent.com/Saafke/FSRCNN_Tensorflow/6a4812c4ef1c4f5947d79beafa32a05a6eb4a94d/models/FSRCNN_x3.pb"; hash = "sha256-79OGVagVkIxsiVTbYFLxKOdqc18d5leJTEd9DcC2RIE="; }
+            { name = "FSRCNN_x4.pb"; url = "https://raw.githubusercontent.com/Saafke/FSRCNN_Tensorflow/6a4812c4ef1c4f5947d79beafa32a05a6eb4a94d/models/FSRCNN_x4.pb"; hash = "sha256-XGjRjbVhrtjq1P/t8biX6mFbqvYOv2w1+OZB+PpKIb8="; }
+            { name = "LapSRN_x2.pb"; url = "https://raw.githubusercontent.com/fannymonori/TF-LapSRN/fc51c90af1b5801a357abc919160d7ff4f24b997/export/LapSRN_x2.pb"; hash = "sha256-9ZyG5oNbvKZG29gViPB4IN/jvQnjcCl2ri2QtfwPCyE="; }
+            { name = "LapSRN_x4.pb"; url = "https://raw.githubusercontent.com/fannymonori/TF-LapSRN/fc51c90af1b5801a357abc919160d7ff4f24b997/export/LapSRN_x4.pb"; hash = "sha256-0+lck8r65c5ajtV86avwfy3ljajF1tZWt2Z3SWmDXuI="; }
+          ]);
         mkTbcTools = { withCuda }:
           pkgs.stdenv.mkDerivation {
             pname = "tbc-tools";
@@ -225,6 +245,9 @@
               sqlite
               libGL
               onnxruntimePackage
+              # Optional in CMake: Lanczos/bicubic resampling and dnn_superres
+              # upscaling for tbc-analyse's "Save frame as PNG"
+              opencv
             ] ++ pkgs.lib.optionals (enableCuda && withCuda) [
               cudaPackages.cudatoolkit
               cudaPackages.cuda_cudart
@@ -234,13 +257,9 @@
               cudaCudnnPackage
             ];
 
-            # tbc-analyse's "Save frame as PNG" upscales through the
-            # realesrgan-ncnn-vulkan binary, which it looks up on PATH.
-            # --suffix so an operator's own build still wins. On a non-NixOS
-            # host tbc-analyse points the child at the host's NVIDIA Vulkan
-            # driver itself (FrameSnapshot::upscale).
+            # --set-default so an operator can point tbc-analyse at other models
             qtWrapperArgs = [
-              "--suffix" "PATH" ":" "${pkgs.realesrgan-ncnn-vulkan}/bin"
+              "--set-default" "TBC_SUPERRES_MODEL_DIR" "${superResModels}"
             ];
 
             cmakeBuildType = "Release";
@@ -345,6 +364,7 @@
             python3Packages.watchdog
             python3Packages.pyserial
             onnxruntimePackage
+            opencv
           ] ++ pkgs.lib.optionals enableCuda [
             cudaPackages.cudatoolkit
             cudaPackages.cuda_nvcc

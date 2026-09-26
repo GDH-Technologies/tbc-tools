@@ -14,16 +14,18 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QProcess>
-#include <QStandardPaths>
-#include <QTemporaryDir>
 #include <QTextStream>
 #include <algorithm>
 #include <cmath>
 
 #include "sourcevideo.h"
+
+#if defined(TBC_HAVE_OPENCV)
+#include <opencv2/imgproc.hpp>
+#endif
+#if defined(TBC_HAVE_OPENCV_SUPERRES)
+#include <opencv2/dnn_superres.hpp>
+#endif
 
 namespace FrameSnapshot {
 
@@ -42,12 +44,6 @@ constexpr qint32 THUMBNAIL_BLOCK = 8;
 constexpr double COMBING_TOLERANCE = 1.25;
 constexpr double DROPOUT_ALLOWANCE_SAMPLES = 20.0;
 
-const QStringList UPSCALER_MODELS = {
-    QStringLiteral("realesrgan-x4plus"),
-    QStringLiteral("realesrgan-x4plus-anime"),
-    QStringLiteral("realesr-animevideov3"),
-};
-
 bool is625LineSystem(VideoSystem system)
 {
     return system == PAL || system == SECAM || system == MESECAM;
@@ -61,74 +57,97 @@ double median(QVector<double> values)
     return (values.size() % 2) ? values[mid] : (values[mid - 1] + values[mid]) / 2.0;
 }
 
-#if defined(Q_OS_LINUX)
-// realesrgan-ncnn-vulkan from nixpkgs links Nix's Vulkan loader, which on a
-// non-NixOS host finds no GPU driver: the host's NVIDIA ICD manifest is not on
-// its search path, and libGLX_nvidia.so.0 needs companion libraries from the
-// host libdir that a Nix binary never searches. Exposing the whole host libdir
-// would mix the host glibc's libraries into a process running Nix's glibc, so
-// the child gets a private directory of symlinks to just the NVIDIA driver and
-// the X11/xcb/EGL libraries it loads. Returns false when no NVIDIA ICD exists.
-bool prepareHostVulkanDriver(const QString &shimDirectory, QProcessEnvironment &environment)
+#if defined(TBC_HAVE_OPENCV)
+struct Interpolation {
+    const char *name;
+    const char *label;
+    int flag;
+};
+
+const Interpolation INTERPOLATIONS[] = {
+    {"lanczos4", "Lanczos-4 (sharpest)", cv::INTER_LANCZOS4},
+    {"cubic", "Bicubic", cv::INTER_CUBIC},
+    {"linear", "Bilinear", cv::INTER_LINEAR},
+    {"area", "Area", cv::INTER_AREA},
+    {"nearest", "Nearest neighbour", cv::INTER_NEAREST},
+};
+
+// Wraps a QImage as a 3-channel 8-bit cv::Mat (RGB order). The QImage must
+// outlive the Mat.
+cv::Mat rgbMat(const QImage &rgb888)
 {
-    if (environment.contains(QStringLiteral("VK_DRIVER_FILES"))
-        || environment.contains(QStringLiteral("VK_ICD_FILENAMES"))) {
-        return false; // the operator chose the driver
+    return cv::Mat(rgb888.height(), rgb888.width(), CV_8UC3,
+                   const_cast<uchar *>(rgb888.constBits()), static_cast<size_t>(rgb888.bytesPerLine()));
+}
+
+QImage toQImage(const cv::Mat &rgb)
+{
+    return QImage(rgb.data, rgb.cols, rgb.rows, static_cast<qsizetype>(rgb.step), QImage::Format_RGB888).copy();
+}
+
+int interpolationFlag(const QString &method)
+{
+    for (const Interpolation &interpolation : INTERPOLATIONS) {
+        if (method == QLatin1String(interpolation.name)) return interpolation.flag;
     }
-
-    QString manifestPath;
-    QString libraryPath;
-    for (const QString &icdDirectory : {QStringLiteral("/etc/vulkan/icd.d"), QStringLiteral("/usr/share/vulkan/icd.d")}) {
-        const QFileInfoList manifests = QDir(icdDirectory).entryInfoList({QStringLiteral("nvidia_icd*.json")}, QDir::Files, QDir::Name);
-        for (const QFileInfo &manifest : manifests) {
-            // Skip the 32-bit manifest Fedora installs alongside the 64-bit one
-            if (manifest.fileName().contains(QStringLiteral("i686"))) continue;
-            QFile file(manifest.absoluteFilePath());
-            if (!file.open(QIODevice::ReadOnly)) continue;
-            const QString path = QJsonDocument::fromJson(file.readAll()).object()
-                                     .value(QStringLiteral("ICD")).toObject()
-                                     .value(QStringLiteral("library_path")).toString();
-            if (path.isEmpty()) continue;
-
-            if (QFileInfo(path).isAbsolute()) {
-                if (QFileInfo::exists(path)) libraryPath = path;
-            } else {
-                // Debian-style manifests name a bare soname
-                for (const QString &libDirectory : {QStringLiteral("/usr/lib64"), QStringLiteral("/usr/lib/x86_64-linux-gnu"),
-                                                    QStringLiteral("/usr/lib/aarch64-linux-gnu"), QStringLiteral("/usr/lib")}) {
-                    if (QFileInfo::exists(QDir(libDirectory).filePath(path))) {
-                        libraryPath = QDir(libDirectory).filePath(path);
-                        break;
-                    }
-                }
-            }
-            if (!libraryPath.isEmpty()) {
-                manifestPath = manifest.absoluteFilePath();
-                break;
-            }
-        }
-        if (!manifestPath.isEmpty()) break;
-    }
-    if (manifestPath.isEmpty()) return false;
-
-    const QDir hostLibDirectory = QFileInfo(libraryPath).absoluteDir();
-    const QStringList patterns = {
-        QStringLiteral("libnvidia-*.so*"), QStringLiteral("libGLX_nvidia.so*"), QStringLiteral("libEGL_nvidia.so*"),
-        QStringLiteral("libGLdispatch.so*"), QStringLiteral("libEGL.so.1"), QStringLiteral("libX11.so.6"),
-        QStringLiteral("libX11-xcb.so.1"), QStringLiteral("libXext.so.6"), QStringLiteral("libXau.so.6"),
-        QStringLiteral("libXdmcp.so.6"), QStringLiteral("libxcb*.so.*"),
-    };
-    for (const QFileInfo &library : hostLibDirectory.entryInfoList(patterns, QDir::Files | QDir::System)) {
-        QFile::link(library.absoluteFilePath(), QDir(shimDirectory).filePath(library.fileName()));
-    }
-
-    environment.insert(QStringLiteral("VK_DRIVER_FILES"), manifestPath);
-    const QString existing = environment.value(QStringLiteral("LD_LIBRARY_PATH"));
-    environment.insert(QStringLiteral("LD_LIBRARY_PATH"),
-                       existing.isEmpty() ? shimDirectory : shimDirectory + QLatin1Char(':') + existing);
-    return true;
+    return cv::INTER_LANCZOS4; // learned methods resample for aspect with Lanczos
 }
 #endif
+
+#if defined(TBC_HAVE_OPENCV_SUPERRES)
+struct SuperResModel {
+    const char *name;   // dnn_superres algorithm name, also the method name
+    const char *prefix; // model file prefix: <prefix>_x<scale>.pb
+    const char *label;
+    QVector<qint32> scales;
+};
+
+const SuperResModel SUPERRES_MODELS[] = {
+    {"edsr", "EDSR", "EDSR (learned, slow)", {2, 3, 4}},
+    {"espcn", "ESPCN", "ESPCN (learned, fast)", {2, 3, 4}},
+    {"fsrcnn", "FSRCNN", "FSRCNN (learned, fast)", {2, 3, 4}},
+    {"lapsrn", "LapSRN", "LapSRN (learned)", {2, 4}},
+};
+
+// The flake's wrapper points TBC_SUPERRES_MODEL_DIR at the pinned model files;
+// other installs keep them in share/tbc-tools/superres beside bin/.
+QString superResModelDirectory()
+{
+    const QString fromEnvironment = qEnvironmentVariable("TBC_SUPERRES_MODEL_DIR");
+    if (!fromEnvironment.isEmpty()) return fromEnvironment;
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../share/tbc-tools/superres"));
+}
+
+QString superResModelFile(const SuperResModel &model, qint32 scale)
+{
+    return QDir(superResModelDirectory()).filePath(QStringLiteral("%1_x%2.pb").arg(QLatin1String(model.prefix)).arg(scale));
+}
+
+const SuperResModel *findSuperResModel(const QString &method)
+{
+    for (const SuperResModel &model : SUPERRES_MODELS) {
+        if (method == QLatin1String(model.name)) return &model;
+    }
+    return nullptr;
+}
+#endif
+
+// Resize with an interpolation method (or Qt's smooth scaling without OpenCV)
+QImage resampled(const QImage &image, const QSize &size, const QString &method)
+{
+    if (image.size() == size) return image;
+#if defined(TBC_HAVE_OPENCV)
+    if (isUpscaleMethodAvailable(method)) {
+        const QImage rgb = image.convertToFormat(QImage::Format_RGB888);
+        cv::Mat output;
+        cv::resize(rgbMat(rgb), output, cv::Size(size.width(), size.height()), 0, 0, interpolationFlag(method));
+        return toQImage(output);
+    }
+#else
+    Q_UNUSED(method)
+#endif
+    return image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+}
 
 } // namespace
 
@@ -236,72 +255,70 @@ QSize outputSize(const Options &options, const TbcMetaData::VideoParameters &vid
     return QSize(std::max(1, width), scaled.height());
 }
 
-QString upscalerExecutable()
+QVector<UpscaleMethod> upscaleMethods()
 {
-    const QString name = QStringLiteral("realesrgan-ncnn-vulkan");
-    const QString bundled = QStandardPaths::findExecutable(name, {QCoreApplication::applicationDirPath()});
-    return bundled.isEmpty() ? QStandardPaths::findExecutable(name) : bundled;
-}
-
-QStringList upscalerModels()
-{
-    return UPSCALER_MODELS;
-}
-
-QImage upscale(const QImage &image, qint32 factor, const QString &model, QString *errorMessage)
-{
-    auto fail = [errorMessage](const QString &message) {
-        if (errorMessage) *errorMessage = message;
-        return QImage();
-    };
-
-    if (factor < 2 || factor > 4) return fail(QStringLiteral("Upscale factor must be 2, 3 or 4."));
-    const QString executable = upscalerExecutable();
-    if (executable.isEmpty()) {
-        return fail(QStringLiteral("realesrgan-ncnn-vulkan was not found on PATH."));
+    QVector<UpscaleMethod> methods;
+#if defined(TBC_HAVE_OPENCV)
+    for (const Interpolation &interpolation : INTERPOLATIONS) {
+        methods.append({QLatin1String(interpolation.name), QLatin1String(interpolation.label), false});
     }
-
-    QTemporaryDir workDirectory;
-    if (!workDirectory.isValid()) return fail(QStringLiteral("Could not create a temporary directory for upscaling."));
-    const QString inputPath = workDirectory.filePath(QStringLiteral("in.png"));
-    const QString outputPath = workDirectory.filePath(QStringLiteral("out.png"));
-    if (!image.save(inputPath)) return fail(QStringLiteral("Could not write the upscaler's input image."));
-
-    // The x4plus models only exist at 4x; other factors are scaled down after.
-    const bool nativeScale = model == QLatin1String("realesr-animevideov3");
-    const qint32 modelScale = nativeScale ? factor : 4;
-
-    QProcess process;
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-#if defined(Q_OS_LINUX)
-    if (QFileInfo(executable).canonicalFilePath().startsWith(QLatin1String("/nix/store/"))
-        && !QFileInfo::exists(QStringLiteral("/run/opengl-driver"))) {
-        const QString shimDirectory = workDirectory.filePath(QStringLiteral("host-vulkan"));
-        if (QDir().mkpath(shimDirectory)) prepareHostVulkanDriver(shimDirectory, environment);
+#else
+    methods.append({QStringLiteral("smooth"), QStringLiteral("Qt smooth (bilinear)"), false});
+#endif
+#if defined(TBC_HAVE_OPENCV_SUPERRES)
+    for (const SuperResModel &model : SUPERRES_MODELS) {
+        bool installed = true;
+        for (const qint32 scale : model.scales) installed = installed && QFileInfo::exists(superResModelFile(model, scale));
+        if (installed) methods.append({QLatin1String(model.name), QLatin1String(model.label), true});
     }
 #endif
-    process.setProcessEnvironment(environment);
-    process.setWorkingDirectory(workDirectory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(executable, {QStringLiteral("-i"), inputPath, QStringLiteral("-o"), outputPath,
-                               QStringLiteral("-n"), model, QStringLiteral("-s"), QString::number(modelScale),
-                               QStringLiteral("-f"), QStringLiteral("png")});
-    if (!process.waitForStarted()) return fail(QStringLiteral("Could not start %1.").arg(executable));
-    process.waitForFinished(-1);
+    return methods;
+}
 
-    const QImage upscaled(outputPath);
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0 || upscaled.isNull()) {
-        // Drop the per-tile progress lines ("12.50%") and keep the diagnostics
-        QStringList lines;
-        for (const QString &line : QString::fromLocal8Bit(process.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
-            if (!line.trimmed().endsWith(QLatin1Char('%'))) lines << line.trimmed();
-        }
-        return fail(QStringLiteral("Real-ESRGAN failed (exit code %1):\n%2")
-                        .arg(process.exitCode()).arg(lines.mid(std::max(0, static_cast<int>(lines.size()) - 12)).join(QLatin1Char('\n'))));
+bool isUpscaleMethodAvailable(const QString &name)
+{
+    for (const UpscaleMethod &method : upscaleMethods()) {
+        if (method.name == name) return true;
     }
+    return false;
+}
 
-    if (modelScale == factor) return upscaled;
-    return upscaled.scaled(image.size() * factor, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+QImage upscale(const QImage &image, qint32 factor, const QString &method, QString *errorMessage)
+{
+    if (factor < 2 || factor > 4) {
+        if (errorMessage) *errorMessage = QStringLiteral("Upscale factor must be 2, 3 or 4.");
+        return QImage();
+    }
+    const QSize target = image.size() * factor;
+
+#if defined(TBC_HAVE_OPENCV_SUPERRES)
+    if (const SuperResModel *model = findSuperResModel(method)) {
+        // A model without this scale (LapSRN has no 3x) runs at the next one
+        // up and is brought down to size with Lanczos
+        qint32 modelScale = factor;
+        while (!model->scales.contains(modelScale)) modelScale++;
+
+        try {
+            cv::dnn_superres::DnnSuperResImpl superRes;
+            superRes.readModel(superResModelFile(*model, modelScale).toStdString());
+            superRes.setModel(model->name, modelScale);
+
+            // The models take BGR
+            const QImage rgb = image.convertToFormat(QImage::Format_RGB888);
+            cv::Mat bgr;
+            cv::cvtColor(rgbMat(rgb), bgr, cv::COLOR_RGB2BGR);
+            cv::Mat upscaledBgr;
+            superRes.upsample(bgr, upscaledBgr);
+            cv::Mat upscaledRgb;
+            cv::cvtColor(upscaledBgr, upscaledRgb, cv::COLOR_BGR2RGB);
+            return resampled(toQImage(upscaledRgb), target, QStringLiteral("lanczos4"));
+        } catch (const cv::Exception &exception) {
+            if (errorMessage) *errorMessage = QStringLiteral("%1 upscaling failed: %2").arg(QLatin1String(model->label), QString::fromStdString(exception.what()));
+            return QImage();
+        }
+    }
+#endif
+    return resampled(image, target, method);
 }
 
 QImage process(const QImage &frameImage, const Options &options,
@@ -316,15 +333,17 @@ QImage process(const QImage &frameImage, const Options &options,
     // loses less horizontal detail.
     QImage image = frameImage.copy(outputRect(options, videoParameters, frameImage.size()));
 
+    // A method this build or install cannot run falls back to the first one it can
+    const QString method = isUpscaleMethodAvailable(options.upscaleMethod)
+                               ? options.upscaleMethod : upscaleMethods().constFirst().name;
     if (options.upscaleFactor > 1) {
-        image = upscale(image, options.upscaleFactor, options.upscaleModel, errorMessage);
+        image = upscale(image, options.upscaleFactor, method, errorMessage);
         if (image.isNull()) return image;
     }
 
     const double aspect = pixelAspect(options.aspectMode, videoParameters);
     const qint32 width = std::max(1, static_cast<qint32>(std::lround(image.width() * aspect)));
-    if (width == image.width()) return image;
-    return image.scaled(width, image.height(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    return resampled(image, QSize(width, image.height()), method);
 }
 
 FieldMetrics measureField(const QVector<double> &plane, qint32 width, qint32 height)

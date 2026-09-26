@@ -59,7 +59,7 @@ private:
     QCheckBox *searchCheck = nullptr;
     QSpinBox *radiusSpin = nullptr;
     QComboBox *upscaleCombo = nullptr;
-    QComboBox *modelCombo = nullptr;
+    QComboBox *methodCombo = nullptr;
     QLabel *customLabel = nullptr;
     QLabel *outputLabel = nullptr;
 };

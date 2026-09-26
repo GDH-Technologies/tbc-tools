@@ -100,11 +100,12 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
             return fail(QStringLiteral("--upscale takes 1, 2, 3 or 4"));
         }
     }
-    if (parser.isSet(QStringLiteral("upscale-model"))) {
-        options.upscaleModel = parser.value(QStringLiteral("upscale-model"));
-        if (!FrameSnapshot::upscalerModels().contains(options.upscaleModel)) {
-            return fail(QStringLiteral("--upscale-model takes one of: %1")
-                            .arg(FrameSnapshot::upscalerModels().join(QStringLiteral(", "))));
+    if (parser.isSet(QStringLiteral("upscale-method"))) {
+        options.upscaleMethod = parser.value(QStringLiteral("upscale-method"));
+        if (!FrameSnapshot::isUpscaleMethodAvailable(options.upscaleMethod)) {
+            QStringList names;
+            for (const FrameSnapshot::UpscaleMethod &method : FrameSnapshot::upscaleMethods()) names << method.name;
+            return fail(QStringLiteral("--upscale-method takes one of: %1").arg(names.join(QStringLiteral(", "))));
         }
     }
 
@@ -398,8 +399,9 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("margins", "--save-frame trims from the framing: left,top,right,bottom", "l,t,r,b"));
     parser.addOption(QCommandLineOption("aspect", "--save-frame aspect: exact (square pixels, default) or viewer (tbc-analyse's DAR stretch)", "mode"));
     parser.addOption(QCommandLineOption("best-of", "--save-frame: save the best frame within +/-N showing the same picture (0 = off)", "N"));
-    parser.addOption(QCommandLineOption("upscale", "--save-frame: Real-ESRGAN upscale factor 1-4 (default 1)", "factor"));
-    parser.addOption(QCommandLineOption("upscale-model", "--save-frame: Real-ESRGAN model (default realesrgan-x4plus)", "model"));
+    parser.addOption(QCommandLineOption("upscale", "--save-frame: upscale factor 1-4 (default 1)", "factor"));
+    parser.addOption(QCommandLineOption("upscale-method", "--save-frame: resampling for the upscale and aspect correction "
+                                                          "(default lanczos4; an invalid name lists this build's methods)", "method"));
     parser.addOption(QCommandLineOption("score-report", "--save-frame: write the best-frame scores as CSV", "file"));
 
     // Positional argument to specify input video file

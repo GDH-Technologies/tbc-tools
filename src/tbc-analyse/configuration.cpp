@@ -152,7 +152,7 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("bestFrameSearch", settings.frameSnapshot.bestFrameSearch);
     configuration->setValue("searchRadius", settings.frameSnapshot.searchRadius);
     configuration->setValue("upscaleFactor", settings.frameSnapshot.upscaleFactor);
-    configuration->setValue("upscaleModel", settings.frameSnapshot.upscaleModel);
+    configuration->setValue("upscaleMethod", settings.frameSnapshot.upscaleMethod);
     configuration->endGroup();
 
     // Sync the settings with disk
@@ -274,10 +274,8 @@ void Configuration::readConfiguration(void)
         configuration->value("searchRadius", snapshotDefaults.searchRadius).toInt(), 1, 600);
     settings.frameSnapshot.upscaleFactor = std::clamp(
         configuration->value("upscaleFactor", snapshotDefaults.upscaleFactor).toInt(), 1, 4);
-    settings.frameSnapshot.upscaleModel = configuration->value("upscaleModel", snapshotDefaults.upscaleModel).toString();
-    if (!FrameSnapshot::upscalerModels().contains(settings.frameSnapshot.upscaleModel)) {
-        settings.frameSnapshot.upscaleModel = snapshotDefaults.upscaleModel;
-    }
+    // Not checked against this build's methods; FrameSnapshot::process falls back
+    settings.frameSnapshot.upscaleMethod = configuration->value("upscaleMethod", snapshotDefaults.upscaleMethod).toString();
     configuration->endGroup();
 }
 

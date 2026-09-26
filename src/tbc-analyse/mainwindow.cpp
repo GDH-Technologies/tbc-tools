@@ -6401,7 +6401,7 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
         filenameStem += sanitizedFileToken(QFileInfo(sourceFileName).completeBaseName());
     }
     if (frameView && options.upscaleFactor > 1) {
-        filenameStem += QStringLiteral("_up%1x").arg(options.upscaleFactor);
+        filenameStem += QStringLiteral("_up%1x_%2").arg(options.upscaleFactor).arg(sanitizedFileToken(options.upscaleMethod));
     }
     const QString filenameSuggestion =
         QDir(outputDirectory).filePath(filenameStem + tr(".png"));
@@ -6427,7 +6427,7 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
             QtConcurrent::run([imageToSave, options, videoParameters, &errorMessage]() {
                 return FrameSnapshot::process(imageToSave, options, videoParameters, &errorMessage);
             }),
-            options.upscaleFactor > 1 ? tr("Upscaling with Real-ESRGAN...") : tr("Preparing PNG..."));
+            options.upscaleFactor > 1 ? tr("Upscaling...") : tr("Preparing PNG..."));
         if (finalImage.isNull()) {
             QMessageBox::warning(this, tr("Warning"), errorMessage);
             return;

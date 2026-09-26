@@ -221,25 +221,23 @@ SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage
     searchLayout->addRow(tr("Search up to:"), radiusSpin);
     optionsLayout->addWidget(searchBox);
 
-    // Upscale
-    auto *upscaleBox = new QGroupBox(tr("Upscale (Real-ESRGAN)"), this);
-    auto *upscaleLayout = new QFormLayout(upscaleBox);
-    upscaleCombo = new QComboBox(upscaleBox);
+    // Resize
+    auto *resizeBox = new QGroupBox(tr("Resize"), this);
+    auto *resizeLayout = new QFormLayout(resizeBox);
+    upscaleCombo = new QComboBox(resizeBox);
     upscaleCombo->addItem(tr("Off"), 1);
-    upscaleCombo->addItem(tr("2×"), 2);
-    upscaleCombo->addItem(tr("3×"), 3);
-    upscaleCombo->addItem(tr("4×"), 4);
-    modelCombo = new QComboBox(upscaleBox);
-    for (const QString &model : FrameSnapshot::upscalerModels()) modelCombo->addItem(model, model);
-    modelCombo->setToolTip(tr("realesrgan-x4plus suits photographs. The anime models suit drawings and titles."));
-    upscaleLayout->addRow(tr("Scale:"), upscaleCombo);
-    upscaleLayout->addRow(tr("Model:"), modelCombo);
-    if (FrameSnapshot::upscalerExecutable().isEmpty()) {
-        upscaleBox->setEnabled(false);
-        upscaleBox->setToolTip(tr("realesrgan-ncnn-vulkan was not found on PATH."));
-        upscaleLayout->addRow(new QLabel(tr("realesrgan-ncnn-vulkan not found."), upscaleBox));
+    upscaleCombo->addItem(tr("2\u00d7"), 2);
+    upscaleCombo->addItem(tr("3\u00d7"), 3);
+    upscaleCombo->addItem(tr("4\u00d7"), 4);
+    methodCombo = new QComboBox(resizeBox);
+    for (const FrameSnapshot::UpscaleMethod &method : FrameSnapshot::upscaleMethods()) {
+        methodCombo->addItem(method.label, method.name);
     }
-    optionsLayout->addWidget(upscaleBox);
+    methodCombo->setToolTip(tr("Used for the upscale and for the aspect correction. The learned models "
+                               "only upscale; their aspect correction uses Lanczos-4."));
+    resizeLayout->addRow(tr("Upscale:"), upscaleCombo);
+    resizeLayout->addRow(tr("Method:"), methodCombo);
+    optionsLayout->addWidget(resizeBox);
 
     outputLabel = new QLabel(this);
     optionsLayout->addWidget(outputLabel);
@@ -273,7 +271,7 @@ SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage
         connect(spin, &QSpinBox::valueChanged, this, [this]() { refresh(); });
     }
     connect(searchCheck, &QCheckBox::toggled, this, [this]() { refresh(); });
-    for (QComboBox *combo : {aspectCombo, upscaleCombo, modelCombo}) {
+    for (QComboBox *combo : {aspectCombo, upscaleCombo, methodCombo}) {
         connect(combo, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
     }
 
@@ -293,7 +291,7 @@ FrameSnapshot::Options SavePngDialog::selectedOptions() const
     options.bestFrameSearch = searchCheck->isChecked();
     options.searchRadius = radiusSpin->value();
     options.upscaleFactor = upscaleCombo->currentData().toInt();
-    options.upscaleModel = modelCombo->currentData().toString();
+    options.upscaleMethod = methodCombo->currentData().toString();
     return options;
 }
 
@@ -301,7 +299,7 @@ void SavePngDialog::setControls(const FrameSnapshot::Options &options)
 {
     // Filled without signals; refresh() below brings everything in line once
     const QList<QObject *> controls = {marginLeftSpin, marginTopSpin, marginRightSpin, marginBottomSpin,
-                                       aspectCombo, searchCheck, radiusSpin, upscaleCombo, modelCombo};
+                                       aspectCombo, searchCheck, radiusSpin, upscaleCombo, methodCombo};
     for (QObject *control : controls) control->blockSignals(true);
 
     if (QAbstractButton *button = framingGroup->button(int(options.framing))) button->setChecked(true);
@@ -313,7 +311,7 @@ void SavePngDialog::setControls(const FrameSnapshot::Options &options)
     searchCheck->setChecked(options.bestFrameSearch);
     radiusSpin->setValue(options.searchRadius);
     upscaleCombo->setCurrentIndex(qMax(0, upscaleCombo->findData(options.upscaleFactor)));
-    modelCombo->setCurrentIndex(qMax(0, modelCombo->findData(options.upscaleModel)));
+    methodCombo->setCurrentIndex(qMax(0, methodCombo->findData(options.upscaleMethod)));
 
     for (QObject *control : controls) control->blockSignals(false);
     refresh();
@@ -328,7 +326,6 @@ void SavePngDialog::refresh()
                              : tr("Custom: %1×%2 at %3, %4").arg(customRect.width()).arg(customRect.height())
                                    .arg(customRect.x()).arg(customRect.y()));
     radiusSpin->setEnabled(searchCheck->isChecked());
-    modelCombo->setEnabled(upscaleCombo->currentData().toInt() > 1);
 
     const FrameSnapshot::Options options = selectedOptions();
     const QRect rect = FrameSnapshot::outputRect(options, videoParameters, frameImage.size());

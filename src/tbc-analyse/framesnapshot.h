@@ -22,8 +22,7 @@
 
 // "Save frame as PNG" pipeline, shared by MainWindow and the headless
 // --save-frame CLI: frame the picture, optionally pick the best frame of a
-// held still (slideshow tapes), upscale with Real-ESRGAN and correct the
-// aspect ratio. Nothing here touches TbcSource, so it is safe off the UI thread.
+// held still (slideshow tapes), upscale and correct the aspect ratio. Nothing here touches TbcSource, so it is safe off the UI thread.
 namespace FrameSnapshot {
 
 enum class Framing {
@@ -52,7 +51,8 @@ struct Options {
     qint32 searchRadius = 60; // frames either side of the current one
 
     qint32 upscaleFactor = 1; // 1 = off, else 2, 3 or 4
-    QString upscaleModel = QStringLiteral("realesrgan-x4plus");
+    // Resampling for the upscale and the aspect correction; see upscaleMethods()
+    QString upscaleMethod = QStringLiteral("lanczos4");
 };
 
 QString framingName(Framing framing);
@@ -79,13 +79,23 @@ double pixelAspect(AspectMode mode, const TbcMetaData::VideoParameters &videoPar
 QSize outputSize(const Options &options, const TbcMetaData::VideoParameters &videoParameters,
                  const QSize &framedSize);
 
-// Real-ESRGAN ---------------------------------------------------------------
+// Resampling ----------------------------------------------------------------
 
-QString upscalerExecutable();
-QStringList upscalerModels();
+struct UpscaleMethod {
+    QString name;  // stored in settings and taken by --upscale-method
+    QString label; // shown in the save dialog
+    bool learned;  // an OpenCV dnn_superres model rather than an interpolation filter
+};
 
-// Runs realesrgan-ncnn-vulkan on image. Blocking; call it off the UI thread.
-QImage upscale(const QImage &image, qint32 factor, const QString &model, QString *errorMessage);
+// Methods this build and install can run. With OpenCV: its interpolation
+// filters, then each dnn_superres model whose files are installed. Without
+// OpenCV: Qt's smooth (bilinear) scaling only.
+QVector<UpscaleMethod> upscaleMethods();
+bool isUpscaleMethodAvailable(const QString &name);
+
+// Upscales by 2, 3 or 4. A learned method is blocking and slow; call it off
+// the UI thread.
+QImage upscale(const QImage &image, qint32 factor, const QString &method, QString *errorMessage);
 
 // Crop, upscale and aspect-correct a full frame image.
 QImage process(const QImage &frameImage, const Options &options,
