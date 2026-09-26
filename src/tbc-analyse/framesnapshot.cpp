@@ -17,6 +17,7 @@
 #include <QTextStream>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "sourcevideo.h"
 
@@ -35,13 +36,17 @@ namespace {
 constexpr double SQUARE_PIXEL_RATE_525 = 135.0e6 / 11.0;
 constexpr double SQUARE_PIXEL_RATE_625 = 14.75e6;
 
-// Best-frame search thresholds. A frame belongs to the anchor's still while
-// its 8x8-block thumbnail differs from the anchor's by less than
-// RUN_BREAK_DIFFERENCE (fraction of black-to-white). Within that run, a frame
-// is only a candidate if its combing and dropouts are near the run's median.
+// Still-picture search thresholds. A frame belongs to the anchor's still
+// while its 8x8-block thumbnail differs from the anchor's by less than
+// RUN_BREAK_DIFFERENCE (fraction of black-to-white); measured on a VHS
+// slideshow, cuts sit at 0.24-0.36 and frames of one photo at <= 0.018.
+// Within the run a frame is rejected when its visible dropouts are well above
+// the run's median, or its RMS distance from the run's per-pixel median is
+// more than DISTANCE_TOLERANCE times the typical distance: a head-switching
+// tear measured about 2x.
 constexpr double RUN_BREAK_DIFFERENCE = 0.06;
 constexpr qint32 THUMBNAIL_BLOCK = 8;
-constexpr double COMBING_TOLERANCE = 1.25;
+constexpr double DISTANCE_TOLERANCE = 1.5;
 constexpr double DROPOUT_ALLOWANCE_SAMPLES = 20.0;
 
 bool is625LineSystem(VideoSystem system)
@@ -177,6 +182,25 @@ QString aspectModeName(AspectMode mode)
     case AspectMode::Viewer: return QStringLiteral("viewer");
     }
     return QStringLiteral("exact");
+}
+
+QString stillModeName(StillMode mode)
+{
+    switch (mode) {
+    case StillMode::Off: return QStringLiteral("off");
+    case StillMode::Cleanest: return QStringLiteral("cleanest");
+    case StillMode::Average: return QStringLiteral("average");
+    }
+    return QStringLiteral("off");
+}
+
+StillMode stillModeFromName(const QString &name, StillMode fallback)
+{
+    const QString key = name.trimmed().toLower();
+    if (key == QLatin1String("off")) return StillMode::Off;
+    if (key == QLatin1String("cleanest")) return StillMode::Cleanest;
+    if (key == QLatin1String("average")) return StillMode::Average;
+    return fallback;
 }
 
 AspectMode aspectModeFromName(const QString &name, AspectMode fallback)
@@ -346,36 +370,7 @@ QImage process(const QImage &frameImage, const Options &options,
     return resampled(image, QSize(width, image.height()), method);
 }
 
-FieldMetrics measureField(const QVector<double> &plane, qint32 width, qint32 height)
-{
-    FieldMetrics metrics;
-    if (width < 3 || height < 3 || plane.size() < width * height) return metrics;
-
-    double gradientEnergy = 0.0;
-    double laplacianSum = 0.0;
-    for (qint32 y = 1; y < height - 1; y++) {
-        const double *above = plane.constData() + (y - 1) * width;
-        const double *row = plane.constData() + y * width;
-        const double *below = plane.constData() + (y + 1) * width;
-        for (qint32 x = 1; x < width - 1; x++) {
-            const double gx = (above[x + 1] + 2.0 * row[x + 1] + below[x + 1]) - (above[x - 1] + 2.0 * row[x - 1] + below[x - 1]);
-            const double gy = (below[x - 1] + 2.0 * below[x] + below[x + 1]) - (above[x - 1] + 2.0 * above[x] + above[x + 1]);
-            gradientEnergy += gx * gx + gy * gy;
-
-            // Immerkaer's noise mask: the difference of two Laplacians, which
-            // cancels most image structure and leaves the noise
-            laplacianSum += std::fabs(above[x - 1] - 2.0 * above[x] + above[x + 1]
-                                      - 2.0 * row[x - 1] + 4.0 * row[x] - 2.0 * row[x + 1]
-                                      + below[x - 1] - 2.0 * below[x] + below[x + 1]);
-        }
-    }
-    const double interior = static_cast<double>(width - 2) * (height - 2);
-    metrics.sharpness = gradientEnergy / interior;
-    metrics.noise = std::sqrt(M_PI / 2.0) * laplacianSum / (6.0 * interior);
-    return metrics;
-}
-
-SearchResult findBestFrame(const SearchInput &input, std::atomic<bool> *cancel, std::atomic<qint32> *progress)
+SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel, std::atomic<qint32> *progress)
 {
     SearchResult result;
     const TbcMetaData::VideoParameters &videoParameters = input.videoParameters;
@@ -385,96 +380,85 @@ SearchResult findBestFrame(const SearchInput &input, std::atomic<bool> *cancel, 
     SourceVideo sourceVideo;
     if (fieldWidth <= 0 || fieldHeight <= 0
         || !sourceVideo.open(input.tbcFilename, fieldWidth * fieldHeight, fieldWidth)) {
-        result.errorMessage = QStringLiteral("Could not open %1 for the best-frame search.").arg(input.tbcFilename);
+        result.errorMessage = QStringLiteral("Could not open %1 for the still-picture search.").arg(input.tbcFilename);
         return result;
     }
 
     // Frame row r comes from the first field (even r) or second field (odd r),
-    // field line r / 2. Score only the field lines inside the crop.
+    // field line r / 2. Only the field lines inside the crop are read.
     const QRect crop = input.cropRect.intersected(QRect(0, 0, fieldWidth, fieldHeight * 2 - 1));
     const qint32 x0 = crop.left();
     const qint32 width = crop.width();
     const qint32 line0 = (crop.top() + 1) / 2;
     const qint32 height = std::min(fieldHeight, (crop.bottom() + 1) / 2) - line0;
     if (width < THUMBNAIL_BLOCK || height < THUMBNAIL_BLOCK) {
-        result.errorMessage = QStringLiteral("The framed area is too small to score.");
+        result.errorMessage = QStringLiteral("The framed area is too small to search.");
         return result;
     }
-
-    const double black = videoParameters.black16bIre;
-    const double range = (videoParameters.white16bIre > videoParameters.black16bIre)
-                             ? videoParameters.white16bIre - videoParameters.black16bIre : 65535.0;
-
-    auto readPlane = [&](qint32 fieldNumber) {
-        QVector<double> plane(width * height);
-        const SourceVideo::Data field = sourceVideo.getVideoField(fieldNumber);
-        for (qint32 y = 0; y < height; y++) {
-            const quint16 *source = field.constData() + (line0 + y) * fieldWidth + x0;
-            double *target = plane.data() + y * width;
-            for (qint32 x = 0; x < width; x++) target[x] = (source[x] - black) / range;
-        }
-        return plane;
-    };
-
-    const qint32 blocksX = width / THUMBNAIL_BLOCK;
-    const qint32 blocksY = height / THUMBNAIL_BLOCK;
-    auto thumbnail = [&](const QVector<double> &plane) {
-        QVector<double> blocks(blocksX * blocksY, 0.0);
-        for (qint32 y = 0; y < blocksY * THUMBNAIL_BLOCK; y++) {
-            for (qint32 x = 0; x < blocksX * THUMBNAIL_BLOCK; x++) {
-                blocks[(y / THUMBNAIL_BLOCK) * blocksX + x / THUMBNAIL_BLOCK] += plane[y * width + x];
-            }
-        }
-        for (double &block : blocks) block /= THUMBNAIL_BLOCK * THUMBNAIL_BLOCK;
-        return blocks;
-    };
-
-    QVector<double> anchorThumbnail;
-    auto scoreFrame = [&](qint32 frame, FrameScore &score) {
-        score.frame = frame;
-        const qint32 index = frame - input.firstFrame;
-        const QVector<double> first = readPlane(input.fieldNumbers[index].first);
-        const QVector<double> second = readPlane(input.fieldNumbers[index].second);
-
-        const FieldMetrics firstMetrics = measureField(first, width, height);
-        const FieldMetrics secondMetrics = measureField(second, width, height);
-        score.sharpness = (firstMetrics.sharpness + secondMetrics.sharpness) / 2.0;
-        score.noise = (firstMetrics.noise + secondMetrics.noise) / 2.0;
-
-        // Combing on the woven frame: how far each line sits from the mean of
-        // its neighbours in the other field
-        double combing = 0.0;
-        for (qint32 y = 1; y < height; y++) {
-            for (qint32 x = 0; x < width; x++) {
-                const double fromFirst = first[y * width + x] - (second[(y - 1) * width + x] + second[y * width + x]) / 2.0;
-                const double fromSecond = second[(y - 1) * width + x] - (first[(y - 1) * width + x] + first[y * width + x]) / 2.0;
-                combing += std::fabs(fromFirst) + std::fabs(fromSecond);
-            }
-        }
-        score.combing = combing / (2.0 * width * (height - 1));
-        score.dropouts = (index < input.visibleDropouts.size()) ? input.visibleDropouts[index] : 0.0;
-
-        const QVector<double> frameThumbnail = thumbnail(first);
-        if (anchorThumbnail.isEmpty()) anchorThumbnail = frameThumbnail;
-        double difference = 0.0;
-        for (qint32 i = 0; i < frameThumbnail.size(); i++) difference += std::fabs(frameThumbnail[i] - anchorThumbnail[i]);
-        score.anchorDiff = difference / frameThumbnail.size();
-        score.inRun = score.anchorDiff < RUN_BREAK_DIFFERENCE;
-
-        if (progress) progress->fetch_add(1);
-    };
-
     const qint32 lastFrame = input.firstFrame + input.fieldNumbers.size() - 1;
     if (input.anchorFrame < input.firstFrame || input.anchorFrame > lastFrame) {
         result.errorMessage = QStringLiteral("The current frame is outside the search window.");
         return result;
     }
 
-    FrameScore anchorScore;
-    scoreFrame(input.anchorFrame, anchorScore);
-    result.scores.append(anchorScore);
+    const float black = videoParameters.black16bIre;
+    const float range = (videoParameters.white16bIre > videoParameters.black16bIre)
+                            ? videoParameters.white16bIre - videoParameters.black16bIre : 65535.0f;
 
-    // Walk outwards from the anchor until the picture changes
+    // Both fields of a frame, one after the other, scaled 0 (black) to 1 (white)
+    const qint32 fieldPixels = width * height;
+    auto readFrame = [&](qint32 frame) {
+        std::vector<float> pixels(2 * fieldPixels);
+        const QPair<qint32, qint32> &fields = input.fieldNumbers[frame - input.firstFrame];
+        for (qint32 f = 0; f < 2; f++) {
+            const SourceVideo::Data field = sourceVideo.getVideoField(f == 0 ? fields.first : fields.second);
+            for (qint32 y = 0; y < height; y++) {
+                const quint16 *source = field.constData() + (line0 + y) * fieldWidth + x0;
+                float *target = pixels.data() + f * fieldPixels + y * width;
+                for (qint32 x = 0; x < width; x++) target[x] = (source[x] - black) / range;
+            }
+        }
+        return pixels;
+    };
+
+    // 8x8-block means of the first field
+    const qint32 blocksX = width / THUMBNAIL_BLOCK;
+    const qint32 blocksY = height / THUMBNAIL_BLOCK;
+    auto thumbnail = [&](const std::vector<float> &pixels) {
+        std::vector<double> blocks(blocksX * blocksY, 0.0);
+        for (qint32 y = 0; y < blocksY * THUMBNAIL_BLOCK; y++) {
+            for (qint32 x = 0; x < blocksX * THUMBNAIL_BLOCK; x++) {
+                blocks[(y / THUMBNAIL_BLOCK) * blocksX + x / THUMBNAIL_BLOCK] += pixels[y * width + x];
+            }
+        }
+        for (double &block : blocks) block /= THUMBNAIL_BLOCK * THUMBNAIL_BLOCK;
+        return blocks;
+    };
+
+    // Walk outwards from the anchor until the picture changes, keeping the
+    // pixels of every frame of the run
+    std::vector<double> anchorThumbnail;
+    QVector<FrameScore> scores;
+    std::vector<std::vector<float>> runPixels;
+    auto visit = [&](qint32 frame) {
+        FrameScore score;
+        score.frame = frame;
+        const qint32 index = frame - input.firstFrame;
+        score.dropouts = (index < input.visibleDropouts.size()) ? input.visibleDropouts[index] : 0.0;
+        std::vector<float> pixels = readFrame(frame);
+        const std::vector<double> frameThumbnail = thumbnail(pixels);
+        if (anchorThumbnail.empty()) anchorThumbnail = frameThumbnail;
+        double difference = 0.0;
+        for (size_t i = 0; i < frameThumbnail.size(); i++) difference += std::fabs(frameThumbnail[i] - anchorThumbnail[i]);
+        score.anchorDiff = difference / frameThumbnail.size();
+        score.inRun = score.anchorDiff < RUN_BREAK_DIFFERENCE;
+        if (score.inRun) runPixels.push_back(std::move(pixels));
+        scores.append(score);
+        if (progress) progress->fetch_add(1);
+        return score.inRun;
+    };
+
+    visit(input.anchorFrame);
     for (const qint32 step : {-1, 1}) {
         for (qint32 distance = 1; distance <= input.radius; distance++) {
             if (cancel && cancel->load()) {
@@ -483,39 +467,55 @@ SearchResult findBestFrame(const SearchInput &input, std::atomic<bool> *cancel, 
             }
             const qint32 frame = input.anchorFrame + step * distance;
             if (frame < input.firstFrame || frame > lastFrame) break;
-            FrameScore score;
-            scoreFrame(frame, score);
-            result.scores.append(score);
-            if (!score.inRun) break;
+            if (!visit(frame)) break;
         }
     }
-    std::sort(result.scores.begin(), result.scores.end(),
-              [](const FrameScore &a, const FrameScore &b) { return a.frame < b.frame; });
 
-    QVector<double> runCombing;
+    // Per-pixel median of the run: with dozens of frames of one photo it is
+    // close to the noise-free picture
+    const size_t runLength = runPixels.size();
+    std::vector<float> medianPixels(2 * fieldPixels);
+    std::vector<float> samples(runLength);
+    for (size_t i = 0; i < medianPixels.size(); i++) {
+        for (size_t f = 0; f < runLength; f++) samples[f] = runPixels[f][i];
+        std::nth_element(samples.begin(), samples.begin() + runLength / 2, samples.end());
+        medianPixels[i] = samples[runLength / 2];
+    }
+
+    // Distance of each frame of the run from the median, in visit order
+    size_t runIndex = 0;
+    QVector<double> runDistances;
     QVector<double> runDropouts;
-    for (const FrameScore &score : result.scores) {
+    for (FrameScore &score : scores) {
         if (!score.inRun) continue;
-        runCombing.append(score.combing);
+        const std::vector<float> &pixels = runPixels[runIndex++];
+        double sum = 0.0;
+        for (size_t i = 0; i < pixels.size(); i++) {
+            const double difference = pixels[i] - medianPixels[i];
+            sum += difference * difference;
+        }
+        score.distance = std::sqrt(sum / pixels.size());
+        runDistances.append(score.distance);
         runDropouts.append(score.dropouts);
     }
-    const double combingLimit = median(runCombing) * COMBING_TOLERANCE + 1e-6;
+
+    const double distanceLimit = median(runDistances) * DISTANCE_TOLERANCE;
     const double runDropoutMedian = median(runDropouts);
     const double dropoutLimit = runDropoutMedian + std::max(DROPOUT_ALLOWANCE_SAMPLES, runDropoutMedian);
 
-    double bestScore = -1.0;
+    std::sort(scores.begin(), scores.end(), [](const FrameScore &a, const FrameScore &b) { return a.frame < b.frame; });
+    double bestDistance = -1.0;
     result.bestFrame = input.anchorFrame;
-    for (FrameScore &score : result.scores) {
-        score.eligible = score.inRun && score.combing <= combingLimit && score.dropouts <= dropoutLimit;
-        // Sobel's response to white noise of sigma s is 24 s^2; what is left is
-        // picture detail, scored per unit of noise.
-        const double detail = std::max(0.0, score.sharpness - 24.0 * score.noise * score.noise);
-        score.score = detail / std::max(score.noise, 1e-6);
-        if (score.eligible && score.score > bestScore) {
-            bestScore = score.score;
+    for (FrameScore &score : scores) {
+        score.eligible = score.inRun && score.distance <= distanceLimit && score.dropouts <= dropoutLimit;
+        if (!score.eligible) continue;
+        result.eligibleFrames.append(score.frame);
+        if (bestDistance < 0.0 || score.distance < bestDistance) {
+            bestDistance = score.distance;
             result.bestFrame = score.frame;
         }
     }
+    result.scores = scores;
     return result;
 }
 
@@ -527,14 +527,61 @@ bool writeScoreReport(const QString &filename, const SearchResult &result, QStri
         return false;
     }
     QTextStream stream(&file);
-    stream << "frame,in_run,eligible,anchor_diff,sharpness,noise,combing,dropouts,score,best\n";
+    stream << "frame,in_run,eligible,anchor_diff,distance,dropouts,best\n";
     for (const FrameScore &score : result.scores) {
         stream << score.frame << ',' << int(score.inRun) << ',' << int(score.eligible) << ','
-               << score.anchorDiff << ',' << score.sharpness << ',' << score.noise << ','
-               << score.combing << ',' << score.dropouts << ',' << score.score << ','
+               << score.anchorDiff << ',' << score.distance << ',' << score.dropouts << ','
                << int(score.frame == result.bestFrame) << '\n';
     }
     return true;
+}
+
+QImage averageFrames(const QVector<qint32> &frames, const std::function<QImage(qint32)> &render,
+                     std::atomic<bool> *cancel, std::atomic<qint32> *progress)
+{
+    // Averaging the decoded pictures, not the TBC samples: NTSC's subcarrier
+    // phase inverts every frame, so averaging raw samples cancels the colour
+    QSize size;
+    std::vector<quint32> sums;
+    qint32 count = 0;
+    for (const qint32 frame : frames) {
+        if (cancel && cancel->load()) return QImage();
+        const QImage image = render(frame).convertToFormat(QImage::Format_RGB32);
+        if (progress) progress->fetch_add(1);
+        if (image.isNull()) continue;
+        if (size.isEmpty()) {
+            size = image.size();
+            sums.assign(static_cast<size_t>(size.width()) * size.height() * 3, 0);
+        }
+        if (image.size() != size) continue;
+
+        quint32 *sum = sums.data();
+        for (qint32 y = 0; y < size.height(); y++) {
+            const QRgb *line = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+            for (qint32 x = 0; x < size.width(); x++) {
+                *sum++ += qRed(line[x]);
+                *sum++ += qGreen(line[x]);
+                *sum++ += qBlue(line[x]);
+            }
+        }
+        count++;
+    }
+    if (count == 0) return QImage();
+
+    QImage average(size, QImage::Format_RGB32);
+    const quint32 half = static_cast<quint32>(count) / 2;
+    const quint32 *sum = sums.data();
+    for (qint32 y = 0; y < size.height(); y++) {
+        QRgb *line = reinterpret_cast<QRgb *>(average.scanLine(y));
+        for (qint32 x = 0; x < size.width(); x++) {
+            const quint32 red = (sum[0] + half) / count;
+            const quint32 green = (sum[1] + half) / count;
+            const quint32 blue = (sum[2] + half) / count;
+            line[x] = qRgb(int(red), int(green), int(blue));
+            sum += 3;
+        }
+    }
+    return average;
 }
 
 } // namespace FrameSnapshot

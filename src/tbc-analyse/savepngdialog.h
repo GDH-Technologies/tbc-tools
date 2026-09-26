@@ -17,7 +17,6 @@
 #include "framesnapshot.h"
 
 class QButtonGroup;
-class QCheckBox;
 class QComboBox;
 class QLabel;
 class QRadioButton;
@@ -56,7 +55,7 @@ private:
     QSpinBox *marginRightSpin = nullptr;
     QSpinBox *marginBottomSpin = nullptr;
     QComboBox *aspectCombo = nullptr;
-    QCheckBox *searchCheck = nullptr;
+    QComboBox *stillCombo = nullptr;
     QSpinBox *radiusSpin = nullptr;
     QComboBox *upscaleCombo = nullptr;
     QComboBox *methodCombo = nullptr;

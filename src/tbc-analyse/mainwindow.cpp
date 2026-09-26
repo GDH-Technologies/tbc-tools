@@ -2849,6 +2849,10 @@ void MainWindow::cancelInFlightAsyncFrameRender()
 // Update the UI and displays when currentFrameNumber or currentFieldNumber has changed
 void MainWindow::showImage()
 {
+    if (tbcSourceBusy) {
+        showImagePending = true;
+        return;
+    }
     if (asyncFrameRenderInProgress) {
         if (shouldRenderFrameAsync()) {
             asyncFrameRenderQueued = true;
@@ -6297,7 +6301,9 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
     const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
     const QSize frameSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
 
-    if (frameView && options.bestFrameSearch) {
+    QImage averagedImage;
+    qint32 averagedFrames = 0;
+    if (frameView && options.stillMode != FrameSnapshot::StillMode::Off) {
         FrameSnapshot::SearchInput input;
         input.tbcFilename = tbcSource.getCurrentSourceFilename();
         input.videoParameters = videoParameters;
@@ -6317,9 +6323,9 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
         const FrameSnapshot::SearchResult result = waitWithProgress(
             this,
             QtConcurrent::run([input, &cancel, &progress]() {
-                return FrameSnapshot::findBestFrame(input, &cancel, &progress);
+                return FrameSnapshot::findStillFrames(input, &cancel, &progress);
             }),
-            tr("Finding the sharpest, cleanest frame..."), &cancel, &progress, 2 * options.searchRadius + 1);
+            tr("Finding the frames that show this picture..."), &cancel, &progress, 2 * options.searchRadius + 1);
         if (result.cancelled) {
             return;
         }
@@ -6332,18 +6338,68 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
         for (const FrameSnapshot::FrameScore &score : result.scores) {
             if (score.inRun) runLength++;
         }
-        tbcDebugStream() << "MainWindow::saveFrameAsPng(): best frame" << result.bestFrame
-                         << "of a run of" << runLength << "around frame" << currentFrameNumber;
+        tbcDebugStream() << "MainWindow::saveFrameAsPng(): cleanest frame" << result.bestFrame << "of"
+                         << result.eligibleFrames.size() << "usable in a run of" << runLength
+                         << "around frame" << currentFrameNumber;
+
+        if (options.stillMode == FrameSnapshot::StillMode::Average) {
+            // Render each usable frame through the chroma decoder on a worker
+            // thread. Nothing else may use tbcSource meanwhile: no async
+            // render, and showImage() waits. Dropout highlighting would be
+            // painted into every frame, so it is off for the duration.
+            cancelInFlightAsyncFrameRender();
+            const bool highlightDropouts = tbcSource.getHighlightDropouts();
+            tbcSource.setHighlightDropouts(false);
+            tbcSourceBusy = true;
+
+            std::atomic<bool> cancelAverage(false);
+            std::atomic<qint32> rendered(0);
+            const QVector<qint32> frames = result.eligibleFrames;
+            averagedImage = waitWithProgress(
+                this,
+                QtConcurrent::run([this, frames, &cancelAverage, &rendered]() {
+                    return FrameSnapshot::averageFrames(frames, [this](qint32 frame) {
+                        tbcSource.load(frame, frame * 2 - 1);
+                        return tbcSource.getImage();
+                    }, &cancelAverage, &rendered);
+                }),
+                tr("Averaging %1 frames...").arg(frames.size()), &cancelAverage, &rendered, frames.size());
+
+            tbcSourceBusy = false;
+            tbcSource.setHighlightDropouts(highlightDropouts);
+            // tbcSource now holds the last averaged frame. The jump below
+            // redraws the viewer; without a jump, redraw it here.
+            showImagePending = false;
+            if (result.bestFrame == currentFrameNumber) {
+                showImage();
+            }
+
+            if (cancelAverage.load()) {
+                return;
+            }
+            if (averagedImage.isNull()) {
+                QMessageBox::warning(this, tr("Warning"), tr("No image data is available to export as PNG."));
+                return;
+            }
+            averagedFrames = frames.size();
+        }
+
         if (result.bestFrame != currentFrameNumber) {
             setCurrentFrame(result.bestFrame);
             updatePositionEditorValue(currentFrameNumber);
             ui->posHorizontalSlider->setValue(currentFrameNumber);
         }
-        statusBar()->showMessage(tr("Best frame: %1 (of %2 frames showing the same picture)")
-                                     .arg(result.bestFrame).arg(runLength), 10000);
+        if (options.stillMode == FrameSnapshot::StillMode::Average) {
+            statusBar()->showMessage(tr("Averaged %1 of %2 frames showing the same picture; viewer on the most typical, %3")
+                                         .arg(averagedFrames).arg(runLength).arg(result.bestFrame), 10000);
+        } else {
+            statusBar()->showMessage(tr("Cleanest frame: %1 (of %2 frames showing the same picture)")
+                                         .arg(result.bestFrame).arg(runLength), 10000);
+        }
     }
 
-    const QImage imageToSave = frameView ? renderedCurrentFrameImage() : renderedCurrentImageForExport();
+    const QImage imageToSave = !averagedImage.isNull() ? averagedImage
+                               : frameView ? renderedCurrentFrameImage() : renderedCurrentImageForExport();
     if (imageToSave.isNull()) {
         QMessageBox::warning(this, tr("Warning"), tr("No image data is available to export as PNG."));
         return;
@@ -6399,6 +6455,9 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
     if (!sourceFileName.isEmpty()) {
         filenameStem += QStringLiteral("_");
         filenameStem += sanitizedFileToken(QFileInfo(sourceFileName).completeBaseName());
+    }
+    if (averagedFrames > 0) {
+        filenameStem += QStringLiteral("_avg%1").arg(averagedFrames);
     }
     if (frameView && options.upscaleFactor > 1) {
         filenameStem += QStringLiteral("_up%1x_%2").arg(options.upscaleFactor).arg(sanitizedFileToken(options.upscaleMethod));

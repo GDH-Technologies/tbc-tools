@@ -435,6 +435,10 @@ private:
     QFutureWatcher<QImage> asyncFrameRenderWatcher;
     bool asyncFrameRenderInProgress = false;
     bool asyncFrameRenderQueued = false;
+    // Set while a worker thread renders other frames through tbcSource (the
+    // still-picture average); showImage() defers until it is cleared.
+    bool tbcSourceBusy = false;
+    bool showImagePending = false;
     qint32 asyncFrameRenderFrameNumber = -1;
     qint32 asyncFrameRenderFieldNumber = -1;
     QImage asyncFrameImage;

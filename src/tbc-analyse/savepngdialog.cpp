@@ -11,7 +11,6 @@
 #include "savepngdialog.h"
 
 #include <QButtonGroup>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -207,17 +206,22 @@ SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage
     aspectLayout->addWidget(aspectCombo);
     optionsLayout->addWidget(aspectBox);
 
-    // Best frame
-    auto *searchBox = new QGroupBox(tr("Best frame"), this);
+    // Still pictures
+    auto *searchBox = new QGroupBox(tr("Still picture"), this);
     auto *searchLayout = new QFormLayout(searchBox);
-    searchCheck = new QCheckBox(tr("Save the sharpest, cleanest nearby frame"), searchBox);
-    searchCheck->setToolTip(tr("For still pictures held on tape (slideshows): scores the frames around this one "
-                               "that show the same picture, and saves the best. The viewer moves to that frame."));
+    stillCombo = new QComboBox(searchBox);
+    stillCombo->addItem(tr("This frame only"), int(FrameSnapshot::StillMode::Off));
+    stillCombo->addItem(tr("Cleanest nearby frame"), int(FrameSnapshot::StillMode::Cleanest));
+    stillCombo->addItem(tr("Average of nearby frames"), int(FrameSnapshot::StillMode::Average));
+    stillCombo->setToolTip(tr("For a picture held on tape (a slideshow photo): finds the frames around this one "
+                              "that show the same picture and drops those with dropouts or tears. \"Cleanest\" "
+                              "saves the most typical of them; \"Average\" saves their mean, which removes most "
+                              "tape noise. The viewer moves to the most typical frame."));
     radiusSpin = new QSpinBox(searchBox);
     radiusSpin->setRange(1, 600);
-    radiusSpin->setPrefix(tr("±"));
+    radiusSpin->setPrefix(tr("\u00b1"));
     radiusSpin->setSuffix(tr(" frames"));
-    searchLayout->addRow(searchCheck);
+    searchLayout->addRow(tr("Save:"), stillCombo);
     searchLayout->addRow(tr("Search up to:"), radiusSpin);
     optionsLayout->addWidget(searchBox);
 
@@ -270,8 +274,7 @@ SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage
     for (QSpinBox *spin : {marginLeftSpin, marginTopSpin, marginRightSpin, marginBottomSpin, radiusSpin}) {
         connect(spin, &QSpinBox::valueChanged, this, [this]() { refresh(); });
     }
-    connect(searchCheck, &QCheckBox::toggled, this, [this]() { refresh(); });
-    for (QComboBox *combo : {aspectCombo, upscaleCombo, methodCombo}) {
+    for (QComboBox *combo : {aspectCombo, stillCombo, upscaleCombo, methodCombo}) {
         connect(combo, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
     }
 
@@ -288,7 +291,7 @@ FrameSnapshot::Options SavePngDialog::selectedOptions() const
     options.marginBottom = marginBottomSpin->value();
     options.customRect = customRect;
     options.aspectMode = static_cast<FrameSnapshot::AspectMode>(aspectCombo->currentData().toInt());
-    options.bestFrameSearch = searchCheck->isChecked();
+    options.stillMode = static_cast<FrameSnapshot::StillMode>(stillCombo->currentData().toInt());
     options.searchRadius = radiusSpin->value();
     options.upscaleFactor = upscaleCombo->currentData().toInt();
     options.upscaleMethod = methodCombo->currentData().toString();
@@ -299,7 +302,7 @@ void SavePngDialog::setControls(const FrameSnapshot::Options &options)
 {
     // Filled without signals; refresh() below brings everything in line once
     const QList<QObject *> controls = {marginLeftSpin, marginTopSpin, marginRightSpin, marginBottomSpin,
-                                       aspectCombo, searchCheck, radiusSpin, upscaleCombo, methodCombo};
+                                       aspectCombo, stillCombo, radiusSpin, upscaleCombo, methodCombo};
     for (QObject *control : controls) control->blockSignals(true);
 
     if (QAbstractButton *button = framingGroup->button(int(options.framing))) button->setChecked(true);
@@ -308,7 +311,7 @@ void SavePngDialog::setControls(const FrameSnapshot::Options &options)
     marginRightSpin->setValue(options.marginRight);
     marginBottomSpin->setValue(options.marginBottom);
     aspectCombo->setCurrentIndex(qMax(0, aspectCombo->findData(int(options.aspectMode))));
-    searchCheck->setChecked(options.bestFrameSearch);
+    stillCombo->setCurrentIndex(qMax(0, stillCombo->findData(int(options.stillMode))));
     radiusSpin->setValue(options.searchRadius);
     upscaleCombo->setCurrentIndex(qMax(0, upscaleCombo->findData(options.upscaleFactor)));
     methodCombo->setCurrentIndex(qMax(0, methodCombo->findData(options.upscaleMethod)));
@@ -325,7 +328,7 @@ void SavePngDialog::refresh()
                              ? tr("Drag on the preview to draw a custom rectangle.")
                              : tr("Custom: %1×%2 at %3, %4").arg(customRect.width()).arg(customRect.height())
                                    .arg(customRect.x()).arg(customRect.y()));
-    radiusSpin->setEnabled(searchCheck->isChecked());
+    radiusSpin->setEnabled(stillCombo->currentData().toInt() != int(FrameSnapshot::StillMode::Off));
 
     const FrameSnapshot::Options options = selectedOptions();
     const QRect rect = FrameSnapshot::outputRect(options, videoParameters, frameImage.size());

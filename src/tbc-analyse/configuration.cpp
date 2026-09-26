@@ -149,7 +149,8 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("marginBottom", settings.frameSnapshot.marginBottom);
     configuration->setValue("customRect", settings.frameSnapshot.customRect);
     configuration->setValue("aspectMode", FrameSnapshot::aspectModeName(settings.frameSnapshot.aspectMode));
-    configuration->setValue("bestFrameSearch", settings.frameSnapshot.bestFrameSearch);
+    configuration->setValue("stillMode", FrameSnapshot::stillModeName(settings.frameSnapshot.stillMode));
+    configuration->remove("bestFrameSearch"); // replaced by stillMode
     configuration->setValue("searchRadius", settings.frameSnapshot.searchRadius);
     configuration->setValue("upscaleFactor", settings.frameSnapshot.upscaleFactor);
     configuration->setValue("upscaleMethod", settings.frameSnapshot.upscaleMethod);
@@ -265,11 +266,15 @@ void Configuration::readConfiguration(void)
     settings.frameSnapshot.marginLeft = std::max(0, configuration->value("marginLeft", 0).toInt());
     settings.frameSnapshot.marginTop = std::max(0, configuration->value("marginTop", 0).toInt());
     settings.frameSnapshot.marginRight = std::max(0, configuration->value("marginRight", 0).toInt());
-    settings.frameSnapshot.marginBottom = std::max(0, configuration->value("marginBottom", 0).toInt());
+    settings.frameSnapshot.marginBottom = std::max(0, configuration->value("marginBottom", snapshotDefaults.marginBottom).toInt());
     settings.frameSnapshot.customRect = configuration->value("customRect", QRect()).toRect();
     settings.frameSnapshot.aspectMode = FrameSnapshot::aspectModeFromName(
         configuration->value("aspectMode").toString(), snapshotDefaults.aspectMode);
-    settings.frameSnapshot.bestFrameSearch = configuration->value("bestFrameSearch", snapshotDefaults.bestFrameSearch).toBool();
+    // stillMode replaced a bestFrameSearch on/off flag
+    const FrameSnapshot::StillMode legacyStillMode = configuration->value("bestFrameSearch", false).toBool()
+                                                         ? FrameSnapshot::StillMode::Cleanest : snapshotDefaults.stillMode;
+    settings.frameSnapshot.stillMode = FrameSnapshot::stillModeFromName(
+        configuration->value("stillMode").toString(), legacyStillMode);
     settings.frameSnapshot.searchRadius = std::clamp(
         configuration->value("searchRadius", snapshotDefaults.searchRadius).toInt(), 1, 600);
     settings.frameSnapshot.upscaleFactor = std::clamp(

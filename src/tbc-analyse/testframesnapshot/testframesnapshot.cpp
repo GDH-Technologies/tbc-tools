@@ -78,11 +78,12 @@ void testActiveRectAndMargins()
     const TbcMetaData::VideoParameters pal = palParameters();
     CHECK(FrameSnapshot::activeFrameRect(pal, QSize(1135, 625)) == QRect(185, 44, 922, 576));
 
+    // The default trims 12 lines of head switching off the bottom
     Options options;
-    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(134, 40, 760, 485));
+    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(134, 40, 760, 473));
 
     options.framing = Framing::Full;
-    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(0, 0, 910, 525));
+    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(0, 0, 910, 513));
 
     options.framing = Framing::Active;
     options.marginLeft = 10;
@@ -99,15 +100,15 @@ void testActiveRectAndMargins()
     options = Options();
     options.framing = Framing::Custom;
     options.customRect = QRect(800, 500, 400, 400);
-    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(800, 500, 110, 25));
+    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(800, 500, 110, 13));
     options.customRect = QRect();
-    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(134, 40, 760, 485));
+    CHECK(FrameSnapshot::outputRect(options, ntsc, ntscFrame) == QRect(134, 40, 760, 473));
 
     // No active area in the metadata: active framing is the full frame
     TbcMetaData::VideoParameters unknown = ntsc;
     unknown.firstActiveFrameLine = -1;
     CHECK(FrameSnapshot::activeFrameRect(unknown, ntscFrame).isNull());
-    CHECK(FrameSnapshot::outputRect(Options(), unknown, ntscFrame) == QRect(0, 0, 910, 525));
+    CHECK(FrameSnapshot::outputRect(Options(), unknown, ntscFrame) == QRect(0, 0, 910, 513));
 }
 
 void testPixelAspect()
@@ -152,11 +153,11 @@ void testProcessWithoutUpscale()
 
     QString error;
     const QImage exact = FrameSnapshot::process(frame, Options(), ntsc, &error);
-    CHECK(exact.size() == QSize(651, 485));
+    CHECK(exact.size() == QSize(651, 473));
 
     Options viewer;
     viewer.aspectMode = AspectMode::Viewer;
-    CHECK(FrameSnapshot::process(frame, viewer, ntsc, &error).size() == QSize(635, 485));
+    CHECK(FrameSnapshot::process(frame, viewer, ntsc, &error).size() == QSize(635, 473));
 }
 
 void testUpscale()
@@ -175,15 +176,15 @@ void testUpscale()
     CHECK(methods.constFirst().name == QLatin1String("lanczos4"));
 #endif
 
-    // 760x485 active area, 2x, then 6/7 for square pixels
+    // 760x473 trimmed active area, 2x, then 6/7 for square pixels
     QString error;
     Options options;
     options.upscaleFactor = 2;
-    CHECK(FrameSnapshot::process(frame, options, ntsc, &error).size() == QSize(1303, 970));
+    CHECK(FrameSnapshot::process(frame, options, ntsc, &error).size() == QSize(1303, 946));
 
     // An unknown method falls back to the first available one
     options.upscaleMethod = QStringLiteral("no-such-method");
-    CHECK(FrameSnapshot::process(frame, options, ntsc, &error).size() == QSize(1303, 970));
+    CHECK(FrameSnapshot::process(frame, options, ntsc, &error).size() == QSize(1303, 946));
 
     // Every method, including each installed learned model, gives the exact size
     const QImage small = frame.copy(200, 100, 64, 48);
@@ -200,70 +201,35 @@ void testUpscale()
     std::cerr << "Upscale methods checked: " << methods.size() << "\n";
 }
 
-QVector<double> texturedPlane(qint32 width, qint32 height, double blur, double noiseSigma, unsigned seed)
-{
-    std::mt19937 generator(seed);
-    std::normal_distribution<double> noise(0.0, noiseSigma);
-    QVector<double> plane(width * height);
-    for (qint32 y = 0; y < height; y++) {
-        for (qint32 x = 0; x < width; x++) {
-            // Sharp edges every 8 samples, softened by 'blur'
-            const double phase = std::sin(x * M_PI / 8.0) * std::cos(y * M_PI / 6.0);
-            const double edge = std::tanh(phase / std::max(blur, 1e-3));
-            plane[y * width + x] = 0.5 + 0.25 * edge + noise(generator);
-        }
-    }
-    return plane;
-}
-
-void testFieldMetrics()
-{
-    const qint32 width = 256;
-    const qint32 height = 128;
-
-    // Immerkaer estimate tracks a known sigma on a flat field
-    for (const double sigma : {0.01, 0.03}) {
-        QVector<double> flat(width * height);
-        std::mt19937 generator(7);
-        std::normal_distribution<double> noise(0.0, sigma);
-        for (double &value : flat) value = 0.5 + noise(generator);
-        const FrameSnapshot::FieldMetrics metrics = FrameSnapshot::measureField(flat, width, height);
-        CHECK(near(metrics.noise, sigma, sigma * 0.1));
-    }
-
-    // Tenengrad ranks a sharp image above a blurred one
-    const FrameSnapshot::FieldMetrics sharp = FrameSnapshot::measureField(texturedPlane(width, height, 0.05, 0.0, 1), width, height);
-    const FrameSnapshot::FieldMetrics soft = FrameSnapshot::measureField(texturedPlane(width, height, 1.0, 0.0, 1), width, height);
-    CHECK(sharp.sharpness > soft.sharpness * 1.5);
-}
-
-// Frames 1-6 hold picture A with differing noise, frames 7-10 picture B.
-// Searching around frame 3 must stay within A and pick its quietest frame.
-void testBestFrameSearch()
+// Frames 1-9 hold picture A, frames 10-12 picture B. Frame 4 is the quietest
+// copy of A; frame 6 is quieter still but carries a head-switching-style
+// tear, the high-contrast artifact a sharpness score would have chosen.
+void testStillSearch()
 {
     const qint32 fieldWidth = 96;
     const qint32 fieldHeight = 48;
-    const qint32 frames = 10;
+    const qint32 frames = 12;
     const double black = 16384.0;
     const double white = 54016.0;
-    const double noisePerFrame[frames] = {0.030, 0.020, 0.025, 0.004, 0.030, 0.015, 0.004, 0.004, 0.004, 0.004};
 
     QTemporaryDir directory;
     CHECK(directory.isValid());
     const QString tbcPath = directory.filePath(QStringLiteral("synthetic.tbc"));
     QFile file(tbcPath);
     CHECK(file.open(QIODevice::WriteOnly));
-    for (qint32 frame = 0; frame < frames; frame++) {
-        const bool pictureB = frame >= 6;
+    for (qint32 frame = 1; frame <= frames; frame++) {
+        const bool pictureB = frame >= 10;
+        const double sigma = (frame == 4 || frame == 6 || pictureB) ? 0.004 : 0.02;
         for (qint32 field = 0; field < 2; field++) {
             std::mt19937 generator(frame * 2 + field + 11);
-            std::normal_distribution<double> noise(0.0, noisePerFrame[frame]);
+            std::normal_distribution<double> noise(0.0, sigma);
             QVector<quint16> samples(fieldWidth * fieldHeight);
             for (qint32 line = 0; line < fieldHeight; line++) {
                 for (qint32 x = 0; x < fieldWidth; x++) {
                     const qint32 frameLine = line * 2 + field;
-                    const double base = pictureB ? ((x / 12 + frameLine / 12) % 2 ? 0.85 : 0.15)
-                                                 : ((x / 8) % 2 ? 0.7 : 0.3) + 0.1 * std::sin(frameLine * 0.3);
+                    double base = pictureB ? ((x / 12 + frameLine / 12) % 2 ? 0.85 : 0.15)
+                                           : ((x / 8) % 2 ? 0.7 : 0.3) + 0.1 * std::sin(frameLine * 0.3);
+                    if (frame == 6 && line >= 40 && line < 43) base = (x / 3) % 2 ? 0.95 : 0.05;
                     const double value = black + (base + noise(generator)) * (white - black);
                     samples[line * fieldWidth + x] = quint16(qBound(0.0, value, 65535.0));
                 }
@@ -281,7 +247,7 @@ void testBestFrameSearch()
     input.videoParameters.black16bIre = qint32(black);
     input.videoParameters.white16bIre = qint32(white);
     input.anchorFrame = 3;
-    input.radius = 5;
+    input.radius = 8;
     input.cropRect = QRect(0, 0, fieldWidth, fieldHeight * 2 - 1);
     input.firstFrame = 1;
     for (qint32 frame = 1; frame <= frames; frame++) {
@@ -289,18 +255,48 @@ void testBestFrameSearch()
         input.visibleDropouts.append(0.0);
     }
 
-    const FrameSnapshot::SearchResult result = FrameSnapshot::findBestFrame(input);
+    const FrameSnapshot::SearchResult result = FrameSnapshot::findStillFrames(input);
     CHECK(result.errorMessage.isEmpty());
-    CHECK(result.bestFrame == 4);
     for (const FrameSnapshot::FrameScore &score : result.scores) {
-        CHECK(score.inRun == (score.frame <= 6));
+        CHECK(score.inRun == (score.frame <= 9));
     }
     // The walk stops at the first frame of picture B
-    CHECK(result.scores.last().frame == 7);
+    CHECK(result.scores.last().frame == 10);
+    // The torn frame is rejected; the quietest untorn frame is the cleanest
+    CHECK(!result.eligibleFrames.contains(6));
+    CHECK(result.bestFrame == 4);
+    CHECK(result.eligibleFrames == QVector<qint32>({1, 2, 3, 4, 5, 7, 8, 9}));
 
-    // A dropout-heavy frame is passed over even when it is the quietest
+    // A frame with heavy visible dropouts is rejected however clean it looks
     input.visibleDropouts[3] = 500.0;
-    CHECK(FrameSnapshot::findBestFrame(input).bestFrame != 4);
+    const FrameSnapshot::SearchResult withDropouts = FrameSnapshot::findStillFrames(input);
+    CHECK(withDropouts.bestFrame != 4);
+    CHECK(!withDropouts.eligibleFrames.contains(4));
+}
+
+void testAverageFrames()
+{
+    auto solid = [](int value, QSize size = QSize(8, 4)) {
+        QImage image(size, QImage::Format_RGB32);
+        image.fill(qRgb(value, 255 - value, value / 2));
+        return image;
+    };
+
+    // Per-channel mean with rounding; wrong-sized and null frames are skipped
+    const QImage average = FrameSnapshot::averageFrames({1, 2, 3, 4, 5}, [&](qint32 frame) {
+        switch (frame) {
+        case 1: return solid(10);
+        case 2: return solid(20);
+        case 3: return solid(31);
+        case 4: return solid(200, QSize(4, 4));
+        default: return QImage();
+        }
+    });
+    CHECK(average.size() == QSize(8, 4));
+    CHECK(average.pixel(3, 2) == qRgb(20, 235, 10));
+
+    std::atomic<bool> cancel(true);
+    CHECK(FrameSnapshot::averageFrames({1}, [&](qint32) { return solid(1); }, &cancel).isNull());
 }
 
 } // namespace
@@ -314,8 +310,8 @@ int main(int argc, char *argv[])
     testOutputSize();
     testProcessWithoutUpscale();
     testUpscale();
-    testFieldMetrics();
-    testBestFrameSearch();
+    testStillSearch();
+    testAverageFrames();
 
     std::cerr << "All frame snapshot tests passed\n";
     return 0;

@@ -89,10 +89,17 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
         options.aspectMode = FrameSnapshot::aspectModeFromName(aspect, invalid);
         if (options.aspectMode == invalid) return fail(QStringLiteral("--aspect takes exact or viewer"));
     }
-    if (parser.isSet(QStringLiteral("best-of"))) {
-        options.searchRadius = parser.value(QStringLiteral("best-of")).toInt(&ok);
-        if (!ok || options.searchRadius < 0) return fail(QStringLiteral("--best-of takes a frame count (0 = off)"));
-        options.bestFrameSearch = options.searchRadius > 0;
+    if (parser.isSet(QStringLiteral("best-of")) && parser.isSet(QStringLiteral("average-of"))) {
+        return fail(QStringLiteral("--best-of and --average-of are alternatives; give one"));
+    }
+    for (const QString &flag : {QStringLiteral("best-of"), QStringLiteral("average-of")}) {
+        if (!parser.isSet(flag)) continue;
+        options.searchRadius = parser.value(flag).toInt(&ok);
+        if (!ok || options.searchRadius < 0) return fail(QStringLiteral("--%1 takes a frame count (0 = off)").arg(flag));
+        if (options.searchRadius > 0) {
+            options.stillMode = flag == QLatin1String("best-of") ? FrameSnapshot::StillMode::Cleanest
+                                                                 : FrameSnapshot::StillMode::Average;
+        }
     }
     if (parser.isSet(QStringLiteral("upscale"))) {
         options.upscaleFactor = parser.value(QStringLiteral("upscale")).toInt(&ok);
@@ -132,12 +139,14 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
     const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
     const QSize frameSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
 
-    if (options.bestFrameSearch || parser.isSet(QStringLiteral("score-report"))) {
+    const bool search = options.stillMode != FrameSnapshot::StillMode::Off;
+    QImage frameImage;
+    if (search || parser.isSet(QStringLiteral("score-report"))) {
         FrameSnapshot::SearchInput input;
         input.tbcFilename = tbcSource.getCurrentSourceFilename();
         input.videoParameters = videoParameters;
         input.anchorFrame = frameNumber;
-        input.radius = options.bestFrameSearch ? options.searchRadius : FrameSnapshot::Options().searchRadius;
+        input.radius = search ? options.searchRadius : FrameSnapshot::Options().searchRadius;
         input.cropRect = FrameSnapshot::outputRect(options, videoParameters, frameSize);
         input.firstFrame = qMax(1, frameNumber - input.radius);
         const qint32 lastFrame = qMin(tbcSource.getNumberOfFrames(), frameNumber + input.radius);
@@ -147,7 +156,7 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
             input.visibleDropouts.append(frame - 1 < visibleDropouts.size() ? visibleDropouts[frame - 1] : 0.0);
         }
 
-        const FrameSnapshot::SearchResult result = FrameSnapshot::findBestFrame(input);
+        const FrameSnapshot::SearchResult result = FrameSnapshot::findStillFrames(input);
         if (!result.errorMessage.isEmpty()) return fail(result.errorMessage);
 
         if (parser.isSet(QStringLiteral("score-report"))) {
@@ -157,19 +166,28 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
             }
         }
         qint32 runLength = 0;
-        double bestScore = 0.0;
         for (const FrameSnapshot::FrameScore &score : result.scores) {
             if (score.inRun) runLength++;
-            if (score.frame == result.bestFrame) bestScore = score.score;
         }
-        printf("best frame: %d (score %.4g, %d frames show the same picture around frame %d)\n",
-               result.bestFrame, bestScore, runLength, frameNumber);
-        if (options.bestFrameSearch) frameNumber = result.bestFrame;
+        printf("cleanest frame: %d (%lld of %d frames showing the same picture around frame %d are usable)\n",
+               result.bestFrame, static_cast<long long>(result.eligibleFrames.size()), runLength, frameNumber);
+
+        if (options.stillMode == FrameSnapshot::StillMode::Average) {
+            frameImage = FrameSnapshot::averageFrames(result.eligibleFrames, [&tbcSource](qint32 frame) {
+                tbcSource.load(frame, frame * 2 - 1);
+                return tbcSource.getImage();
+            });
+            printf("averaged %lld frames\n", static_cast<long long>(result.eligibleFrames.size()));
+        }
+        if (search) frameNumber = result.bestFrame;
     }
 
-    tbcSource.load(frameNumber, frameNumber * 2 - 1);
+    if (frameImage.isNull()) {
+        tbcSource.load(frameNumber, frameNumber * 2 - 1);
+        frameImage = tbcSource.getImage();
+    }
     QString errorMessage;
-    const QImage image = FrameSnapshot::process(tbcSource.getImage(), options, videoParameters, &errorMessage);
+    const QImage image = FrameSnapshot::process(frameImage, options, videoParameters, &errorMessage);
     if (image.isNull()) return fail(errorMessage);
     if (!image.save(outputFileName)) return fail(QStringLiteral("Could not write %1").arg(outputFileName));
 
@@ -396,13 +414,14 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("save-frame", "Save frame <N> as a PNG and exit, without opening a window", "N"));
     parser.addOption(QCommandLineOption({"o", "output"}, "PNG file written by --save-frame", "file"));
     parser.addOption(QCommandLineOption("crop", "--save-frame framing: full, active (default) or x,y,w,h", "framing"));
-    parser.addOption(QCommandLineOption("margins", "--save-frame trims from the framing: left,top,right,bottom", "l,t,r,b"));
+    parser.addOption(QCommandLineOption("margins", "--save-frame trims from the framing: left,top,right,bottom (default 0,0,0,12)", "l,t,r,b"));
     parser.addOption(QCommandLineOption("aspect", "--save-frame aspect: exact (square pixels, default) or viewer (tbc-analyse's DAR stretch)", "mode"));
-    parser.addOption(QCommandLineOption("best-of", "--save-frame: save the best frame within +/-N showing the same picture (0 = off)", "N"));
+    parser.addOption(QCommandLineOption("best-of", "--save-frame: save the cleanest frame within +/-N that shows the same picture (0 = off)", "N"));
+    parser.addOption(QCommandLineOption("average-of", "--save-frame: save the average of the usable frames within +/-N that show the same picture (0 = off)", "N"));
     parser.addOption(QCommandLineOption("upscale", "--save-frame: upscale factor 1-4 (default 1)", "factor"));
     parser.addOption(QCommandLineOption("upscale-method", "--save-frame: resampling for the upscale and aspect correction "
                                                           "(default lanczos4; an invalid name lists this build's methods)", "method"));
-    parser.addOption(QCommandLineOption("score-report", "--save-frame: write the best-frame scores as CSV", "file"));
+    parser.addOption(QCommandLineOption("score-report", "--save-frame: write the still-picture search's per-frame figures as CSV", "file"));
 
     // Positional argument to specify input video file
     parser.addPositionalArgument("input", QCoreApplication::translate("main", "Specify input TBC or metadata file"));
