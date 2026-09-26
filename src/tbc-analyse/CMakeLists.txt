@@ -46,6 +46,8 @@ set(tbc-analyse_SOURCES
     vbidialog.cpp vbidialog.ui
     vbiprocessingdialog.cpp vbiprocessingdialog.h
     configuration.cpp
+    framesnapshot.cpp framesnapshot.h
+    savepngdialog.cpp savepngdialog.h
     dropoutanalysisdialog.cpp dropoutanalysisdialog.ui
     visibledropoutanalysisdialog.cpp visibledropoutanalysisdialog.ui
     whitesnranalysisdialog.cpp whitesnranalysisdialog.ui
@@ -92,6 +94,8 @@ add_executable(tbc-efm-handler
     # null and no settings are touched), but the symbols must still link.
     configuration.cpp
     configuration.h
+    # Configuration persists the "Save frame as PNG" options
+    framesnapshot.cpp
 )
 
 target_link_libraries(tbc-efm-handler PRIVATE

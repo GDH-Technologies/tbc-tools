@@ -171,6 +171,8 @@ public:
 
     qint32 getFirstFieldNumber() const;
     qint32 getSecondFieldNumber() const;
+    // First/second field numbers of any frame, without loading it
+    QPair<qint32, qint32> getFieldNumbersForFrame(qint32 frameNumber) const;
     bool getSecamFirstLineIsRed(qint32 fieldNumber) const;
 
     qint32 getCcData0() const;

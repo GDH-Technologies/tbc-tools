@@ -19,11 +19,163 @@
 #include <QStyleFactory>
 #include <QDir>
 #include <QFileInfo>
+#include <QEventLoop>
+#include <QtConcurrent/QtConcurrent>
+#include <cstdio>
+
+#include "framesnapshot.h"
+#include "tbcsource.h"
 
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
 #include "tbc/buildinfo.h"
 namespace {
+// Parse "a,b,c,d" into four integers
+bool parseFourInts(const QString &text, qint32 values[4])
+{
+    const QStringList parts = text.split(QLatin1Char(','));
+    if (parts.size() != 4) return false;
+    for (int i = 0; i < 4; i++) {
+        bool ok = false;
+        values[i] = parts[i].trimmed().toInt(&ok);
+        if (!ok) return false;
+    }
+    return true;
+}
+
+// Headless "Save frame as PNG": tbc-analyse --save-frame N -o out.png input.tbc
+int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
+{
+    auto fail = [](const QString &message) {
+        fprintf(stderr, "tbc-analyse: %s\n", qPrintable(message));
+        return 1;
+    };
+
+    if (inputFileName.isEmpty()) return fail(QStringLiteral("--save-frame needs an input TBC file"));
+    const QString outputFileName = parser.value(QStringLiteral("output"));
+    if (outputFileName.isEmpty()) return fail(QStringLiteral("--save-frame needs -o/--output <file.png>"));
+
+    bool ok = false;
+    qint32 frameNumber = parser.value(QStringLiteral("save-frame")).toInt(&ok);
+    if (!ok || frameNumber < 1) return fail(QStringLiteral("--save-frame needs a frame number (from 1)"));
+
+    // Built-in defaults plus flags; tbc-analyse.ini is not read, so a script
+    // gets the same output wherever it runs.
+    FrameSnapshot::Options options;
+    const QString crop = parser.value(QStringLiteral("crop")).trimmed().toLower();
+    if (crop == QLatin1String("full")) {
+        options.framing = FrameSnapshot::Framing::Full;
+    } else if (crop == QLatin1String("active") || crop.isEmpty()) {
+        options.framing = FrameSnapshot::Framing::Active;
+    } else {
+        qint32 rect[4];
+        if (!parseFourInts(crop, rect)) return fail(QStringLiteral("--crop takes full, active or x,y,w,h"));
+        options.framing = FrameSnapshot::Framing::Custom;
+        options.customRect = QRect(rect[0], rect[1], rect[2], rect[3]);
+    }
+    if (parser.isSet(QStringLiteral("margins"))) {
+        qint32 margins[4];
+        if (!parseFourInts(parser.value(QStringLiteral("margins")), margins)) {
+            return fail(QStringLiteral("--margins takes left,top,right,bottom"));
+        }
+        options.marginLeft = margins[0];
+        options.marginTop = margins[1];
+        options.marginRight = margins[2];
+        options.marginBottom = margins[3];
+    }
+    if (parser.isSet(QStringLiteral("aspect"))) {
+        const QString aspect = parser.value(QStringLiteral("aspect"));
+        const FrameSnapshot::AspectMode invalid = static_cast<FrameSnapshot::AspectMode>(-1);
+        options.aspectMode = FrameSnapshot::aspectModeFromName(aspect, invalid);
+        if (options.aspectMode == invalid) return fail(QStringLiteral("--aspect takes exact or viewer"));
+    }
+    if (parser.isSet(QStringLiteral("best-of"))) {
+        options.searchRadius = parser.value(QStringLiteral("best-of")).toInt(&ok);
+        if (!ok || options.searchRadius < 0) return fail(QStringLiteral("--best-of takes a frame count (0 = off)"));
+        options.bestFrameSearch = options.searchRadius > 0;
+    }
+    if (parser.isSet(QStringLiteral("upscale"))) {
+        options.upscaleFactor = parser.value(QStringLiteral("upscale")).toInt(&ok);
+        if (!ok || options.upscaleFactor < 1 || options.upscaleFactor > 4) {
+            return fail(QStringLiteral("--upscale takes 1, 2, 3 or 4"));
+        }
+    }
+    if (parser.isSet(QStringLiteral("upscale-model"))) {
+        options.upscaleModel = parser.value(QStringLiteral("upscale-model"));
+        if (!FrameSnapshot::upscalerModels().contains(options.upscaleModel)) {
+            return fail(QStringLiteral("--upscale-model takes one of: %1")
+                            .arg(FrameSnapshot::upscalerModels().join(QStringLiteral(", "))));
+        }
+    }
+
+    TbcSource tbcSource;
+    bool loaded = false;
+    QEventLoop loop;
+    QObject::connect(&tbcSource, &TbcSource::finishedLoading, &loop, [&](bool success) {
+        loaded = success;
+        loop.quit();
+    });
+    tbcSource.loadSource(inputFileName);
+    loop.exec();
+    if (!loaded || !tbcSource.getIsSourceLoaded()) {
+        return fail(QStringLiteral("Could not load %1: %2").arg(inputFileName, tbcSource.getLastIOError()));
+    }
+    if (frameNumber > tbcSource.getNumberOfFrames()) {
+        return fail(QStringLiteral("Frame %1 is past the end (%2 frames)").arg(frameNumber).arg(tbcSource.getNumberOfFrames()));
+    }
+
+    // MainWindow configures the chroma decoder by handing the loaded source's
+    // configuration back through the Chroma Decoder dialog; do the same here.
+    tbcSource.setChromaConfiguration(tbcSource.getPalConfiguration(), tbcSource.getNtscConfiguration());
+
+    const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
+    const QSize frameSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
+
+    if (options.bestFrameSearch || parser.isSet(QStringLiteral("score-report"))) {
+        FrameSnapshot::SearchInput input;
+        input.tbcFilename = tbcSource.getCurrentSourceFilename();
+        input.videoParameters = videoParameters;
+        input.anchorFrame = frameNumber;
+        input.radius = options.bestFrameSearch ? options.searchRadius : FrameSnapshot::Options().searchRadius;
+        input.cropRect = FrameSnapshot::outputRect(options, videoParameters, frameSize);
+        input.firstFrame = qMax(1, frameNumber - input.radius);
+        const qint32 lastFrame = qMin(tbcSource.getNumberOfFrames(), frameNumber + input.radius);
+        const QVector<double> visibleDropouts = tbcSource.getVisibleDropOutGraphData();
+        for (qint32 frame = input.firstFrame; frame <= lastFrame; frame++) {
+            input.fieldNumbers.append(tbcSource.getFieldNumbersForFrame(frame));
+            input.visibleDropouts.append(frame - 1 < visibleDropouts.size() ? visibleDropouts[frame - 1] : 0.0);
+        }
+
+        const FrameSnapshot::SearchResult result = FrameSnapshot::findBestFrame(input);
+        if (!result.errorMessage.isEmpty()) return fail(result.errorMessage);
+
+        if (parser.isSet(QStringLiteral("score-report"))) {
+            QString errorMessage;
+            if (!FrameSnapshot::writeScoreReport(parser.value(QStringLiteral("score-report")), result, &errorMessage)) {
+                return fail(errorMessage);
+            }
+        }
+        qint32 runLength = 0;
+        double bestScore = 0.0;
+        for (const FrameSnapshot::FrameScore &score : result.scores) {
+            if (score.inRun) runLength++;
+            if (score.frame == result.bestFrame) bestScore = score.score;
+        }
+        printf("best frame: %d (score %.4g, %d frames show the same picture around frame %d)\n",
+               result.bestFrame, bestScore, runLength, frameNumber);
+        if (options.bestFrameSearch) frameNumber = result.bestFrame;
+    }
+
+    tbcSource.load(frameNumber, frameNumber * 2 - 1);
+    QString errorMessage;
+    const QImage image = FrameSnapshot::process(tbcSource.getImage(), options, videoParameters, &errorMessage);
+    if (image.isNull()) return fail(errorMessage);
+    if (!image.save(outputFileName)) return fail(QStringLiteral("Could not write %1").arg(outputFileName));
+
+    printf("saved frame %d as %s (%dx%d)\n", frameNumber, qPrintable(outputFileName), image.width(), image.height());
+    return 0;
+}
+
 QIcon bundledApplicationIcon()
 {
     QIcon icon;
@@ -194,6 +346,13 @@ int main(int argc, char *argv[])
 
     tbc::ui::prepareStockThemeEnvironment();
 
+    // --save-frame never opens a window, so it must not need a display
+    for (int i = 1; i < argc; i++) {
+        if (QByteArray(argv[i]).startsWith("--save-frame") && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+            qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
+        }
+    }
+
     tbc::ui::ThemedApplication a(argc, argv);
 
     // Set desktop file name for proper GNOME integration
@@ -232,6 +391,17 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("light-theme", "Use the light Fusion theme instead of the stock dark theme"));
     parser.addOption(QCommandLineOption("metadata-only", "Load metadata (.db or .json) without TBC data"));
 
+    // Headless "Save frame as PNG"
+    parser.addOption(QCommandLineOption("save-frame", "Save frame <N> as a PNG and exit, without opening a window", "N"));
+    parser.addOption(QCommandLineOption({"o", "output"}, "PNG file written by --save-frame", "file"));
+    parser.addOption(QCommandLineOption("crop", "--save-frame framing: full, active (default) or x,y,w,h", "framing"));
+    parser.addOption(QCommandLineOption("margins", "--save-frame trims from the framing: left,top,right,bottom", "l,t,r,b"));
+    parser.addOption(QCommandLineOption("aspect", "--save-frame aspect: exact (square pixels, default) or viewer (tbc-analyse's DAR stretch)", "mode"));
+    parser.addOption(QCommandLineOption("best-of", "--save-frame: save the best frame within +/-N showing the same picture (0 = off)", "N"));
+    parser.addOption(QCommandLineOption("upscale", "--save-frame: Real-ESRGAN upscale factor 1-4 (default 1)", "factor"));
+    parser.addOption(QCommandLineOption("upscale-model", "--save-frame: Real-ESRGAN model (default realesrgan-x4plus)", "model"));
+    parser.addOption(QCommandLineOption("score-report", "--save-frame: write the best-frame scores as CSV", "file"));
+
     // Positional argument to specify input video file
     parser.addPositionalArgument("input", QCoreApplication::translate("main", "Specify input TBC or metadata file"));
 
@@ -259,6 +429,10 @@ int main(int argc, char *argv[])
     } else {
         inputFileName.clear();
     }
+    if (parser.isSet("save-frame")) {
+        return runSaveFrame(parser, inputFileName);
+    }
+
     const bool metadataOnly = parser.isSet("metadata-only");
 
     // Start the GUI application

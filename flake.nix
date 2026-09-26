@@ -234,6 +234,15 @@
               cudaCudnnPackage
             ];
 
+            # tbc-analyse's "Save frame as PNG" upscales through the
+            # realesrgan-ncnn-vulkan binary, which it looks up on PATH.
+            # --suffix so an operator's own build still wins. On a non-NixOS
+            # host tbc-analyse points the child at the host's NVIDIA Vulkan
+            # driver itself (FrameSnapshot::upscale).
+            qtWrapperArgs = [
+              "--suffix" "PATH" ":" "${pkgs.realesrgan-ncnn-vulkan}/bin"
+            ];
+
             cmakeBuildType = "Release";
             cmakeFlags = [
               "-DCMAKE_BUILD_TYPE=Release"

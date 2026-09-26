@@ -34,6 +34,7 @@ constexpr const char *Plugin = "pluginDirectory";
 } // namespace DirectoryPurpose
 
 #include "tbc/vbiprocessingoptions.h"
+#include "framesnapshot.h"
 
 class Configuration : public QObject
 {
@@ -132,6 +133,10 @@ public:
     void setVbiProcessingOptions(const VbiProcessingOptions &options);
     VbiProcessingOptions getVbiProcessingOptions(void);
 
+    // Get and set methods - "Save frame as PNG" options
+    void setFrameSnapshotOptions(const FrameSnapshot::Options &options);
+    FrameSnapshot::Options getFrameSnapshotOptions(void);
+
 signals:
 
 public slots:
@@ -203,6 +208,7 @@ private:
         UpdateCheck updateCheck;
         CudaPlugin cudaPlugin;
         VbiProcessingOptions vbiProcessing;
+        FrameSnapshot::Options frameSnapshot;
     } settings;
 
     void setDefault(void);

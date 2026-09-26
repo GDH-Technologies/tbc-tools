@@ -32,6 +32,7 @@
 #include <QProgressBar>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QProgressDialog>
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -150,6 +151,47 @@ QString sanitizedFileToken(const QString &value)
         token = QStringLiteral("state");
     }
     return token;
+}
+
+// Wait for background work behind a progress dialog, keeping the window
+// painted. Without a cancel flag, user input is held off so nothing can touch
+// TbcSource while a worker thread is using it.
+template <typename T>
+T waitWithProgress(QWidget *parent, QFuture<T> future, const QString &label,
+                   std::atomic<bool> *cancel = nullptr, std::atomic<qint32> *progress = nullptr,
+                   qint32 maximum = 0)
+{
+    if (future.isFinished()) {
+        return future.result();
+    }
+
+    QProgressDialog dialog(label, QObject::tr("Cancel"), 0, maximum, parent);
+    if (!cancel) {
+        dialog.setCancelButton(nullptr);
+    }
+    dialog.setWindowModality(Qt::WindowModal);
+    dialog.setMinimumDuration(300);
+    dialog.setAutoClose(false);
+    dialog.setAutoReset(false);
+
+    QEventLoop loop;
+    QFutureWatcher<T> watcher;
+    QObject::connect(&watcher, &QFutureWatcherBase::finished, &loop, &QEventLoop::quit);
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &dialog, [&]() {
+        if (progress && maximum > 0) {
+            dialog.setValue(qMin(progress->load(), maximum));
+        }
+        if (cancel && dialog.wasCanceled()) {
+            cancel->store(true);
+        }
+    });
+    watcher.setFuture(future);
+    poll.start(100);
+    if (!future.isFinished()) {
+        loop.exec(cancel ? QEventLoop::AllEvents : QEventLoop::ExcludeUserInputEvents);
+    }
+    return future.result();
 }
 
 struct EfmAutoloadCandidates {
@@ -2069,6 +2111,7 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->actionSNR_analysis->setEnabled(enabled); // Black SNR
     ui->actionWhite_SNR_analysis->setEnabled(enabled);
     ui->actionSave_frame_as_PNG->setEnabled(enabled);
+    ui->actionSave_frame_as_PNG_with_options->setEnabled(enabled);
     if (saveAllModesPngAction) {
         saveAllModesPngAction->setEnabled(enabled);
     }
@@ -2445,6 +2488,7 @@ void MainWindow::updateGuiLoaded()
 
     if (metadataOnly) {
         ui->actionSave_frame_as_PNG->setEnabled(false);
+        ui->actionSave_frame_as_PNG_with_options->setEnabled(false);
         ui->actionLine_scope->setEnabled(false);
         ui->actionRGB_scope->setEnabled(false);
         ui->actionYUV_range_scope->setEnabled(false);
@@ -2928,15 +2972,7 @@ qint32 MainWindow::getAspectAdjustment() const {
     // Using source aspect ratio? No adjustment
     if (!displayAspectRatio) return 0;
 
-    if (tbcSource.getSystem() == PAL) {
-        // 625 lines
-        if (tbcSource.getIsWidescreen()) return 103; // 16:9
-        else return -196; // 4:3
-    } else {
-        // 525 lines
-        if (tbcSource.getIsWidescreen()) return 122; // 16:9
-        else return -150; // 4:3
-    }
+    return FrameSnapshot::viewerAspectAdjustment(tbcSource.getVideoParameters());
 }
 
 bool MainWindow::isViewerTabActive() const
@@ -2947,22 +2983,42 @@ bool MainWindow::isViewerTabActive() const
     return ui->mainTabWidget->currentWidget() == ui->viewerTab;
 }
 
-QImage MainWindow::renderedCurrentImageForExport()
+QImage MainWindow::renderedCurrentFrameImage()
 {
     const bool useAsyncRender = shouldRenderFrameAsync();
     if (asyncFrameRenderInProgress && !useAsyncRender) {
         cancelInFlightAsyncFrameRender();
         asyncFrameImage = QImage();
     }
-    QImage imageToSave;
-    if (useAsyncRender) {
-        imageToSave = asyncFrameImage;
-        if (imageToSave.isNull() && !asyncFrameRenderInProgress) {
-            startAsyncFrameRender();
-        }
-    } else {
-        imageToSave = tbcSource.getImage();
+    if (!useAsyncRender) {
+        return tbcSource.getImage();
     }
+
+    // nnTransform3D renders off the UI thread. Wait for the frame on screen
+    // rather than failing because it has not finished yet.
+    const QString label = tr("Rendering nnTransform3D frame...");
+    auto isCurrent = [this]() {
+        return asyncFrameRenderFrameNumber == currentFrameNumber
+               && asyncFrameRenderFieldNumber == currentFieldNumber;
+    };
+    if (asyncFrameRenderInProgress) {
+        const QImage rendered = waitWithProgress(this, asyncFrameRenderWatcher.future(), label);
+        if (isCurrent()) {
+            return rendered;
+        }
+    } else if (!asyncFrameImage.isNull() && isCurrent()) {
+        return asyncFrameImage;
+    }
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    return waitWithProgress(this, QtConcurrent::run(&tbcSource, &TbcSource::getImage), label);
+#else
+    return waitWithProgress(this, QtConcurrent::run(&TbcSource::getImage, &tbcSource), label);
+#endif
+}
+
+QImage MainWindow::renderedCurrentImageForExport()
+{
+    QImage imageToSave = renderedCurrentFrameImage();
     if (imageToSave.isNull()) {
         return imageToSave;
     }
@@ -3243,12 +3299,8 @@ QVector<QRect> MainWindow::getActiveVideoRects() const
 
     switch (tbcSource.getViewMode()) {
     case TbcSource::ViewMode::FRAME_VIEW: {
-        if (videoParameters.firstActiveFrameLine < 0 ||
-            videoParameters.lastActiveFrameLine <= videoParameters.firstActiveFrameLine) {
-            return rects;
-        }
-        const int height = videoParameters.lastActiveFrameLine - videoParameters.firstActiveFrameLine;
-        appendRect(videoParameters.activeVideoStart, videoParameters.firstActiveFrameLine, rectWidth, height);
+        const QRect rect = FrameSnapshot::activeFrameRect(videoParameters, QSize(frameWidth, frameHeight));
+        appendRect(rect.x(), rect.y(), rect.width(), rect.height());
         break;
     }
     case TbcSource::ViewMode::SPLIT_VIEW: {
@@ -6190,10 +6242,16 @@ void MainWindow::on_actionWhite_SNR_analysis_triggered()
     whiteSnrAnalysisDialog->show();
 }
 
-// Save current frame as PNG
+// Save current frame as PNG with the options last accepted in the options dialog
 void MainWindow::on_actionSave_frame_as_PNG_triggered()
 {
     tbcDebugStream() << "MainWindow::on_actionSave_frame_as_PNG_triggered(): Called";
+    saveFrameAsPng(configuration.getFrameSnapshotOptions());
+}
+
+// Choose framing, aspect, best-frame search and upscaling, then save
+void MainWindow::on_actionSave_frame_as_PNG_with_options_triggered()
+{
     if (!tbcSource.getIsSourceLoaded()) {
         QMessageBox::warning(this, tr("Warning"), tr("No source file loaded."));
         return;
@@ -6202,8 +6260,90 @@ void MainWindow::on_actionSave_frame_as_PNG_triggered()
         QMessageBox::warning(this, tr("Warning"), tr("Metadata-only mode cannot export PNG images."));
         return;
     }
+    setPlaybackRunning(false);
 
-    const QImage imageToSave = renderedCurrentImageForExport();
+    const QImage frameImage = renderedCurrentFrameImage();
+    if (frameImage.isNull()) {
+        QMessageBox::warning(this, tr("Warning"), tr("No image data is available to export as PNG."));
+        return;
+    }
+
+    SavePngDialog dialog(configuration.getFrameSnapshotOptions(), frameImage, tbcSource.getVideoParameters(),
+                         tbcSource.getViewMode() == TbcSource::ViewMode::FRAME_VIEW, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const FrameSnapshot::Options options = dialog.selectedOptions();
+    configuration.setFrameSnapshotOptions(options);
+    configuration.writeConfiguration();
+    saveFrameAsPng(options);
+}
+
+void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
+{
+    if (!tbcSource.getIsSourceLoaded()) {
+        QMessageBox::warning(this, tr("Warning"), tr("No source file loaded."));
+        return;
+    }
+    if (tbcSource.getIsMetadataOnly()) {
+        QMessageBox::warning(this, tr("Warning"), tr("Metadata-only mode cannot export PNG images."));
+        return;
+    }
+    setPlaybackRunning(false);
+
+    // Framing, aspect, search and upscaling apply to the frame view; the other
+    // views are saved as they are shown.
+    const bool frameView = tbcSource.getViewMode() == TbcSource::ViewMode::FRAME_VIEW;
+    const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
+    const QSize frameSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
+
+    if (frameView && options.bestFrameSearch) {
+        FrameSnapshot::SearchInput input;
+        input.tbcFilename = tbcSource.getCurrentSourceFilename();
+        input.videoParameters = videoParameters;
+        input.anchorFrame = currentFrameNumber;
+        input.radius = options.searchRadius;
+        input.cropRect = FrameSnapshot::outputRect(options, videoParameters, frameSize);
+        input.firstFrame = qMax(1, currentFrameNumber - options.searchRadius);
+        const qint32 lastFrame = qMin(tbcSource.getNumberOfFrames(), currentFrameNumber + options.searchRadius);
+        const QVector<double> visibleDropouts = tbcSource.getVisibleDropOutGraphData();
+        for (qint32 frame = input.firstFrame; frame <= lastFrame; frame++) {
+            input.fieldNumbers.append(tbcSource.getFieldNumbersForFrame(frame));
+            input.visibleDropouts.append(frame - 1 < visibleDropouts.size() ? visibleDropouts[frame - 1] : 0.0);
+        }
+
+        std::atomic<bool> cancel(false);
+        std::atomic<qint32> progress(0);
+        const FrameSnapshot::SearchResult result = waitWithProgress(
+            this,
+            QtConcurrent::run([input, &cancel, &progress]() {
+                return FrameSnapshot::findBestFrame(input, &cancel, &progress);
+            }),
+            tr("Finding the sharpest, cleanest frame..."), &cancel, &progress, 2 * options.searchRadius + 1);
+        if (result.cancelled) {
+            return;
+        }
+        if (!result.errorMessage.isEmpty()) {
+            QMessageBox::warning(this, tr("Warning"), result.errorMessage);
+            return;
+        }
+
+        qint32 runLength = 0;
+        for (const FrameSnapshot::FrameScore &score : result.scores) {
+            if (score.inRun) runLength++;
+        }
+        tbcDebugStream() << "MainWindow::saveFrameAsPng(): best frame" << result.bestFrame
+                         << "of a run of" << runLength << "around frame" << currentFrameNumber;
+        if (result.bestFrame != currentFrameNumber) {
+            setCurrentFrame(result.bestFrame);
+            updatePositionEditorValue(currentFrameNumber);
+            ui->posHorizontalSlider->setValue(currentFrameNumber);
+        }
+        statusBar()->showMessage(tr("Best frame: %1 (of %2 frames showing the same picture)")
+                                     .arg(result.bestFrame).arg(runLength), 10000);
+    }
+
+    const QImage imageToSave = frameView ? renderedCurrentFrameImage() : renderedCurrentImageForExport();
     if (imageToSave.isNull()) {
         QMessageBox::warning(this, tr("Warning"), tr("No image data is available to export as PNG."));
         return;
@@ -6244,7 +6384,7 @@ void MainWindow::on_actionSave_frame_as_PNG_triggered()
     if (!tbcSource.getChromaDecoder()) filenameStem += tr("source_");
     else filenameStem += tr("chroma_");
 
-    if (displayAspectRatio) {
+    if (frameView || displayAspectRatio) {
         if (tbcSource.getIsWidescreen()) filenameStem += tr("ar169_");
         else filenameStem += tr("ar43_");
     }
@@ -6260,6 +6400,9 @@ void MainWindow::on_actionSave_frame_as_PNG_triggered()
         filenameStem += QStringLiteral("_");
         filenameStem += sanitizedFileToken(QFileInfo(sourceFileName).completeBaseName());
     }
+    if (frameView && options.upscaleFactor > 1) {
+        filenameStem += QStringLiteral("_up%1x").arg(options.upscaleFactor);
+    }
     const QString filenameSuggestion =
         QDir(outputDirectory).filePath(filenameStem + tr(".png"));
 
@@ -6269,28 +6412,40 @@ void MainWindow::on_actionSave_frame_as_PNG_triggered()
                 tr("PNG image (*.png);;All Files (*)"));
 
     // Was a filename specified?
-    if (!pngFilename.isEmpty() && !pngFilename.isNull()) {
-        if (QFileInfo(pngFilename).suffix().isEmpty()) {
-            pngFilename += QStringLiteral(".png");
-        }
-
-        // Save the current frame as a PNG
-        tbcDebugStream() << "MainWindow::on_actionSave_frame_as_PNG_triggered(): Saving current frame as" << pngFilename;
-
-        // Save the QImage as PNG
-        if (!imageToSave.save(pngFilename)) {
-            tbcDebugStream() << "MainWindow::on_actionSave_frame_as_PNG_triggered(): Failed to save file as" << pngFilename;
-
-            QMessageBox messageBox;
-            messageBox.warning(this, tr("Warning"),tr("Could not save a PNG using the specified filename!"));
-        }
-
-        // Update the configuration for the PNG directory
-        QFileInfo pngFileInfo(pngFilename);
-        configuration.setPngDirectory(pngFileInfo.absolutePath());
-        tbcDebugStream() << "MainWindow::on_actionSave_frame_as_PNG_triggered(): Setting PNG directory to:" << pngFileInfo.absolutePath();
-        configuration.writeConfiguration();
+    if (pngFilename.isEmpty()) {
+        return;
     }
+    if (QFileInfo(pngFilename).suffix().isEmpty()) {
+        pngFilename += QStringLiteral(".png");
+    }
+
+    QImage finalImage = imageToSave;
+    if (frameView) {
+        QString errorMessage;
+        finalImage = waitWithProgress(
+            this,
+            QtConcurrent::run([imageToSave, options, videoParameters, &errorMessage]() {
+                return FrameSnapshot::process(imageToSave, options, videoParameters, &errorMessage);
+            }),
+            options.upscaleFactor > 1 ? tr("Upscaling with Real-ESRGAN...") : tr("Preparing PNG..."));
+        if (finalImage.isNull()) {
+            QMessageBox::warning(this, tr("Warning"), errorMessage);
+            return;
+        }
+    }
+
+    // Save the current frame as a PNG
+    tbcDebugStream() << "MainWindow::saveFrameAsPng(): Saving current frame as" << pngFilename;
+    if (!finalImage.save(pngFilename)) {
+        tbcDebugStream() << "MainWindow::saveFrameAsPng(): Failed to save file as" << pngFilename;
+        QMessageBox::warning(this, tr("Warning"), tr("Could not save a PNG using the specified filename!"));
+    }
+
+    // Update the configuration for the PNG directory
+    QFileInfo pngFileInfo(pngFilename);
+    configuration.setPngDirectory(pngFileInfo.absolutePath());
+    tbcDebugStream() << "MainWindow::saveFrameAsPng(): Setting PNG directory to:" << pngFileInfo.absolutePath();
+    configuration.writeConfiguration();
 }
 
 void MainWindow::copyCurrentFrameToClipboard()
