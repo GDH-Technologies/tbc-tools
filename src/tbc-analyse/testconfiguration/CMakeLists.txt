@@ -2,6 +2,7 @@ add_executable(testconfiguration
     testconfiguration.cpp
     ../configuration.cpp
     ../configuration.h
+    ../framesnapshot.cpp
 )
 
 target_include_directories(testconfiguration PRIVATE

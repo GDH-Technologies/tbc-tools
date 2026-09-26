@@ -12,6 +12,8 @@
 #include "tbc/logging.h"
 
 #include <QFile>
+#include <QRect>
+#include <algorithm>
 
 // This define should be incremented if the settings file format changes.
 // Purely additive keys must NOT bump it: a bump runs setDefault() and discards
@@ -138,6 +140,22 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("teletextMinDuplicates", settings.vbiProcessing.teletextMinDuplicates);
     configuration->endGroup();
 
+    // "Save frame as PNG" options
+    configuration->beginGroup("frameSnapshot");
+    configuration->setValue("framing", FrameSnapshot::framingName(settings.frameSnapshot.framing));
+    configuration->setValue("marginLeft", settings.frameSnapshot.marginLeft);
+    configuration->setValue("marginTop", settings.frameSnapshot.marginTop);
+    configuration->setValue("marginRight", settings.frameSnapshot.marginRight);
+    configuration->setValue("marginBottom", settings.frameSnapshot.marginBottom);
+    configuration->setValue("customRect", settings.frameSnapshot.customRect);
+    configuration->setValue("aspectMode", FrameSnapshot::aspectModeName(settings.frameSnapshot.aspectMode));
+    configuration->setValue("stillMode", FrameSnapshot::stillModeName(settings.frameSnapshot.stillMode));
+    configuration->remove("bestFrameSearch"); // replaced by stillMode
+    configuration->setValue("searchRadius", settings.frameSnapshot.searchRadius);
+    configuration->setValue("upscaleFactor", settings.frameSnapshot.upscaleFactor);
+    configuration->setValue("upscaleMethod", settings.frameSnapshot.upscaleMethod);
+    configuration->endGroup();
+
     // Sync the settings with disk
     tbcDebugStream() << "Configuration::writeConfiguration(): Writing configuration to disk";
     configuration->sync();
@@ -239,6 +257,31 @@ void Configuration::readConfiguration(void)
     settings.vbiProcessing.teletextMinDuplicates = configuration->value("teletextMinDuplicates", 1).toInt();
     if (settings.vbiProcessing.teletextMinDuplicates < 1) settings.vbiProcessing.teletextMinDuplicates = 1;
     configuration->endGroup();
+
+    // "Save frame as PNG" options (additive keys - older config files fall back to defaults)
+    const FrameSnapshot::Options snapshotDefaults;
+    configuration->beginGroup("frameSnapshot");
+    settings.frameSnapshot.framing = FrameSnapshot::framingFromName(
+        configuration->value("framing").toString(), snapshotDefaults.framing);
+    settings.frameSnapshot.marginLeft = std::max(0, configuration->value("marginLeft", 0).toInt());
+    settings.frameSnapshot.marginTop = std::max(0, configuration->value("marginTop", 0).toInt());
+    settings.frameSnapshot.marginRight = std::max(0, configuration->value("marginRight", 0).toInt());
+    settings.frameSnapshot.marginBottom = std::max(0, configuration->value("marginBottom", snapshotDefaults.marginBottom).toInt());
+    settings.frameSnapshot.customRect = configuration->value("customRect", QRect()).toRect();
+    settings.frameSnapshot.aspectMode = FrameSnapshot::aspectModeFromName(
+        configuration->value("aspectMode").toString(), snapshotDefaults.aspectMode);
+    // stillMode replaced a bestFrameSearch on/off flag
+    const FrameSnapshot::StillMode legacyStillMode = configuration->value("bestFrameSearch", false).toBool()
+                                                         ? FrameSnapshot::StillMode::Cleanest : snapshotDefaults.stillMode;
+    settings.frameSnapshot.stillMode = FrameSnapshot::stillModeFromName(
+        configuration->value("stillMode").toString(), legacyStillMode);
+    settings.frameSnapshot.searchRadius = std::clamp(
+        configuration->value("searchRadius", snapshotDefaults.searchRadius).toInt(), 1, 600);
+    settings.frameSnapshot.upscaleFactor = std::clamp(
+        configuration->value("upscaleFactor", snapshotDefaults.upscaleFactor).toInt(), 1, 4);
+    // Not checked against this build's methods; FrameSnapshot::process falls back
+    settings.frameSnapshot.upscaleMethod = configuration->value("upscaleMethod", snapshotDefaults.upscaleMethod).toString();
+    configuration->endGroup();
 }
 
 void Configuration::setDefault(void)
@@ -298,6 +341,9 @@ void Configuration::setDefault(void)
     settings.vbiProcessing.teletextHtmlDir = QString();
     settings.vbiProcessing.teletextTapeFormat = QStringLiteral("vhs");
     settings.vbiProcessing.teletextMinDuplicates = 1;
+
+    // "Save frame as PNG" options
+    settings.frameSnapshot = FrameSnapshot::Options();
 
     // Write the configuration
     writeConfiguration();
@@ -692,4 +738,15 @@ void Configuration::setVbiProcessingOptions(const VbiProcessingOptions &options)
 VbiProcessingOptions Configuration::getVbiProcessingOptions(void)
 {
     return settings.vbiProcessing;
+}
+
+// "Save frame as PNG" options
+void Configuration::setFrameSnapshotOptions(const FrameSnapshot::Options &options)
+{
+    settings.frameSnapshot = options;
+}
+
+FrameSnapshot::Options Configuration::getFrameSnapshotOptions(void)
+{
+    return settings.frameSnapshot;
 }

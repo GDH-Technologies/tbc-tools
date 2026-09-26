@@ -46,6 +46,8 @@ set(tbc-analyse_SOURCES
     vbidialog.cpp vbidialog.ui
     vbiprocessingdialog.cpp vbiprocessingdialog.h
     configuration.cpp
+    framesnapshot.cpp framesnapshot.h
+    savepngdialog.cpp savepngdialog.h
     dropoutanalysisdialog.cpp dropoutanalysisdialog.ui
     visibledropoutanalysisdialog.cpp visibledropoutanalysisdialog.ui
     whitesnranalysisdialog.cpp whitesnranalysisdialog.ui
@@ -81,6 +83,28 @@ target_link_libraries(tbc-analyse PRIVATE
     Qt::Core Qt::Gui Qt::Widgets Qt::Svg Qt::Network
     tbc-library tbc-chroma
 )
+
+# OpenCV is optional. It gives "Save frame as PNG" Lanczos/bicubic/area
+# resampling and, with the contrib dnn_superres module, learned upscaling;
+# without it tbc-analyse resizes with Qt's smooth (bilinear) scaling. The
+# interface target carries the same switches to the unit test.
+find_package(OpenCV QUIET COMPONENTS core imgproc)
+add_library(tbc-analyse-opencv INTERFACE)
+if(OpenCV_FOUND)
+    target_compile_definitions(tbc-analyse-opencv INTERFACE TBC_HAVE_OPENCV)
+    target_include_directories(tbc-analyse-opencv INTERFACE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(tbc-analyse-opencv INTERFACE opencv_core opencv_imgproc)
+    set(_tbc_superres "no")
+    if(TARGET opencv_dnn_superres)
+        target_compile_definitions(tbc-analyse-opencv INTERFACE TBC_HAVE_OPENCV_SUPERRES)
+        target_link_libraries(tbc-analyse-opencv INTERFACE opencv_dnn_superres opencv_dnn)
+        set(_tbc_superres "yes")
+    endif()
+    message(STATUS "tbc-analyse: OpenCV ${OpenCV_VERSION} (dnn_superres: ${_tbc_superres})")
+else()
+    message(STATUS "tbc-analyse: OpenCV not found; PNG resizing uses Qt smooth scaling")
+endif()
+target_link_libraries(tbc-analyse PRIVATE tbc-analyse-opencv)
 stage_windows_onnxruntime_runtime(tbc-analyse)
 stage_windows_qt_platform_runtime(tbc-analyse)
 add_executable(tbc-efm-handler
@@ -92,6 +116,8 @@ add_executable(tbc-efm-handler
     # null and no settings are touched), but the symbols must still link.
     configuration.cpp
     configuration.h
+    # Configuration persists the "Save frame as PNG" options
+    framesnapshot.cpp
 )
 
 target_link_libraries(tbc-efm-handler PRIVATE

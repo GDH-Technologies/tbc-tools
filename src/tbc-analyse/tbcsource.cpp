@@ -1674,6 +1674,11 @@ qint32 TbcSource::getSecondFieldNumber() const
     return secondFieldNumber;
 }
 
+QPair<qint32, qint32> TbcSource::getFieldNumbersForFrame(qint32 frameNumber) const
+{
+    return {metaData.getFirstFieldNumber(frameNumber), metaData.getSecondFieldNumber(frameNumber)};
+}
+
 // SECAM per-field first-line identity for the loaded frame's first field.
 // Used by the Metadata Editor to show the current value of secamFirstLineIsRed.
 bool TbcSource::getSecamFirstLineIsRed(qint32 fieldNumber) const

@@ -43,6 +43,7 @@
 #include "aboutdialog.h"
 #include "vbidialog.h"
 #include "vbiprocessingdialog.h"
+#include "savepngdialog.h"
 #include "dropoutanalysisdialog.h"
 #include "visibledropoutanalysisdialog.h"
 #include "blacksnranalysisdialog.h"
@@ -104,6 +105,7 @@ private slots:
     void on_actionSNR_analysis_triggered();
     void on_actionWhite_SNR_analysis_triggered();
     void on_actionSave_frame_as_PNG_triggered();
+    void on_actionSave_frame_as_PNG_with_options_triggered();
     void on_actionSave_all_modes_as_PNGs_triggered();
     void on_actionCopy_current_display_to_clipboard_triggered();
     void on_actionZoom_In_triggered();
@@ -343,6 +345,12 @@ private:
     void updateImage();
     qint32 getAspectAdjustment() const;
     QImage renderedCurrentImageForExport();
+    // The current frame as decoded, before any display stretch. Waits for an
+    // in-flight nnTransform3D render instead of returning a null image.
+    QImage renderedCurrentFrameImage();
+    // Save the current frame as a PNG with the given options (framing, aspect,
+    // best-frame search, upscale). Asks only for the file name.
+    void saveFrameAsPng(const FrameSnapshot::Options &options);
     // Copy the current video frame (renderedCurrentImageForExport) to the
     // clipboard. Shared by the main-window Ctrl+C action and the graph-window
     // copyFrameRequested() signal handlers.
@@ -427,6 +435,10 @@ private:
     QFutureWatcher<QImage> asyncFrameRenderWatcher;
     bool asyncFrameRenderInProgress = false;
     bool asyncFrameRenderQueued = false;
+    // Set while a worker thread renders other frames through tbcSource (the
+    // still-picture average); showImage() defers until it is cleared.
+    bool tbcSourceBusy = false;
+    bool showImagePending = false;
     qint32 asyncFrameRenderFrameNumber = -1;
     qint32 asyncFrameRenderFieldNumber = -1;
     QImage asyncFrameImage;

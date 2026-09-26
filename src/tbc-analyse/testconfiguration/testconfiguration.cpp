@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QSettings>
 #include <QStandardPaths>
 
 #include "configuration.h"
@@ -98,6 +99,32 @@ void testRemovalSurvivesLongLivedWriter()
     CHECK(reader.getCudaPluginInstallPath().isEmpty());
 }
 
+// A settings file from before stillMode existed has only the bestFrameSearch
+// flag; "on" must carry over as the cleanest-frame mode, and the first write
+// replaces the flag with stillMode.
+void testFrameSnapshotStillModeMigration(const QString &configFile)
+{
+    std::cerr << "Testing that bestFrameSearch migrates to stillMode\n";
+
+    {
+        QSettings legacy(configFile, QSettings::IniFormat);
+        legacy.setValue("frameSnapshot/bestFrameSearch", true);
+        legacy.remove("frameSnapshot/stillMode");
+        legacy.remove("frameSnapshot/marginBottom");
+        legacy.sync();
+    }
+
+    Configuration reader;
+    const FrameSnapshot::Options options = reader.getFrameSnapshotOptions();
+    CHECK(options.stillMode == FrameSnapshot::StillMode::Cleanest);
+    CHECK(options.marginBottom == 12);
+
+    reader.writeConfiguration();
+    QSettings written(configFile, QSettings::IniFormat);
+    CHECK(!written.contains("frameSnapshot/bestFrameSearch"));
+    CHECK(written.value("frameSnapshot/stillMode").toString() == QLatin1String("cleanest"));
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -114,6 +141,7 @@ int main(int argc, char *argv[])
 
     testInstallSurvivesLongLivedWriter();
     testRemovalSurvivesLongLivedWriter();
+    testFrameSnapshotStillModeMigration(configFile);
 
     QFile::remove(configFile);
     std::cerr << "All configuration tests passed\n";
