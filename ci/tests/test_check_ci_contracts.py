@@ -785,6 +785,16 @@ class ContractCoverageTests(unittest.TestCase):
         for snippet in check_ci_contracts.FLAKE_SRC_FILTER_REQUIRED_SNIPPETS:
             self.assertIn(snippet, flake)
 
+    def test_flake_builds_every_platform_on_unstable_qt(self) -> None:
+        # Upstream builds Linux from nixos-24.11 (Qt 6.8.3). The fork builds
+        # every platform from the locked unstable (Qt 6.10.1) and keeps legacy
+        # only for the CUDA 11.8 toolchain; a sync must not undo that.
+        flake = check_ci_contracts.FLAKE_NIX.read_text(encoding="utf-8")
+        for snippet in check_ci_contracts.FLAKE_QT_REQUIRED_SNIPPETS:
+            self.assertIn(snippet, flake)
+        for snippet in check_ci_contracts.FLAKE_QT_FORBIDDEN_SNIPPETS:
+            self.assertNotIn(snippet, flake)
+
     def test_deploy_reuse_is_tree_verified_and_same_repo_only(self) -> None:
         # Installing a build the deploy did not make is safe only if it is of
         # exactly this tree, from a successful, unexpired run in this

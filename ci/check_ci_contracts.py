@@ -309,9 +309,9 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # vcpkg.json untouched for the hosted job.
     "-DVCPKG_MANIFEST_MODE=OFF",
     "aqt install-qt",
-    # Pinned to the version vcpkg's own baseline was building (ports/qtbase
-    # 6.8.3) so swapping to prebuilt binaries is not also a silent Qt upgrade.
-    'QT_VERSION: "6.8.3"',
+    # Pinned to the Qt the flake's locked nixpkgs gives Linux and macOS, so
+    # every GDH platform runs the same Qt. Changing it is a deliberate upgrade.
+    'QT_VERSION: "6.10.1"',
     # windeployqt replaces the hosted job's hand-rolled Qt plugin copy: it reads
     # each binary's imports and lays out exactly the DLLs and plugins it needs.
     "windeployqt.exe",
@@ -542,6 +542,17 @@ FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS = (
 FLAKE_SRC_FILTER_REQUIRED_SNIPPETS = (
     "notBuildInput",
     '".github" "docs" "development-logs" "dev-notes" "notes"',
+)
+# Every platform builds from the locked nixpkgs (Qt 6.10.1). nixpkgsLegacy is
+# only for the CUDA 11.8 toolchain unstable no longer has. Upstream builds Linux
+# from legacy (Qt 6.8.3), so a sync must not quietly bring that back.
+FLAKE_QT_REQUIRED_SNIPPETS = (
+    "pkgs = pkgsUnstable;",
+    "legacyPkgs.cudaPackages_11_8",
+    'legacyPkgs.runCommand "cuda-plugin-linux-deps"',
+)
+FLAKE_QT_FORBIDDEN_SNIPPETS = (
+    "pkgs = if isLinux then legacyPkgs else pkgsUnstable;",
 )
 
 
@@ -834,6 +845,10 @@ def main() -> int:
         check_not_contains(FLAKE_NIX, snippet, errors)
     for snippet in FLAKE_SRC_FILTER_REQUIRED_SNIPPETS:
         check_contains(FLAKE_NIX, snippet, errors)
+    for snippet in FLAKE_QT_REQUIRED_SNIPPETS:
+        check_contains(FLAKE_NIX, snippet, errors)
+    for snippet in FLAKE_QT_FORBIDDEN_SNIPPETS:
+        check_not_contains(FLAKE_NIX, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
     for workflow, snippet in SELF_HOSTED_TREE_NAMED_ARTIFACTS:
