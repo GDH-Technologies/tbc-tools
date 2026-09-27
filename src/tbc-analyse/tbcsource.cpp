@@ -1673,6 +1673,23 @@ qint32 TbcSource::getSecondFieldNumber() const
     return secondFieldNumber;
 }
 
+// Method to get the first field number of an arbitrary frame number (read from
+// the metadata store; used by the RF segment export)
+qint32 TbcSource::getFrameFirstFieldNumber(qint32 frameNumber) const
+{
+    if (!sourceReady) return -1;
+    return metaData.getFirstFieldNumber(frameNumber);
+}
+
+// Method to get the raw RF sample location (fileLoc) of a sequential field
+// number. Padding fields (no source data) return -1.
+qint64 TbcSource::getFieldFileLoc(qint32 sequentialFieldNumber) const
+{
+    if (!sourceReady) return -1;
+    if (sequentialFieldNumber < 1 || sequentialFieldNumber > metaData.getNumberOfFields()) return -1;
+    return metaData.getField(sequentialFieldNumber).fileLoc;
+}
+
 // SECAM per-field first-line identity for the loaded frame's first field.
 // Used by the Metadata Editor to show the current value of secamFirstLineIsRed.
 bool TbcSource::getSecamFirstLineIsRed(qint32 fieldNumber) const
