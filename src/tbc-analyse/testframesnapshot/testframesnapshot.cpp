@@ -274,6 +274,122 @@ void testStillSearch()
     CHECK(!withDropouts.eligibleFrames.contains(4));
 }
 
+// Smooth per-field pattern, so sub-sample shifts can be synthesised exactly
+double pattern(double x, double fieldLine, qint32 field)
+{
+    return 0.5 + 0.2 * std::sin(2.0 * M_PI * x / 17.0 + field) + 0.15 * std::sin(2.0 * M_PI * fieldLine / 9.0);
+}
+
+// Frames 1-8 show one picture. Frame 3 sits 0.8 samples right, frame 5 only
+// 0.1 (within tolerance), frame 6 0.6 field lines down. The search must
+// measure each, realign only 3 and 6, and keep them all: misalignment is
+// compensated before the damage check.
+void testStillAlignment()
+{
+    const qint32 fieldWidth = 160;
+    const qint32 fieldHeight = 72;
+    const qint32 frames = 8;
+    const double black = 16384.0;
+    const double white = 54016.0;
+
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    const QString tbcPath = directory.filePath(QStringLiteral("shifted.tbc"));
+    QFile file(tbcPath);
+    CHECK(file.open(QIODevice::WriteOnly));
+    for (qint32 frame = 1; frame <= frames; frame++) {
+        const double dx = frame == 3 ? 0.8 : frame == 5 ? 0.1 : 0.0;
+        const double dy = frame == 6 ? 0.6 : 0.0;
+        for (qint32 field = 0; field < 2; field++) {
+            std::mt19937 generator(frame * 2 + field + 101);
+            std::normal_distribution<double> noise(0.0, 0.005);
+            QVector<quint16> samples(fieldWidth * fieldHeight);
+            for (qint32 line = 0; line < fieldHeight; line++) {
+                for (qint32 x = 0; x < fieldWidth; x++) {
+                    const double value = black + (pattern(x - dx, line - dy, field) + noise(generator)) * (white - black);
+                    samples[line * fieldWidth + x] = quint16(qBound(0.0, value, 65535.0));
+                }
+            }
+            file.write(reinterpret_cast<const char *>(samples.constData()), samples.size() * 2);
+        }
+    }
+    file.close();
+
+    FrameSnapshot::SearchInput input;
+    input.tbcFilename = tbcPath;
+    input.videoParameters.system = NTSC;
+    input.videoParameters.fieldWidth = fieldWidth;
+    input.videoParameters.fieldHeight = fieldHeight;
+    input.videoParameters.black16bIre = qint32(black);
+    input.videoParameters.white16bIre = qint32(white);
+    input.anchorFrame = 1;
+    input.radius = 7;
+    input.cropRect = QRect(0, 0, fieldWidth, fieldHeight * 2 - 1);
+    input.firstFrame = 1;
+    for (qint32 frame = 1; frame <= frames; frame++) {
+        input.fieldNumbers.append({frame * 2 - 1, frame * 2});
+        input.visibleDropouts.append(0.0);
+    }
+
+    const FrameSnapshot::SearchResult result = FrameSnapshot::findStillFrames(input);
+    CHECK(result.errorMessage.isEmpty());
+    CHECK(result.eligibleFrames.size() == frames);
+    CHECK(result.alignments.size() == frames);
+    for (const FrameSnapshot::FrameScore &score : result.scores) {
+        const double expectedX = score.frame == 3 ? 0.8 : score.frame == 5 ? 0.1 : 0.0;
+        const double expectedY = score.frame == 6 ? 0.6 : 0.0;
+        if (!near(score.shiftX, expectedX, 0.05) || !near(score.shiftYMax, expectedY, 0.05)) {
+            std::cerr << "frame " << score.frame << " shiftX " << score.shiftX << " shiftYMax " << score.shiftYMax << "\n";
+        }
+        CHECK(near(score.shiftX, expectedX, 0.05));
+        CHECK(near(score.shiftYMax, expectedY, 0.05));
+        CHECK(score.aligned == (score.frame == 3 || score.frame == 6));
+    }
+}
+
+// Shifting a frame image and aligning it back recovers the original
+void testAlignFrame()
+{
+    const qint32 width = 160;
+    const qint32 height = 101;
+    auto render = [&](double dx, double dy) {
+        QImage image(width, height, QImage::Format_RGB32);
+        for (qint32 y = 0; y < height; y++) {
+            for (qint32 x = 0; x < width; x++) {
+                const double v = pattern(x - dx, y / 2 - dy, y % 2);
+                const int grey = std::clamp(int(std::lround(v * 255)), 0, 255);
+                image.setPixel(x, y, qRgb(grey, 255 - grey, grey / 2));
+            }
+        }
+        return image;
+    };
+    FrameSnapshot::FrameAlignment alignment;
+    alignment.bandHeight = 16;
+    for (qint32 f = 0; f < 2; f++) {
+        alignment.shiftX[f] = QVector<float>(3, 0.7f);
+        alignment.shiftY[f] = 0.4f;
+    }
+    alignment.apply = true;
+
+    const QImage original = render(0.0, 0.0);
+    const QImage aligned = FrameSnapshot::alignFrame(render(0.7, 0.4), alignment);
+    const QImage unaligned = render(0.7, 0.4);
+    auto rms = [&](const QImage &a) {
+        double sum = 0.0;
+        qint32 count = 0;
+        for (qint32 y = 8; y < height - 8; y++) {
+            for (qint32 x = 8; x < width - 8; x++) {
+                const double d = qRed(a.pixel(x, y)) - qRed(original.pixel(x, y));
+                sum += d * d;
+                count++;
+            }
+        }
+        return std::sqrt(sum / count);
+    };
+    CHECK(rms(aligned) < 1.0);
+    CHECK(rms(unaligned) > 5.0);
+}
+
 void testAverageFrames()
 {
     auto solid = [](int value, QSize size = QSize(8, 4)) {
@@ -311,6 +427,8 @@ int main(int argc, char *argv[])
     testProcessWithoutUpscale();
     testUpscale();
     testStillSearch();
+    testStillAlignment();
+    testAlignFrame();
     testAverageFrames();
 
     std::cerr << "All frame snapshot tests passed\n";

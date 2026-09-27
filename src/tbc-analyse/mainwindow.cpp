@@ -6303,6 +6303,7 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
 
     QImage averagedImage;
     qint32 averagedFrames = 0;
+    qint32 alignedFrames = 0;
     if (frameView && options.stillMode != FrameSnapshot::StillMode::Off) {
         FrameSnapshot::SearchInput input;
         input.tbcFilename = tbcSource.getCurrentSourceFilename();
@@ -6355,13 +6356,14 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
             std::atomic<bool> cancelAverage(false);
             std::atomic<qint32> rendered(0);
             const QVector<qint32> frames = result.eligibleFrames;
+            const QVector<FrameSnapshot::FrameAlignment> alignments = result.alignments;
             averagedImage = waitWithProgress(
                 this,
-                QtConcurrent::run([this, frames, &cancelAverage, &rendered]() {
+                QtConcurrent::run([this, frames, alignments, &cancelAverage, &rendered]() {
                     return FrameSnapshot::averageFrames(frames, [this](qint32 frame) {
                         tbcSource.load(frame, frame * 2 - 1);
                         return tbcSource.getImage();
-                    }, &cancelAverage, &rendered);
+                    }, &cancelAverage, &rendered, alignments);
                 }),
                 tr("Averaging %1 frames...").arg(frames.size()), &cancelAverage, &rendered, frames.size());
 
@@ -6382,6 +6384,9 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
                 return;
             }
             averagedFrames = frames.size();
+            for (const FrameSnapshot::FrameAlignment &alignment : alignments) {
+                if (alignment.apply) alignedFrames++;
+            }
         }
 
         if (result.bestFrame != currentFrameNumber) {
@@ -6390,8 +6395,8 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
             ui->posHorizontalSlider->setValue(currentFrameNumber);
         }
         if (options.stillMode == FrameSnapshot::StillMode::Average) {
-            statusBar()->showMessage(tr("Averaged %1 of %2 frames showing the same picture; viewer on the most typical, %3")
-                                         .arg(averagedFrames).arg(runLength).arg(result.bestFrame), 10000);
+            statusBar()->showMessage(tr("Averaged %1 of %2 frames showing the same picture (%3 realigned); viewer on the most typical, %4")
+                                         .arg(averagedFrames).arg(runLength).arg(alignedFrames).arg(result.bestFrame), 10000);
         } else {
             statusBar()->showMessage(tr("Cleanest frame: %1 (of %2 frames showing the same picture)")
                                          .arg(result.bestFrame).arg(runLength), 10000);

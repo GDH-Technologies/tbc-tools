@@ -119,6 +119,23 @@ QImage process(const QImage &frameImage, const Options &options,
 // rejects frames with visible dropouts or far from that median (tears,
 // dropouts the metadata missed). The frame closest to the median is the
 // cleanest; the survivors are what "average" mixes.
+//
+// Each survivor's misalignment against the median is measured per field: a
+// horizontal shift for every 16-line band (smoothed down the picture) and a
+// vertical shift. Averaging resamples a frame only when it is off by more
+// than ALIGN_THRESHOLD; a TBC'd tape is normally within a tenth of a sample,
+// and resampling that little would cost more detail than it recovers.
+
+constexpr double ALIGN_THRESHOLD = 0.25; // samples horizontally, field lines vertically
+
+struct FrameAlignment {
+    qint32 frame = 0;
+    qint32 firstFieldLine = 0;       // field line (0-based) where band 0 starts
+    qint32 bandHeight = 16;          // field lines per band
+    QVector<float> shiftX[2];        // per field, per band: samples the frame sits right of the median
+    float shiftY[2] = {0.0f, 0.0f};  // per field: field lines the frame sits below the median
+    bool apply = false;              // beyond ALIGN_THRESHOLD somewhere, so averaging resamples it
+};
 
 struct FrameScore {
     qint32 frame = 0;
@@ -127,6 +144,12 @@ struct FrameScore {
     double dropouts = 0.0;   // visible dropout samples from the metadata
     bool inRun = false;      // same still as the anchor
     bool eligible = false;   // passed the dropout and distance checks
+    // Eligible frames only: median and largest band shift (samples), largest
+    // field shift (lines), and whether averaging resamples the frame
+    double shiftX = 0.0;
+    double shiftXMax = 0.0;
+    double shiftYMax = 0.0;
+    bool aligned = false;
 };
 
 struct SearchInput {
@@ -144,6 +167,7 @@ struct SearchInput {
 struct SearchResult {
     qint32 bestFrame = -1;           // eligible frame closest to the median
     QVector<qint32> eligibleFrames;  // what "average" mixes, in frame order
+    QVector<FrameAlignment> alignments; // one per eligible frame, same order
     QVector<FrameScore> scores;      // every frame read, in frame order
     QString errorMessage;
     bool cancelled = false;
@@ -154,10 +178,16 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
 
 bool writeScoreReport(const QString &filename, const SearchResult &result, QString *errorMessage);
 
+// Resamples a full frame image (both fields, first field on even rows) so it
+// lines up with the median the alignment was measured against.
+QImage alignFrame(const QImage &frameImage, const FrameAlignment &alignment);
+
 // Mean of rendered frames, per channel. render() returns a full frame image;
-// frames that render null, or at another size, are skipped. Blocking.
+// frames that render null, or at another size, are skipped. A frame with an
+// alignment marked apply is resampled by alignFrame() first. Blocking.
 QImage averageFrames(const QVector<qint32> &frames, const std::function<QImage(qint32)> &render,
-                     std::atomic<bool> *cancel = nullptr, std::atomic<qint32> *progress = nullptr);
+                     std::atomic<bool> *cancel = nullptr, std::atomic<qint32> *progress = nullptr,
+                     const QVector<FrameAlignment> &alignments = {});
 
 } // namespace FrameSnapshot
 

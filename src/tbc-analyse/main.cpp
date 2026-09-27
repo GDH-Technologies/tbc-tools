@@ -176,8 +176,12 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
             frameImage = FrameSnapshot::averageFrames(result.eligibleFrames, [&tbcSource](qint32 frame) {
                 tbcSource.load(frame, frame * 2 - 1);
                 return tbcSource.getImage();
-            });
-            printf("averaged %lld frames\n", static_cast<long long>(result.eligibleFrames.size()));
+            }, nullptr, nullptr, result.alignments);
+            qint32 alignedFrames = 0;
+            for (const FrameSnapshot::FrameAlignment &alignment : result.alignments) {
+                if (alignment.apply) alignedFrames++;
+            }
+            printf("averaged %lld frames (%d realigned)\n", static_cast<long long>(result.eligibleFrames.size()), alignedFrames);
         }
         if (search) frameNumber = result.bestFrame;
     }

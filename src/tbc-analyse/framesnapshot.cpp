@@ -14,9 +14,11 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QTextStream>
 #include <algorithm>
 #include <cmath>
+#include <thread>
 #include <vector>
 
 #include "sourcevideo.h"
@@ -48,6 +50,7 @@ constexpr double RUN_BREAK_DIFFERENCE = 0.06;
 constexpr qint32 THUMBNAIL_BLOCK = 8;
 constexpr double DISTANCE_TOLERANCE = 1.5;
 constexpr double DROPOUT_ALLOWANCE_SAMPLES = 20.0;
+constexpr qint32 ALIGN_BAND_LINES = 16;
 
 bool is625LineSystem(VideoSystem system)
 {
@@ -136,6 +139,117 @@ const SuperResModel *findSuperResModel(const QString &method)
     return nullptr;
 }
 #endif
+
+// Keys cubic convolution weights (a = -0.5) for the four taps around a
+// fractional position t in [0, 1)
+void cubicWeights(double t, double weights[4])
+{
+    const double t2 = t * t;
+    const double t3 = t2 * t;
+    weights[0] = -0.5 * t3 + t2 - 0.5 * t;
+    weights[1] = 1.5 * t3 - 2.5 * t2 + 1.0;
+    weights[2] = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+    weights[3] = 0.5 * t3 - 0.5 * t2;
+}
+
+// Cubic sample of samples[0..length) (spaced step apart) at a fractional
+// position, clamping at the ends
+double sampleCubic(const float *samples, qint32 length, qint32 step, double position)
+{
+    const double floorPosition = std::floor(position);
+    const qint32 base = static_cast<qint32>(floorPosition);
+    double weights[4];
+    cubicWeights(position - floorPosition, weights);
+    double value = 0.0;
+    for (qint32 tap = 0; tap < 4; tap++) {
+        const qint32 index = std::clamp(base - 1 + tap, 0, length - 1);
+        value += weights[tap] * samples[static_cast<size_t>(index) * step];
+    }
+    return value;
+}
+
+// Gauss-Newton estimate of s where image(p) ~ reference(p - s) along one
+// axis, over `lines` lines of `length` samples (step apart; lines lineStride
+// apart). Validated against Fourier-shifted frames of the Christmas 1998 tape:
+// injected 0.1-1.0 sample shifts came back exact to 0.001.
+double estimateShift(const float *image, const float *reference, qint32 lines, qint32 lineStride,
+                     qint32 length, qint32 step)
+{
+    constexpr qint32 MARGIN = 8;
+    constexpr qint32 ITERATIONS = 4;
+    constexpr double MAX_SHIFT = 4.0;
+    if (length <= 2 * MARGIN + 2) return 0.0;
+
+    double shift = 0.0;
+    std::vector<double> shifted(length);
+    for (qint32 iteration = 0; iteration < ITERATIONS; iteration++) {
+        double numerator = 0.0;
+        double denominator = 0.0;
+        for (qint32 line = 0; line < lines; line++) {
+            const float *referenceLine = reference + static_cast<size_t>(line) * lineStride;
+            const float *imageLine = image + static_cast<size_t>(line) * lineStride;
+            for (qint32 p = MARGIN - 1; p <= length - MARGIN; p++) {
+                shifted[p] = sampleCubic(referenceLine, length, step, p - shift);
+            }
+            for (qint32 p = MARGIN; p < length - MARGIN; p++) {
+                const double gradient = (shifted[p + 1] - shifted[p - 1]) / 2.0;
+                const double error = imageLine[static_cast<size_t>(p) * step] - shifted[p];
+                numerator += gradient * error;
+                denominator += gradient * gradient;
+            }
+        }
+        if (denominator <= 1e-12) return 0.0;
+        shift = std::clamp(shift - numerator / denominator, -MAX_SHIFT, MAX_SHIFT);
+    }
+    return shift;
+}
+
+// Horizontal shift for a field line: linear between band centres, held flat
+// beyond the first and last band
+double shiftForFieldLine(const FrameAlignment &alignment, qint32 field, qint32 fieldLine)
+{
+    const QVector<float> &shifts = alignment.shiftX[field];
+    if (shifts.isEmpty()) return 0.0;
+    const double band = (fieldLine - alignment.firstFieldLine + 0.5) / alignment.bandHeight - 0.5;
+    if (band <= 0.0) return shifts.constFirst();
+    if (band >= shifts.size() - 1) return shifts.constLast();
+    const qint32 lower = static_cast<qint32>(band);
+    const double t = band - lower;
+    return shifts[lower] * (1.0 - t) + shifts[lower + 1] * t;
+}
+
+// Resamples one field (rows contiguous, `channels` interleaved floats per
+// sample) so it lines up with the reference the alignment was measured
+// against: output(row, x) = input(row + shiftY, x + shiftX(row)), cubic in
+// both directions within the field. firstRowFieldLine is the field line of
+// row 0, for looking up the band shifts.
+std::vector<float> resampleField(const float *data, qint32 width, qint32 rows, qint32 channels,
+                                 const FrameAlignment &alignment, qint32 field, qint32 firstRowFieldLine)
+{
+    std::vector<float> output(static_cast<size_t>(width) * rows * channels);
+    std::vector<float> line(static_cast<size_t>(width) * channels);
+    const size_t rowLength = static_cast<size_t>(width) * channels;
+    for (qint32 row = 0; row < rows; row++) {
+        const double position = row + alignment.shiftY[field];
+        const double floorPosition = std::floor(position);
+        double weights[4];
+        cubicWeights(position - floorPosition, weights);
+        std::fill(line.begin(), line.end(), 0.0f);
+        for (qint32 tap = 0; tap < 4; tap++) {
+            const qint32 sourceRow = std::clamp(static_cast<qint32>(floorPosition) - 1 + tap, 0, rows - 1);
+            const float *source = data + sourceRow * rowLength;
+            for (size_t i = 0; i < rowLength; i++) line[i] += static_cast<float>(weights[tap] * source[i]);
+        }
+        const double shift = shiftForFieldLine(alignment, field, firstRowFieldLine + row);
+        float *out = output.data() + row * rowLength;
+        for (qint32 x = 0; x < width; x++) {
+            for (qint32 c = 0; c < channels; c++) {
+                out[x * channels + c] = static_cast<float>(sampleCubic(line.data() + c, width, channels, x + shift));
+            }
+        }
+    }
+    return output;
+}
 
 // Resize with an interpolation method (or Qt's smooth scaling without OpenCV)
 QImage resampled(const QImage &image, const QSize &size, const QString &method)
@@ -440,6 +554,7 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
     std::vector<double> anchorThumbnail;
     QVector<FrameScore> scores;
     std::vector<std::vector<float>> runPixels;
+    QHash<qint32, size_t> runIndexOfFrame;
     auto visit = [&](qint32 frame) {
         FrameScore score;
         score.frame = frame;
@@ -452,7 +567,10 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
         for (size_t i = 0; i < frameThumbnail.size(); i++) difference += std::fabs(frameThumbnail[i] - anchorThumbnail[i]);
         score.anchorDiff = difference / frameThumbnail.size();
         score.inRun = score.anchorDiff < RUN_BREAK_DIFFERENCE;
-        if (score.inRun) runPixels.push_back(std::move(pixels));
+        if (score.inRun) {
+            runIndexOfFrame.insert(frame, runPixels.size());
+            runPixels.push_back(std::move(pixels));
+        }
         scores.append(score);
         if (progress) progress->fetch_add(1);
         return score.inRun;
@@ -482,13 +600,74 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
         medianPixels[i] = samples[runLength / 2];
     }
 
-    // Distance of each frame of the run from the median, in visit order
-    size_t runIndex = 0;
+    // Misalignment of every frame of the run against the median, per field:
+    // one horizontal shift per band (3-band median smoothed) and one vertical
+    // shift. A frame beyond ALIGN_THRESHOLD is compensated before its distance
+    // is taken, so rejection judges damage, not position.
+    QHash<qint32, FrameAlignment> alignmentOfFrame;
+    const qint32 bandHeight = std::min(ALIGN_BAND_LINES, height);
+    const qint32 bands = height / bandHeight;
+    QVector<FrameScore *> runScores;
+    for (FrameScore &score : scores) {
+        if (score.inRun) runScores.append(&score);
+    }
+    std::vector<FrameAlignment> alignments(runScores.size());
+    auto alignOne = [&](qint32 index) {
+        FrameScore &score = *runScores[index];
+        std::vector<float> &pixels = runPixels[runIndexOfFrame.value(score.frame)];
+        FrameAlignment &alignment = alignments[index];
+        alignment.frame = score.frame;
+        alignment.firstFieldLine = line0;
+        alignment.bandHeight = bandHeight;
+        QVector<double> bandShifts;
+        for (qint32 f = 0; f < 2; f++) {
+            const float *image = pixels.data() + static_cast<size_t>(f) * fieldPixels;
+            const float *reference = medianPixels.data() + static_cast<size_t>(f) * fieldPixels;
+            QVector<float> raw(bands);
+            for (qint32 b = 0; b < bands; b++) {
+                const size_t offset = static_cast<size_t>(b) * bandHeight * width;
+                raw[b] = static_cast<float>(estimateShift(image + offset, reference + offset, bandHeight, width, width, 1));
+            }
+            alignment.shiftX[f].resize(bands);
+            for (qint32 b = 0; b < bands; b++) {
+                float window[3] = {raw[std::max(0, b - 1)], raw[b], raw[std::min(bands - 1, b + 1)]};
+                std::sort(window, window + 3);
+                alignment.shiftX[f][b] = window[1];
+                bandShifts.append(window[1]);
+                score.shiftXMax = std::max(score.shiftXMax, static_cast<double>(std::fabs(window[1])));
+            }
+            alignment.shiftY[f] = static_cast<float>(estimateShift(image, reference, width, 1, height, width));
+            score.shiftYMax = std::max(score.shiftYMax, static_cast<double>(std::fabs(alignment.shiftY[f])));
+        }
+        score.shiftX = median(bandShifts);
+        alignment.apply = score.shiftXMax > ALIGN_THRESHOLD || score.shiftYMax > ALIGN_THRESHOLD;
+        score.aligned = alignment.apply;
+        if (alignment.apply) {
+            for (qint32 f = 0; f < 2; f++) {
+                float *field = pixels.data() + static_cast<size_t>(f) * fieldPixels;
+                const std::vector<float> resampled = resampleField(field, width, height, 1, alignment, f, line0);
+                std::copy(resampled.begin(), resampled.end(), field);
+            }
+        }
+    };
+    // Frames are independent: each thread takes every n-th one
+    const qint32 threadCount = std::max(1, std::min(static_cast<qint32>(std::thread::hardware_concurrency()),
+                                                    static_cast<qint32>(runScores.size())));
+    std::vector<std::thread> threads;
+    for (qint32 t = 0; t < threadCount; t++) {
+        threads.emplace_back([&, t]() {
+            for (qint32 index = t; index < runScores.size(); index += threadCount) alignOne(index);
+        });
+    }
+    for (std::thread &thread : threads) thread.join();
+    for (const FrameAlignment &alignment : alignments) alignmentOfFrame.insert(alignment.frame, alignment);
+
+    // Distance of each frame of the run from the median
     QVector<double> runDistances;
     QVector<double> runDropouts;
     for (FrameScore &score : scores) {
         if (!score.inRun) continue;
-        const std::vector<float> &pixels = runPixels[runIndex++];
+        const std::vector<float> &pixels = runPixels[runIndexOfFrame.value(score.frame)];
         double sum = 0.0;
         for (size_t i = 0; i < pixels.size(); i++) {
             const double difference = pixels[i] - medianPixels[i];
@@ -510,6 +689,7 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
         score.eligible = score.inRun && score.distance <= distanceLimit && score.dropouts <= dropoutLimit;
         if (!score.eligible) continue;
         result.eligibleFrames.append(score.frame);
+        result.alignments.append(alignmentOfFrame.value(score.frame));
         if (bestDistance < 0.0 || score.distance < bestDistance) {
             bestDistance = score.distance;
             result.bestFrame = score.frame;
@@ -527,18 +707,59 @@ bool writeScoreReport(const QString &filename, const SearchResult &result, QStri
         return false;
     }
     QTextStream stream(&file);
-    stream << "frame,in_run,eligible,anchor_diff,distance,dropouts,best\n";
+    stream << "frame,in_run,eligible,anchor_diff,distance,dropouts,shift_x,shift_x_max,shift_y_max,aligned,best\n";
     for (const FrameScore &score : result.scores) {
         stream << score.frame << ',' << int(score.inRun) << ',' << int(score.eligible) << ','
                << score.anchorDiff << ',' << score.distance << ',' << score.dropouts << ','
+               << score.shiftX << ',' << score.shiftXMax << ',' << score.shiftYMax << ',' << int(score.aligned) << ','
                << int(score.frame == result.bestFrame) << '\n';
     }
     return true;
 }
 
-QImage averageFrames(const QVector<qint32> &frames, const std::function<QImage(qint32)> &render,
-                     std::atomic<bool> *cancel, std::atomic<qint32> *progress)
+QImage alignFrame(const QImage &frameImage, const FrameAlignment &alignment)
 {
+    const QImage source = frameImage.convertToFormat(QImage::Format_RGB32);
+    const qint32 width = source.width();
+    const qint32 height = source.height();
+    QImage aligned(source.size(), QImage::Format_RGB32);
+
+    // Each field on its own: frame row = 2 * field line + field
+    for (qint32 field = 0; field < 2; field++) {
+        const qint32 rows = (height - field + 1) / 2;
+        std::vector<float> data(static_cast<size_t>(width) * rows * 3);
+        for (qint32 row = 0; row < rows; row++) {
+            const QRgb *line = reinterpret_cast<const QRgb *>(source.constScanLine(2 * row + field));
+            float *target = data.data() + static_cast<size_t>(row) * width * 3;
+            for (qint32 x = 0; x < width; x++) {
+                target[3 * x + 0] = qRed(line[x]);
+                target[3 * x + 1] = qGreen(line[x]);
+                target[3 * x + 2] = qBlue(line[x]);
+            }
+        }
+        const std::vector<float> resampled = resampleField(data.data(), width, rows, 3, alignment, field, 0);
+        for (qint32 row = 0; row < rows; row++) {
+            QRgb *line = reinterpret_cast<QRgb *>(aligned.scanLine(2 * row + field));
+            const float *value = resampled.data() + static_cast<size_t>(row) * width * 3;
+            for (qint32 x = 0; x < width; x++) {
+                line[x] = qRgb(std::clamp(static_cast<int>(std::lround(value[3 * x + 0])), 0, 255),
+                               std::clamp(static_cast<int>(std::lround(value[3 * x + 1])), 0, 255),
+                               std::clamp(static_cast<int>(std::lround(value[3 * x + 2])), 0, 255));
+            }
+        }
+    }
+    return aligned;
+}
+
+QImage averageFrames(const QVector<qint32> &frames, const std::function<QImage(qint32)> &render,
+                     std::atomic<bool> *cancel, std::atomic<qint32> *progress,
+                     const QVector<FrameAlignment> &alignments)
+{
+    QHash<qint32, const FrameAlignment *> alignmentOfFrame;
+    for (const FrameAlignment &alignment : alignments) {
+        if (alignment.apply) alignmentOfFrame.insert(alignment.frame, &alignment);
+    }
+
     // Averaging the decoded pictures, not the TBC samples: NTSC's subcarrier
     // phase inverts every frame, so averaging raw samples cancels the colour
     QSize size;
@@ -546,7 +767,10 @@ QImage averageFrames(const QVector<qint32> &frames, const std::function<QImage(q
     qint32 count = 0;
     for (const qint32 frame : frames) {
         if (cancel && cancel->load()) return QImage();
-        const QImage image = render(frame).convertToFormat(QImage::Format_RGB32);
+        QImage image = render(frame).convertToFormat(QImage::Format_RGB32);
+        if (!image.isNull() && alignmentOfFrame.contains(frame)) {
+            image = alignFrame(image, *alignmentOfFrame.value(frame));
+        }
         if (progress) progress->fetch_add(1);
         if (image.isNull()) continue;
         if (size.isEmpty()) {
