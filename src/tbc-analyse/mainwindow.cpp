@@ -1971,7 +1971,7 @@ void MainWindow::applyThemeStyle(const QString &styleName)
         return;
     }
 
-    QStyle *style = QStyleFactory::create(styleName);
+    QStyle *style = tbc::ui::createStyle(styleName);
     if (!style) {
         return;
     }

@@ -19,6 +19,7 @@
 #include <QGuiApplication>
 #include <QMargins>
 #include <QPalette>
+#include <QProxyStyle>
 #include <QRect>
 #include <QScreen>
 #include <QString>
@@ -66,17 +67,50 @@ inline void normalizeUnsupportedStyleOverrideToFusion()
     }
 }
 
+// Fusion with disabled-text etching turned off. Qt 6.8's Fusion etches
+// disabled menu text: it draws the text in QPalette::Light offset by 1px, then
+// the grey disabled text on top. On the dark palette that leaves a white ghost
+// behind every disabled menu item instead of plain grey text. Qt 6.10's Fusion
+// no longer etches; this matches it on older Qt. The object name stays
+// "fusion" so style-name checks still see Fusion.
+class StockFusionStyle : public QProxyStyle
+{
+public:
+    StockFusionStyle()
+        : QProxyStyle(QStringLiteral("Fusion"))
+    {
+        setObjectName(baseStyle()->objectName());
+    }
+
+    int styleHint(StyleHint hint, const QStyleOption *option = nullptr,
+                  const QWidget *widget = nullptr,
+                  QStyleHintReturn *returnData = nullptr) const override
+    {
+        if (hint == SH_EtchDisabledText) {
+            return 0;
+        }
+        return QProxyStyle::styleHint(hint, option, widget, returnData);
+    }
+};
+
+// QStyleFactory::create(), except that Fusion comes back as StockFusionStyle.
+inline QStyle *createStyle(const QString &styleName)
+{
+    if (styleName.compare(QStringLiteral("Fusion"), Qt::CaseInsensitive) == 0) {
+        return new StockFusionStyle;
+    }
+    return QStyleFactory::create(styleName);
+}
+
 inline void applyFusionStyleIfAvailable(QApplication &application)
 {
     if (!QStyleFactory::keys().contains(QStringLiteral("Fusion"), Qt::CaseInsensitive)) {
         return;
     }
-    const QString currentStyleName =
-        application.style() ? application.style()->objectName() : QString();
-    if (currentStyleName.compare(QStringLiteral("Fusion"), Qt::CaseInsensitive) == 0) {
+    if (dynamic_cast<StockFusionStyle *>(application.style())) {
         return;
     }
-    application.setStyle(QStringLiteral("Fusion"));
+    application.setStyle(new StockFusionStyle);
 }
 
 // Stock dark Fusion palette (neutral grey/black, legacy blue Highlight).
