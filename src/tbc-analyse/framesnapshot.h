@@ -140,7 +140,8 @@ struct FrameAlignment {
 struct FrameScore {
     qint32 frame = 0;
     double anchorDiff = 0.0; // thumbnail difference from the anchor frame, 0..1
-    double distance = 0.0;   // RMS luma difference from the run's median, 0..1
+    double distance = 0.0;   // RMS luma difference from the run's median after any realignment, 0..1
+    double rawDistance = 0.0; // the same before realignment: the frame as "cleanest" saves it
     double dropouts = 0.0;   // visible dropout samples from the metadata
     bool inRun = false;      // same still as the anchor
     bool eligible = false;   // passed the dropout and distance checks

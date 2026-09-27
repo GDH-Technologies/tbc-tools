@@ -345,6 +345,9 @@ void testStillAlignment()
         CHECK(near(score.shiftYMax, expectedY, 0.05));
         CHECK(score.aligned == (score.frame == 3 || score.frame == 6));
     }
+    // "Cleanest" saves a frame unresampled, so a frame that needed
+    // realignment must not win on its resampled (smoother) distance
+    CHECK(result.bestFrame != 3 && result.bestFrame != 6);
 }
 
 // Shifting a frame image and aligning it back recovers the original

@@ -640,6 +640,17 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
             score.shiftYMax = std::max(score.shiftYMax, static_cast<double>(std::fabs(alignment.shiftY[f])));
         }
         score.shiftX = median(bandShifts);
+
+        // The frame as it stands. Realignment resamples, and resampling
+        // smooths noise, so a realigned frame measures cleaner than the
+        // unresampled frame "cleanest" saves: the pick uses this distance.
+        double rawSum = 0.0;
+        for (size_t i = 0; i < pixels.size(); i++) {
+            const double difference = pixels[i] - medianPixels[i];
+            rawSum += difference * difference;
+        }
+        score.rawDistance = std::sqrt(rawSum / pixels.size());
+
         alignment.apply = score.shiftXMax > ALIGN_THRESHOLD || score.shiftYMax > ALIGN_THRESHOLD;
         score.aligned = alignment.apply;
         if (alignment.apply) {
@@ -690,8 +701,9 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
         if (!score.eligible) continue;
         result.eligibleFrames.append(score.frame);
         result.alignments.append(alignmentOfFrame.value(score.frame));
-        if (bestDistance < 0.0 || score.distance < bestDistance) {
-            bestDistance = score.distance;
+        // Rejection judged the realigned frame; the pick judges the frame as saved
+        if (bestDistance < 0.0 || score.rawDistance < bestDistance) {
+            bestDistance = score.rawDistance;
             result.bestFrame = score.frame;
         }
     }
@@ -707,10 +719,10 @@ bool writeScoreReport(const QString &filename, const SearchResult &result, QStri
         return false;
     }
     QTextStream stream(&file);
-    stream << "frame,in_run,eligible,anchor_diff,distance,dropouts,shift_x,shift_x_max,shift_y_max,aligned,best\n";
+    stream << "frame,in_run,eligible,anchor_diff,distance,raw_distance,dropouts,shift_x,shift_x_max,shift_y_max,aligned,best\n";
     for (const FrameScore &score : result.scores) {
         stream << score.frame << ',' << int(score.inRun) << ',' << int(score.eligible) << ','
-               << score.anchorDiff << ',' << score.distance << ',' << score.dropouts << ','
+               << score.anchorDiff << ',' << score.distance << ',' << score.rawDistance << ',' << score.dropouts << ','
                << score.shiftX << ',' << score.shiftXMax << ',' << score.shiftYMax << ',' << int(score.aligned) << ','
                << int(score.frame == result.bestFrame) << '\n';
     }
