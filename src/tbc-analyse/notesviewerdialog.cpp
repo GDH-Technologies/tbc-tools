@@ -3,6 +3,7 @@
 #include <QAbstractItemView>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -110,15 +111,12 @@ NotesViewerDialog::NotesViewerDialog(QWidget *parent)
     noteButtonsLayout->addStretch(1);
     mainLayout->addLayout(noteButtonsLayout);
 
-    auto *buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch(1);
-    auto *applyButton = new QPushButton(tr("Apply"), this);
+    // No default button: Enter belongs to the note editors
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Close, this);
+    QPushButton *applyButton = buttonBox->button(QDialogButtonBox::Apply);
     applyButton->setAutoDefault(false);
-    auto *closeButton = new QPushButton(tr("Close"), this);
-    closeButton->setAutoDefault(false);
-    buttonLayout->addWidget(applyButton);
-    buttonLayout->addWidget(closeButton);
-    mainLayout->addLayout(buttonLayout);
+    buttonBox->button(QDialogButtonBox::Close)->setAutoDefault(false);
+    mainLayout->addWidget(buttonBox);
 
     const auto updateRangeUi = [this]() {
         if (applyingState_) {
@@ -184,7 +182,7 @@ NotesViewerDialog::NotesViewerDialog(QWidget *parent)
         }
         emit notesUpdated(inFrame, outFrame, noteFrames_, noteComments_);
     });
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     updateTimecodeLabels();
     updateGoButtons();

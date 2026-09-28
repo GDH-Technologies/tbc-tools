@@ -57,7 +57,6 @@
 #include <QTextEdit>
 #include <QAbstractSpinBox>
 #include <QKeySequence>
-#include <QShortcut>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -3512,10 +3511,9 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
         }
 
         if (metadataCandidate.isEmpty()) {
-            QMessageBox messageBox;
-            messageBox.warning(this, tr("Error"),
-                               tr("Metadata-only mode requires a .db or .json file. '%1' and '%2' were not found.")
-                               .arg(dbCandidate, jsonCandidate));
+            QMessageBox::warning(this, tr("Error"),
+                                 tr("Metadata-only mode requires a .db or .json file. '%1' and '%2' were not found.")
+                                 .arg(dbCandidate, jsonCandidate));
             return;
         }
 
@@ -5790,56 +5788,64 @@ void MainWindow::onUpdateCheckFailed(const QString &errorString)
         return;
     }
 
-    QMessageBox box(this);
-    box.setIcon(QMessageBox::Warning);
-    box.setWindowTitle(tr("Update check failed"));
-    box.setText(tr("Could not check for updates."));
-    box.setInformativeText(errorString + QStringLiteral("\n\n") +
+    // Window-modal and asynchronous: no nested event loop
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setIcon(QMessageBox::Warning);
+    box->setWindowTitle(tr("Update check failed"));
+    box->setText(tr("Could not check for updates."));
+    box->setInformativeText(errorString + QStringLiteral("\n\n") +
         tr("You can view the latest release in your browser instead."));
-    QPushButton *openButton = box.addButton(tr("Open releases page"), QMessageBox::AcceptRole);
-    box.addButton(QMessageBox::Close);
-    box.exec();
-    if (box.clickedButton() == openButton) {
-        QDesktopServices::openUrl(QUrl(UpdateChecker::releasesUrl()));
-    }
+    QPushButton *openButton = box->addButton(tr("Open releases page"), QMessageBox::AcceptRole);
+    box->addButton(QMessageBox::Close);
+    connect(box, &QMessageBox::finished, this, [box, openButton]() {
+        if (box->clickedButton() == openButton) {
+            QDesktopServices::openUrl(QUrl(UpdateChecker::releasesUrl()));
+        }
+    });
+    box->open();
 }
 
 void MainWindow::showUpdateAvailableDialog(const QString &latestVersion, const QString &releaseUrl, const QString &releaseName)
 {
     const QString currentVersion = TbcBuildInfo::version();
 
-    QMessageBox box(this);
-    box.setIcon(QMessageBox::Information);
-    box.setWindowTitle(tr("Update available"));
-    box.setText(tr("A new version of tbc-tools is available."));
+    // Window-modal and asynchronous: no nested event loop
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setIcon(QMessageBox::Information);
+    box->setWindowTitle(tr("Update available"));
+    box->setText(tr("A new version of tbc-tools is available."));
     QString info = tr("Installed: %1\nLatest: %2").arg(currentVersion, latestVersion);
     if (!releaseName.isEmpty()) {
         info += QStringLiteral("\n") + releaseName;
     }
     info += QStringLiteral("\n\n") + tr("Would you like to open the release page to download it?");
-    box.setInformativeText(info);
+    box->setInformativeText(info);
 
-    QPushButton *downloadButton = box.addButton(tr("Download"), QMessageBox::AcceptRole);
-    QPushButton *skipButton = box.addButton(tr("Skip this version"), QMessageBox::ActionRole);
-    QPushButton *laterButton = box.addButton(tr("Remind me later"), QMessageBox::RejectRole);
-    box.exec();
-
-    QAbstractButton *clicked = box.clickedButton();
-    if (clicked == downloadButton) {
-        const QUrl url(releaseUrl.isEmpty() ? UpdateChecker::releasesUrl() : releaseUrl);
-        if (!QDesktopServices::openUrl(url)) {
-            QMessageBox::warning(this, tr("Warning"),
-                tr("Could not open the release URL:\n%1").arg(url.toString()));
+    QPushButton *downloadButton = box->addButton(tr("Download"), QMessageBox::AcceptRole);
+    QPushButton *skipButton = box->addButton(tr("Skip this version"), QMessageBox::ActionRole);
+    // "Remind me later" is a no-op: the timestamp was already recorded, so it
+    // won't prompt again for a week.
+    box->addButton(tr("Remind me later"), QMessageBox::RejectRole);
+    connect(box, &QMessageBox::finished, this,
+            [this, box, downloadButton, skipButton, latestVersion, releaseUrl]() {
+        QAbstractButton *clicked = box->clickedButton();
+        if (clicked == downloadButton) {
+            const QUrl url(releaseUrl.isEmpty() ? UpdateChecker::releasesUrl() : releaseUrl);
+            if (!QDesktopServices::openUrl(url)) {
+                QMessageBox::warning(this, tr("Warning"),
+                    tr("Could not open the release URL:\n%1").arg(url.toString()));
+            }
+        } else if (clicked == skipButton) {
+            configuration.setSkippedUpdateVersion(latestVersion);
+            configuration.writeConfiguration();
+            if (statusBar()) {
+                statusBar()->showMessage(tr("Skipped version %1. You can still check manually via Help > Check for Updates.").arg(latestVersion), 6000);
+            }
         }
-    } else if (clicked == skipButton) {
-        configuration.setSkippedUpdateVersion(latestVersion);
-        configuration.writeConfiguration();
-        if (statusBar()) {
-            statusBar()->showMessage(tr("Skipped version %1. You can still check manually via Help > Check for Updates.").arg(latestVersion), 6000);
-        }
-    } else if (clicked == laterButton) {
-        // No-op; the timestamp was already recorded so it won't prompt again for a week.
-    }
+    });
+    box->open();
 }
 void MainWindow::on_actionTeletext_Viewer_triggered()
 {
@@ -6233,12 +6239,11 @@ void MainWindow::saveAllModesAsPngs()
     if (QPushButton *defaultButton = qobject_cast<QPushButton *>(everythingButton)) {
         exportModeDialog.setDefaultButton(defaultButton);
     }
-    QShortcut escapeShortcut(QKeySequence(Qt::Key_Escape), &exportModeDialog);
-    connect(&escapeShortcut, &QShortcut::activated, &exportModeDialog, &QDialog::reject);
+    QAbstractButton *cancelButton = exportModeDialog.addButton(QMessageBox::Cancel);
     exportModeDialog.exec();
 
     const QAbstractButton *selectedExportModeButton = exportModeDialog.clickedButton();
-    if (!selectedExportModeButton) {
+    if (!selectedExportModeButton || selectedExportModeButton == cancelButton) {
         return;
     }
 
@@ -8179,8 +8184,7 @@ void MainWindow::onSourceLoaded(bool success)
         restoreUiStateAfterReload = false;
 
         // Show the error to the user
-        QMessageBox messageBox;
-        messageBox.warning(this, "Error", tbcSource.getLastIOError());
+        QMessageBox::warning(this, tr("Error"), tbcSource.getLastIOError());
     }
 
     processPendingSourceOpenRequest();
@@ -8221,8 +8225,7 @@ void MainWindow::onSourceSaved(bool success)
         // Whatever was waiting on the save doesn't happen; the edits stay.
         afterSaveAction = {};
         // Show the error to the user
-        QMessageBox messageBox;
-        messageBox.warning(this, tr("Error"), tbcSource.getLastIOError());
+        QMessageBox::warning(this, tr("Error"), tbcSource.getLastIOError());
     }
 
     updateMetadataStatusPanel();

@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -114,15 +115,12 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     deriveLayout->setColumnStretch(11, 1);
     mainLayout->addLayout(deriveLayout);
 
-    auto *buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch(1);
-    applyButton_ = new QPushButton(tr("Apply"), this);
+    // No default button: Enter belongs to the table's editors
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Close, this);
+    applyButton_ = buttonBox->button(QDialogButtonBox::Apply);
     applyButton_->setAutoDefault(false);
-    auto *closeButton = new QPushButton(tr("Close"), this);
-    closeButton->setAutoDefault(false);
-    buttonLayout->addWidget(applyButton_);
-    buttonLayout->addWidget(closeButton);
-    mainLayout->addLayout(buttonLayout);
+    buttonBox->button(QDialogButtonBox::Close)->setAutoDefault(false);
+    mainLayout->addWidget(buttonBox);
 
     connect(table_, &QTableWidget::itemSelectionChanged, this, &SegmentsViewerDialog::updateButtons);
     connect(table_, &QTableWidget::cellChanged, this, &SegmentsViewerDialog::handleItemChanged);
@@ -168,7 +166,7 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
         dirty_ = false;
         updateButtons();
     });
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     applyPreset(1);   // after every button exists: it refreshes their enabled state
     updateInfoLabel();

@@ -102,7 +102,6 @@ private:
     QPushButton *m_installButton;
     QPushButton *m_installFromArchiveButton;
     QPushButton *m_removeButton;
-    QPushButton *m_closeButton;
     QPushButton *m_retryButton;
     QPushButton *m_cancelButton;
     QLabel *m_catalogStatusLabel;

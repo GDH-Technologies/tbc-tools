@@ -3,6 +3,7 @@
 #include "fieldtimingwidget.h"
 
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -111,10 +112,10 @@ void FieldTimingDialog::setupUi()
 
     controlsLayout->addSpacing(12);
 
-    auto *closeButton = new QPushButton(tr("Close"), this);
-    closeButton->setAutoDefault(false);
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
-    controlsLayout->addWidget(closeButton);
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    buttonBox->button(QDialogButtonBox::Close)->setAutoDefault(false);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    controlsLayout->addWidget(buttonBox);
 
     mainLayout->addLayout(controlsLayout);
 }

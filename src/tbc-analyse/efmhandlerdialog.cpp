@@ -33,6 +33,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QProgressBar>
+#include <QDialogButtonBox>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
@@ -378,15 +379,11 @@ void EfmHandlerDialog::buildUi()
     logTextEdit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     mainLayout->addWidget(logTextEdit);
 
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch(1);
-    runButton = new QPushButton(tr("Run selected"), this);
-    cancelButton = new QPushButton(tr("Cancel"), this);
-    closeButton = new QPushButton(tr("Close"), this);
-    buttonLayout->addWidget(runButton);
-    buttonLayout->addWidget(cancelButton);
-    buttonLayout->addWidget(closeButton);
-    mainLayout->addLayout(buttonLayout);
+    auto *buttonBox = new QDialogButtonBox(this);
+    runButton = buttonBox->addButton(tr("Run selected"), QDialogButtonBox::ApplyRole);
+    cancelButton = buttonBox->addButton(tr("Cancel"), QDialogButtonBox::ActionRole);
+    closeButton = buttonBox->addButton(QDialogButtonBox::Close);
+    mainLayout->addWidget(buttonBox);
 
     connect(addEfmInputButton, &QPushButton::clicked, this, &EfmHandlerDialog::onAddEfmInputClicked);
     connect(removeEfmInputButton, &QPushButton::clicked, this, &EfmHandlerDialog::onRemoveEfmInputClicked);
@@ -398,7 +395,7 @@ void EfmHandlerDialog::buildUi()
     connect(ac3OutputBrowseButton, &QPushButton::clicked, this, &EfmHandlerDialog::onBrowseAc3OutputClicked);
     connect(runButton, &QPushButton::clicked, this, &EfmHandlerDialog::onRunClicked);
     connect(cancelButton, &QPushButton::clicked, this, &EfmHandlerDialog::onCancelClicked);
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     connect(outputBaseLineEdit, &QLineEdit::textEdited, this, [this]() {
         userEditedOutputBase = true;

@@ -15,6 +15,7 @@
 #include "configuration.h"
 
 #include <QVBoxLayout>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QSplitter>
@@ -142,11 +143,8 @@ PluginManagerDialog::PluginManagerDialog(QWidget *parent)
     mainLayout->addWidget(m_logView);
 
     // --- Close button ---
-    auto *closeLayout = new QHBoxLayout();
-    closeLayout->addStretch();
-    m_closeButton = new QPushButton(tr("Close"), this);
-    closeLayout->addWidget(m_closeButton);
-    mainLayout->addLayout(closeLayout);
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    mainLayout->addWidget(buttonBox);
 
     // --- Connections ---
     connect(m_pluginList, &QListWidget::currentItemChanged, this, &PluginManagerDialog::onPluginSelected);
@@ -155,7 +153,7 @@ PluginManagerDialog::PluginManagerDialog(QWidget *parent)
     connect(m_installFromArchiveButton, &QPushButton::clicked,
             this, &PluginManagerDialog::onInstallFromLocalArchive);
     connect(m_removeButton, &QPushButton::clicked, this, &PluginManagerDialog::onRemove);
-    connect(m_closeButton, &QPushButton::clicked, this, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     connect(m_cudaManager, &CudaPluginManager::latestReleaseResolved,
             this, &PluginManagerDialog::onLatestReleaseResolved);
