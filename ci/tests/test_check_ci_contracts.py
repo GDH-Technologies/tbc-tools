@@ -556,6 +556,8 @@ class ContractCoverageTests(unittest.TestCase):
             "runs-on: [self-hosted, air0-test]",
             "needs: test",
             'nix build .# --out-link "$ROOTS/result"',
+            # The test job clones shallow: full history is 6.8 GB.
+            "fetch-depth: 1",
         ):
             self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS)
         self.assertNotIn(

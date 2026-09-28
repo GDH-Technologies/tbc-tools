@@ -127,10 +127,16 @@ jobs:
           xcode-select -p
 
       - uses: actions/checkout@v5
+        # Shallow, no tags, no submodules: the Nix build reads only the tree
+        # (its version comes from .gdh-version, its ezpwd from a flake input),
+        # and a depth-1 checkout evaluates to the same derivation as a full
+        # one. Full history is 6.8 GB -- a fresh workspace spent 40 minutes
+        # cloning it at air0's download rate. `package` keeps the full clone
+        # its `git describe` needs, in the main runner's own workspace.
         with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: true
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
           ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Build and test with Nix

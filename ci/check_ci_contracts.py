@@ -271,6 +271,9 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     "runs-on: [self-hosted, air0-test]",
     'nix build .# --out-link "$ROOTS/result"',
     "needs: test",
+    # The test job clones shallow: the Nix build reads only the tree, and full
+    # history is 6.8 GB (a fresh air0-test workspace took 40 min to clone it).
+    "fetch-depth: 1",
     # ffmpeg must come from the flake's pinned nixpkgs, not the live channel --
     # same reasoning as the hosted job's MACOS_REQUIRED_SNIPPETS entry.
     "nix build .#ffmpeg^bin",
