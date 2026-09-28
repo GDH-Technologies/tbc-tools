@@ -573,6 +573,7 @@ class ContractCoverageTests(unittest.TestCase):
         # ship an untested build.
         for snippet in (
             "doCheck = !withCuda",
+            "enableParallelChecking = false;",
             "patchShebangs scripts",
             "patchShebangs bin",
             "ctest --output-on-failure",

@@ -294,12 +294,16 @@
           } // pkgs.lib.optionalAttrs (!withCuda && isDarwin) {
             # ctest runs inside this build, so the binaries the tests exercise
             # are the ones that get installed and deployed, and CI compiles once.
-            # Darwin only for now: inside wm's Linux build sandbox seven
-            # decode/chroma tests fail (their SQLite metadata writes do not take
-            # effect) while the same binaries pass outside it. air0 builds
-            # unsandboxed. The attrs are merged in only here so the Linux and
-            # CUDA derivations stay byte-identical.
+            # Darwin only for now: Linux follows once it is proven on wm. The
+            # attrs are merged in only here so no check attribute reaches the
+            # Linux or CUDA derivations.
             doCheck = !withCuda && isDarwin;
+            # Serial, and this is what makes it so: nixpkgs' cmake setup hook
+            # exports CTEST_PARALLEL_LEVEL=$NIX_BUILD_CORES unless this is off,
+            # and a bare `ctest` obeys it. The decode and chroma tests all
+            # write testout/test, and in parallel they corrupt each other's
+            # SQLite files; testconfiguration's settings checks race too.
+            enableParallelChecking = false;
             nativeCheckInputs = [
               # scripts/test-* and the vendored vhs-teletext tree need these.
               (p.python3.withPackages (ps: with ps; [
@@ -319,8 +323,7 @@
               export HOME=$TMPDIR
               patchShebangs bin
             '';
-            # Serial: the decode and chroma tests all write testout/test and
-            # corrupt each other's SQLite files when run in parallel.
+            # Serial (see enableParallelChecking above).
             checkPhase = ''
               runHook preCheck
               ctest --output-on-failure

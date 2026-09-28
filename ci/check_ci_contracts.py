@@ -572,6 +572,9 @@ FLAKE_QT_FORBIDDEN_SNIPPETS = (
 # below survives that change). A sync must not drop it.
 FLAKE_CHECK_REQUIRED_SNIPPETS = (
     "doCheck = !withCuda",
+    # nixpkgs' cmake hook otherwise exports CTEST_PARALLEL_LEVEL, and the
+    # decode tests share testout/ and corrupt each other in parallel.
+    "enableParallelChecking = false;",
     "patchShebangs scripts",
     "patchShebangs bin",
     "ctest --output-on-failure",
