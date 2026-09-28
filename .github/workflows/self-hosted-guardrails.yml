@@ -93,6 +93,25 @@ jobs:
         # `cmake -P` against fixture repositories.
         run: python3 -m unittest -v ci.tests.test_gdh_version
 
+      - name: Check this branch's .gdh-version change
+        # A release rides in a PR as a committed .gdh-version, which must be
+        # unchanged or exactly the next minor/major (see gdh_version.py
+        # check-pr). Every non-main ref, not only pull_request: this workflow's
+        # concurrency group collapses a PR's push and pull_request runs into
+        # one, and either may be the survivor.
+        if: ${{ github.ref != 'refs/heads/main' }}
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            # refs/pull/N/merge: HEAD^1 is the base branch as it stands now, so
+            # a number another PR has since taken fails here.
+            python3 scripts/gdh_version.py check-pr --base HEAD^1
+          else
+            python3 scripts/gdh_version.py check-pr --base origin/main
+          fi
+
       - name: Run CI guardrails
         # actionlint over every workflow, the contract unit tests,
         # check_ci_contracts.py, and a syntax check of verify_linux_bundle.sh.

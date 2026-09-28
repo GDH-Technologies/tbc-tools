@@ -235,6 +235,22 @@ jobs:
           echo "$TOOLS/create-dmg/bin" >> "$GITHUB_PATH"
           echo "PYTHON311=$TOOLS/python311/bin/python3.11" >> "$GITHUB_ENV"
 
+      - name: Get version info
+        id: version
+        # The GDH version, by the rule every build uses (a release tag when one
+        # is passed in). Before anything is built into the workspace, so the
+        # tree is still clean. A bare `git describe` used to set this: it
+        # matched upstream's tags too and never saw .gdh-version.
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "version=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$("$PYTHON311" scripts/gdh_version.py show)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build with Nix
         # A store hit: `test` built this exact derivation on this box and
         # rooted it. A miss (GC, or a different tree) would silently recompile
@@ -306,16 +322,6 @@ jobs:
             cp "$FFMPEG_STORE/bin/ffprobe" dist/bin/ffprobe
             chmod +x dist/bin/ffprobe
           fi
-
-      - name: Get version info
-        id: version
-        run: |
-          if [ -n "${{ inputs.release_tag }}" ]; then
-            echo "version=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=$(git describe --tags --always --dirty)" >> $GITHUB_OUTPUT
-          fi
-
 
       - name: Create app bundle structure
         run: |
