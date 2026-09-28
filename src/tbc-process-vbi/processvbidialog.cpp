@@ -10,15 +10,14 @@
 
 #include "processvbidialog.h"
 
-#include <QApplication>
 #include <QCheckBox>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
 #include <QDateTime>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFont>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -32,20 +31,10 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSpinBox>
-#include <QStandardPaths>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace {
-bool isRunnableFile(const QString &candidatePath)
-{
-    const QFileInfo candidateInfo(candidatePath);
-#if defined(Q_OS_WIN)
-    return candidateInfo.exists() && candidateInfo.isFile();
-#else
-    return candidateInfo.exists() && candidateInfo.isFile() && candidateInfo.isExecutable();
-#endif
-}
-
 QString quoteForShell(const QString &arg)
 {
     if (arg.isEmpty()) {
@@ -119,7 +108,6 @@ void ProcessVbiDialog::buildUi()
 {
     setWindowTitle(tr("Process VBI"));
     resize(760, 720);
-    setMinimumSize(720, 660);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(8, 8, 8, 8);
@@ -216,22 +204,21 @@ void ProcessVbiDialog::buildUi()
 
     logTextEdit = new QPlainTextEdit(this);
     logTextEdit->setReadOnly(true);
-    logTextEdit->setMinimumHeight(120);
-    logTextEdit->setMaximumHeight(200);
-    QFont logFont = logTextEdit->font();
-    logFont.setStyleHint(QFont::TypeWriter);
-    logTextEdit->setFont(logFont);
+    // The system's fixed-pitch font (a style hint on the default family does
+    // not make it monospaced)
+    logTextEdit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     mainLayout->addWidget(logTextEdit);
 
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch(1);
-    runButton = new QPushButton(tr("Run"), this);
-    cancelButton = new QPushButton(tr("Cancel"), this);
-    closeButton = new QPushButton(tr("Close"), this);
-    buttonLayout->addWidget(runButton);
-    buttonLayout->addWidget(cancelButton);
-    buttonLayout->addWidget(closeButton);
-    mainLayout->addLayout(buttonLayout);
+    // Run is the default: Enter in a field runs, never a Browse button
+    auto *buttonBox = new QDialogButtonBox(this);
+    runButton = buttonBox->addButton(tr("Run"), QDialogButtonBox::AcceptRole);
+    runButton->setDefault(true);
+    stopButton = buttonBox->addButton(tr("Stop"), QDialogButtonBox::ActionRole);
+    closeButton = buttonBox->addButton(QDialogButtonBox::Close);
+    mainLayout->addWidget(buttonBox);
+    for (QPushButton *browseButton : {inputTbcBrowseButton, outputMetadataBrowseButton, teletextBrowseButton}) {
+        browseButton->setAutoDefault(false);
+    }
 
     // --- Connections ---
     connect(inputTbcBrowseButton, &QPushButton::clicked, this, &ProcessVbiDialog::onBrowseInputTbcClicked);
@@ -239,8 +226,8 @@ void ProcessVbiDialog::buildUi()
     connect(teletextBrowseButton, &QPushButton::clicked, this, &ProcessVbiDialog::onBrowseTeletextDirClicked);
     connect(teletextCheckBox, &QCheckBox::toggled, this, &ProcessVbiDialog::onTeletextToggled);
     connect(runButton, &QPushButton::clicked, this, &ProcessVbiDialog::onRunClicked);
-    connect(cancelButton, &QPushButton::clicked, this, &ProcessVbiDialog::onCancelClicked);
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(stopButton, &QPushButton::clicked, this, &ProcessVbiDialog::onStopClicked);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     auto stateUpdater = [this]() { updateControlStates(); };
     connect(inputTbcLineEdit, &QLineEdit::textChanged, this, stateUpdater);
@@ -270,7 +257,7 @@ void ProcessVbiDialog::setBusy(bool enabled)
     teletextGroupBox->setEnabled(!enabled && teletextCheckBox->isChecked());
     runButton->setEnabled(!enabled);
     closeButton->setEnabled(!enabled);
-    cancelButton->setEnabled(enabled);
+    stopButton->setEnabled(enabled);
 
     if (!enabled) {
         updateControlStates();
@@ -325,234 +312,100 @@ QString ProcessVbiDialog::formatCommand(const QString &program, const QStringLis
     return commandParts.join(QLatin1Char(' '));
 }
 
-QString ProcessVbiDialog::resolveLdProcessVbi() const
-{
-    if (!cachedToolPath.isEmpty() && isRunnableFile(cachedToolPath)) {
-        return cachedToolPath;
-    }
-
-    const QString toolName = QStringLiteral("tbc-process-vbi");
-    QStringList candidateNames = {toolName};
-#if defined(Q_OS_WIN)
-    candidateNames.append(toolName + QStringLiteral(".exe"));
-#endif
-
-    QStringList searchRoots;
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const auto appendRoot = [&searchRoots](const QString &root) {
-        const QString cleanRoot = QDir::cleanPath(root.trimmed());
-        if (!cleanRoot.isEmpty() && !searchRoots.contains(cleanRoot)) {
-            searchRoots.append(cleanRoot);
-        }
-    };
-    appendRoot(appDir);
-    appendRoot(QDir(appDir).filePath(QStringLiteral(".")));
-    appendRoot(QDir(appDir).filePath(QStringLiteral("..")));
-    appendRoot(QDir(appDir).filePath(QStringLiteral("../bin")));
-    appendRoot(QDir(appDir).filePath(QStringLiteral("../../bin")));
-    appendRoot(QDir(appDir).filePath(QStringLiteral("../../../bin")));
-    appendRoot(QDir::currentPath());
-    appendRoot(QDir(QDir::currentPath()).filePath(QStringLiteral("bin")));
-    appendRoot(QDir(QDir::currentPath()).filePath(QStringLiteral("build/bin")));
-    appendRoot(QDir(QDir::currentPath()).filePath(QStringLiteral("../build/bin")));
-
-    for (const QString &root : searchRoots) {
-        if (root.isEmpty()) {
-            continue;
-        }
-        const QDir rootDir(root);
-        for (const QString &candidateName : candidateNames) {
-            const QString candidatePath = rootDir.filePath(candidateName);
-            if (isRunnableFile(candidatePath)) {
-                cachedToolPath = candidatePath;
-                return cachedToolPath;
-            }
-        }
-    }
-
-    for (const QString &candidateName : candidateNames) {
-        const QString fromPath = QStandardPaths::findExecutable(candidateName);
-        if (!fromPath.isEmpty() && isRunnableFile(fromPath)) {
-            cachedToolPath = fromPath;
-            return cachedToolPath;
-        }
-    }
-
-    cachedToolPath.clear();
-    return QString();
-}
-
-bool ProcessVbiDialog::toolSupportsOption(const QString &toolPath, const QString &option) const
-{
-    if (toolPath.isEmpty() || option.isEmpty()) {
-        return false;
-    }
-
-    // Reuse a cached --help probe for this tool path.
-    if (cachedToolPath != toolPath || cachedHelpText.isEmpty()) {
-        QProcess probe;
-        probe.setProcessChannelMode(QProcess::MergedChannels);
-        probe.start(toolPath, QStringList{QStringLiteral("--help")});
-        if (!probe.waitForStarted(5000) || !probe.waitForFinished(10000)) {
-            probe.kill();
-            cachedHelpText.clear();
-            cachedToolPath = toolPath;
-            return false;
-        }
-        cachedHelpText = QString::fromLocal8Bit(probe.readAll());
-        cachedToolPath = toolPath;
-    }
-
-    // Match the option token as a standalone word so "--no-vbi-core" doesn't
-    // false-match "--no-vbi-core-something-else".
-    const QStringList lines = cachedHelpText.split(QLatin1Char('\n'));
-    for (const QString &line : lines) {
-        if (line.contains(option, Qt::CaseSensitive)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-QStringList ProcessVbiDialog::buildToolArguments(const QString &toolPath, const VbiProcessingOptions &opts) const
+// The dialog runs its own binary in CLI mode, so every option exists
+QStringList ProcessVbiDialog::buildToolArguments(const VbiProcessingOptions &opts) const
 {
     QStringList args;
 
-    if (!opts.vbiCore && toolSupportsOption(toolPath, QStringLiteral("--no-vbi-core"))) {
+    if (!opts.vbiCore) {
         args << QStringLiteral("--no-vbi-core");
     }
-    if (!opts.ntsc && toolSupportsOption(toolPath, QStringLiteral("--no-ntsc"))) {
+    if (!opts.ntsc) {
         args << QStringLiteral("--no-ntsc");
     }
-    if (!opts.vitc && toolSupportsOption(toolPath, QStringLiteral("--no-vitc"))) {
+    if (!opts.vitc) {
         args << QStringLiteral("--no-vitc");
     }
-    if (!opts.closedCaptions && toolSupportsOption(toolPath, QStringLiteral("--no-closed-captions"))) {
+    if (!opts.closedCaptions) {
         args << QStringLiteral("--no-closed-captions");
     }
 
-    const bool toolHasTeletextFlag = toolSupportsOption(toolPath, QStringLiteral("--teletext"));
     if (opts.teletext) {
-        if (toolHasTeletextFlag) {
-            args << QStringLiteral("--teletext");
-        }
-        if (!opts.teletextHtmlDir.isEmpty() && toolSupportsOption(toolPath, QStringLiteral("--teletext-html-dir"))) {
+        args << QStringLiteral("--teletext");
+        if (!opts.teletextHtmlDir.isEmpty()) {
             args << QStringLiteral("--teletext-html-dir") << opts.teletextHtmlDir;
         }
         if (!opts.teletextTapeFormat.trimmed().isEmpty()
-            && opts.teletextTapeFormat.trimmed().compare(QStringLiteral("vhs"), Qt::CaseInsensitive) != 0
-            && toolSupportsOption(toolPath, QStringLiteral("--teletext-tape-format"))) {
+            && opts.teletextTapeFormat.trimmed().compare(QStringLiteral("vhs"), Qt::CaseInsensitive) != 0) {
             args << QStringLiteral("--teletext-tape-format") << opts.teletextTapeFormat.trimmed();
         }
-        if (opts.teletextMinDuplicates > 1
-            && toolSupportsOption(toolPath, QStringLiteral("--teletext-min-duplicates"))) {
+        if (opts.teletextMinDuplicates > 1) {
             args << QStringLiteral("--teletext-min-duplicates") << QString::number(opts.teletextMinDuplicates);
         }
-    } else if (!toolHasTeletextFlag && toolSupportsOption(toolPath, QStringLiteral("--no-teletext-html"))) {
-        // Old CLI build where teletext defaults on: explicitly suppress it.
-        args << QStringLiteral("--no-teletext-html");
     }
 
-    if (opts.vits && toolSupportsOption(toolPath, QStringLiteral("--vits"))) {
+    if (opts.vits) {
         args << QStringLiteral("--vits");
     }
 
     return args;
 }
 
-bool ProcessVbiDialog::runProcessStep(const QString &program, const QStringList &arguments, QString *errorMessage)
+// Log each complete line of the run's output (\r-rewritten progress lines too)
+void ProcessVbiDialog::consumeOutput(const QByteArray &chunk)
 {
-    if (errorMessage) {
-        errorMessage->clear();
-    }
+    QByteArray normalized = chunk;
+    normalized.replace('\r', '\n');
+    pendingOutputBuffer.append(normalized);
 
-    appendStatus(tr("Running tbc-process-vbi..."));
-    appendLog(QStringLiteral("$ %1").arg(formatCommand(program, arguments)));
-
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(program, arguments);
-
-    if (!process.waitForStarted(5000)) {
-        if (errorMessage) {
-            *errorMessage = tr("Unable to start tbc-process-vbi: %1").arg(program);
-        }
-        return false;
-    }
-
-    progressBar->setRange(0, 0); // indeterminate while the CLI runs
-
-    QByteArray pendingOutputBuffer;
-    QString lastOutputLine;
-    bool terminateSent = false;
-    QElapsedTimer cancelTimer;
-
-    auto consumeOutputChunk = [&](const QByteArray &chunk) {
-        if (chunk.isEmpty()) {
-            return;
-        }
-        QByteArray normalized = chunk;
-        normalized.replace('\r', '\n');
-        pendingOutputBuffer.append(normalized);
-
-        qsizetype lineBreakIndex = -1;
-        while ((lineBreakIndex = pendingOutputBuffer.indexOf('\n')) >= 0) {
-            QByteArray lineBytes = pendingOutputBuffer.left(lineBreakIndex);
-            pendingOutputBuffer.remove(0, lineBreakIndex + 1);
-            const QString lineText = QString::fromLocal8Bit(lineBytes).trimmed();
-            if (lineText.isEmpty()) {
-                continue;
-            }
+    qsizetype lineBreakIndex = -1;
+    while ((lineBreakIndex = pendingOutputBuffer.indexOf('\n')) >= 0) {
+        const QString lineText = QString::fromLocal8Bit(pendingOutputBuffer.left(lineBreakIndex)).trimmed();
+        pendingOutputBuffer.remove(0, lineBreakIndex + 1);
+        if (!lineText.isEmpty()) {
             lastOutputLine = lineText;
             appendLog(lineText);
         }
-    };
-
-    while (process.state() != QProcess::NotRunning) {
-        if (cancelRequested) {
-            if (!terminateSent) {
-                process.terminate();
-                terminateSent = true;
-                cancelTimer.start();
-            } else if (cancelTimer.isValid() && cancelTimer.elapsed() > 2000) {
-                process.kill();
-            }
-        }
-        process.waitForReadyRead(100);
-        consumeOutputChunk(process.readAllStandardOutput());
-        QCoreApplication::processEvents();
     }
+}
 
-    consumeOutputChunk(process.readAllStandardOutput());
-    if (!pendingOutputBuffer.trimmed().isEmpty()) {
-        const QString trailingLine = QString::fromLocal8Bit(pendingOutputBuffer).trimmed();
-        if (!trailingLine.isEmpty()) {
-            lastOutputLine = trailingLine;
-            appendLog(trailingLine);
-        }
+// The run has ended (or never started, with startError set): report it
+void ProcessVbiDialog::finishRun(const QString &startError)
+{
+    consumeOutput(process->readAllStandardOutput());
+    const QString trailingLine = QString::fromLocal8Bit(pendingOutputBuffer).trimmed();
+    if (!trailingLine.isEmpty()) {
+        lastOutputLine = trailingLine;
+        appendLog(trailingLine);
     }
+    pendingOutputBuffer.clear();
 
     progressBar->setRange(0, 1);
     progressBar->setValue(1);
 
-    if (cancelRequested) {
-        if (errorMessage) {
-            *errorMessage = tr("Cancelled by user.");
+    QString errorMessage = startError;
+    if (errorMessage.isEmpty()) {
+        if (cancelRequested) {
+            errorMessage = tr("Cancelled by user.");
+        } else if (process->exitStatus() != QProcess::NormalExit || process->exitCode() != 0) {
+            errorMessage = !lastOutputLine.isEmpty()
+                               ? lastOutputLine
+                               : tr("tbc-process-vbi failed with exit code %1.").arg(process->exitCode());
         }
-        return false;
     }
+    process->deleteLater();
+    process = nullptr;
+    setBusy(false);
 
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        if (errorMessage) {
-            *errorMessage = !lastOutputLine.isEmpty()
-                                ? lastOutputLine
-                                : tr("tbc-process-vbi failed with exit code %1.").arg(process.exitCode());
+    if (!errorMessage.isEmpty()) {
+        appendStatus(tr("Failed: %1").arg(errorMessage));
+        if (!cancelRequested) {
+            QMessageBox::warning(this, tr("Process failed"), errorMessage);
         }
-        return false;
+    } else {
+        appendLog(tr("tbc-process-vbi completed."));
+        appendStatus(tr("VBI processing completed for %1").arg(runInputTbc));
     }
-
-    appendLog(tr("tbc-process-vbi completed."));
-    return true;
 }
 
 void ProcessVbiDialog::onBrowseInputTbcClicked()
@@ -599,16 +452,12 @@ void ProcessVbiDialog::onTeletextToggled(bool checked)
 
 void ProcessVbiDialog::onRunClicked()
 {
+    if (runInProgress) {
+        return;
+    }
     const QString inputTbc = QFileInfo(normalizePath(inputTbcLineEdit->text())).absoluteFilePath();
     if (inputTbc.isEmpty() || !QFileInfo::exists(inputTbc)) {
         QMessageBox::warning(this, tr("Input required"), tr("Please select a valid input TBC file."));
-        return;
-    }
-
-    const QString toolPath = resolveLdProcessVbi();
-    if (toolPath.isEmpty()) {
-        QMessageBox::warning(this, tr("Tool not found"),
-                             tr("tbc-process-vbi was not found alongside the application or in PATH."));
         return;
     }
 
@@ -626,29 +475,62 @@ void ProcessVbiDialog::onRunClicked()
 
     QStringList arguments;
     const QString outputMetadata = normalizePath(outputMetadataLineEdit->text());
-    if (!outputMetadata.isEmpty() && toolSupportsOption(toolPath, QStringLiteral("--output-metadata"))) {
+    if (!outputMetadata.isEmpty()) {
         arguments << QStringLiteral("--output-metadata") << outputMetadata;
     }
-    arguments << buildToolArguments(toolPath, opts);
+    arguments << buildToolArguments(opts);
     arguments << inputTbc;
 
-    setBusy(true);
-    QString errorMessage;
-    const bool ok = runProcessStep(toolPath, arguments, &errorMessage);
-    setBusy(false);
+    // This same binary: arguments without --gui select its CLI mode
+    const QString toolPath = QCoreApplication::applicationFilePath();
 
-    if (!ok) {
-        appendStatus(tr("Failed: %1").arg(errorMessage));
-        if (!errorMessage.contains(tr("Cancelled by user."), Qt::CaseInsensitive)) {
-            QMessageBox::warning(this, tr("Process failed"),
-                                 errorMessage.isEmpty() ? tr("tbc-process-vbi failed.") : errorMessage);
+    setBusy(true);
+    runInputTbc = inputTbc;
+    pendingOutputBuffer.clear();
+    lastOutputLine.clear();
+    appendStatus(tr("Running tbc-process-vbi..."));
+    appendLog(QStringLiteral("$ %1").arg(formatCommand(toolPath, arguments)));
+    progressBar->setRange(0, 0); // indeterminate while the CLI runs
+
+    process = new QProcess(this);
+    process->setProcessChannelMode(QProcess::MergedChannels);
+    connect(process, &QProcess::readyReadStandardOutput, this, [this]() {
+        consumeOutput(process->readAllStandardOutput());
+    });
+    connect(process, &QProcess::finished, this, [this]() {
+        finishRun(QString());
+    });
+    connect(process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        // Every other error is followed by finished()
+        if (error == QProcess::FailedToStart) {
+            finishRun(tr("Unable to start tbc-process-vbi: %1").arg(process->errorString()));
         }
-    } else {
-        appendStatus(tr("VBI processing completed for %1").arg(inputTbc));
-    }
+    });
+    process->start(toolPath, arguments);
 }
 
-void ProcessVbiDialog::onCancelClicked()
+// Ask the run to stop; kill it if it hasn't after two seconds
+void ProcessVbiDialog::onStopClicked()
 {
+    if (!process) {
+        return;
+    }
     cancelRequested = true;
+    stopButton->setEnabled(false);
+    appendStatus(tr("Stopping..."));
+    process->terminate();
+    QTimer::singleShot(2000, process, [stopping = process]() {
+        if (stopping->state() != QProcess::NotRunning) {
+            stopping->kill();
+        }
+    });
+}
+
+void ProcessVbiDialog::reject()
+{
+    if (runInProgress) {
+        appendStatus(tr("Processing is running: Stop it before closing."));
+        return;
+    }
+    QDialog::reject();
 }
