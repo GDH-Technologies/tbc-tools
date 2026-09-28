@@ -14,7 +14,6 @@
 #include "tbc/uistyle.h"
 #include "gui/processprogressrunner.h"
 
-#include <QApplication>
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -22,7 +21,6 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
 #include <QLineEdit>

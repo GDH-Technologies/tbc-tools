@@ -222,9 +222,6 @@ bool writeVitsCsv(TbcMetaData &metaData, const QString &fileName)
 
     // Create a text stream for the CSV output
     QTextStream outStream(&csvFile);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    outStream.setCodec("UTF-8");
-#endif
 
     // Write the field and VITS data
     outStream << "seqNo,isFirstField,syncConf,";
@@ -264,9 +261,6 @@ bool writeUserMarkersCsv(TbcMetaData &metaData, const QString &fileName)
     }
 
     QTextStream outStream(&csvFile);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    outStream.setCodec("UTF-8");
-#endif
 
     const TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
     const QVector<UserMarker> markers = userMarkersFromVideoParameters(videoParameters,
@@ -297,9 +291,6 @@ bool writeUserMarkersTxt(TbcMetaData &metaData, const QString &fileName)
     }
 
     QTextStream outStream(&textFile);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    outStream.setCodec("UTF-8");
-#endif
 
     const TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
     const QVector<UserMarker> markers = userMarkersFromVideoParameters(videoParameters,
@@ -331,9 +322,6 @@ bool writeVbiCsv(TbcMetaData &metaData, const QString &fileName)
 
     // Create a text stream for the CSV output
     QTextStream outStream(&csvFile);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    outStream.setCodec("UTF-8");
-#endif
 
     // Write the field and VBI data
     outStream << "frameNo,";

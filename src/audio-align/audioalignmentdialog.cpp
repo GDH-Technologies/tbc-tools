@@ -15,7 +15,6 @@
 
 #include "audioalignmentutil.h"
 
-#include <QApplication>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
