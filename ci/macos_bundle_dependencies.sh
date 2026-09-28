@@ -46,6 +46,7 @@ copy_dep() {
     if [ ! -f "$DEP_TARGET" ]; then
       rsync -a "$framework_root" "$FW_DIR/"
       chmod -R u+w "$FW_DIR/$framework_name" || true
+      set_copy_id
     fi
   else
     rest="${dep#/nix/store/}"
@@ -56,8 +57,17 @@ copy_dep() {
     if [ ! -f "$DEP_TARGET" ]; then
       cp "$dep" "$DEP_TARGET" 2>/dev/null || true
       chmod u+w "$DEP_TARGET" 2>/dev/null || true
+      set_copy_id
     fi
   fi
+}
+
+# Give a fresh copy its @rpath install id right away, as the old step did,
+# not only in the final pass: the short id frees Mach-O header space that
+# the rpaths added when the copy is processed need. Without it libX11's
+# second rpath no longer fit.
+set_copy_id() {
+  install_name_tool -id "$DEP_REF" "$DEP_TARGET" 2>/dev/null || true
 }
 
 apply_edits() {
