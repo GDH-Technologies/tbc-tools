@@ -27,6 +27,7 @@ public:
 
     void setSourceDirectory(const QString &directory);
     void setDefaultInput(const QString &inputFilename);
+    void setDefaultOutput(const QString &outputFilename);
 
 private slots:
     void on_inputBrowseButton_clicked();
@@ -35,6 +36,7 @@ private slots:
 
 private:
     void updateDirectionFromInput(bool forceOutputUpdate);
+    void updateConvertButton();
     Ui::MetadataConversionDialog *ui;
     QString sourceDirectory;
 };

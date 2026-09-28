@@ -70,12 +70,6 @@ int main(int argc, char *argv[])
                                             QCoreApplication::translate("main", "Use the light theme"));
         parser.addOption(lightThemeOption);
 
-        QCommandLineOption directionOption(QStringList() << "direction",
-                                           QCoreApplication::translate("main", "Conversion direction: json-to-sqlite or sqlite-to-json (default json-to-sqlite)"),
-                                           QCoreApplication::translate("main", "direction"),
-                                           "json-to-sqlite");
-        parser.addOption(directionOption);
-
         QCommandLineOption inputJsonOption(QStringList() << "input-json",
                                            QCoreApplication::translate("main", "Specify the input JSON file"),
                                            QCoreApplication::translate("main", "filename"));
@@ -118,6 +112,13 @@ int main(int argc, char *argv[])
         MetadataConversionDialog dialog;
         if (!inputFilename.isEmpty()) {
             dialog.setDefaultInput(inputFilename);
+        }
+        // The GUI picks the direction from the input; either output option prefills
+        // the output (--repair stays a CLI option)
+        if (parser.isSet(outputJsonOption)) {
+            dialog.setDefaultOutput(parser.value(outputJsonOption));
+        } else if (parser.isSet(outputSqliteOption)) {
+            dialog.setDefaultOutput(parser.value(outputSqliteOption));
         }
         dialog.exec();
         return 0;

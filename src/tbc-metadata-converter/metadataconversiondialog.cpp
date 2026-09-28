@@ -32,6 +32,8 @@ MetadataConversionDialog::MetadataConversionDialog(QWidget *parent) :
             updateDirectionFromInput(false);
         });
     }
+    connect(ui->outputLineEdit, &QLineEdit::textChanged, this, &MetadataConversionDialog::updateConvertButton);
+    updateConvertButton();
 }
 
 MetadataConversionDialog::~MetadataConversionDialog()
@@ -59,6 +61,14 @@ void MetadataConversionDialog::setDefaultInput(const QString &inputFilename)
 
     if (inputInfo.exists()) {
         sourceDirectory = inputInfo.absolutePath();
+    }
+}
+
+void MetadataConversionDialog::setDefaultOutput(const QString &outputFilename)
+{
+    const QString normalizedOutput = MetadataConverterUtil::normalizePathForCurrentPlatform(outputFilename);
+    if (!normalizedOutput.isEmpty()) {
+        ui->outputLineEdit->setText(normalizedOutput);
     }
 }
 
@@ -150,8 +160,7 @@ void MetadataConversionDialog::on_convertButton_clicked()
             return;
         }
         ui->statusLabel->setText(tr("Conversion failed."));
-        QMessageBox messageBox;
-        messageBox.warning(this, tr("Error"), errorMessage);
+        QMessageBox::warning(this, tr("Error"), errorMessage);
         return;
     }
 
@@ -185,9 +194,21 @@ void MetadataConversionDialog::updateDirectionFromInput(bool forceOutputUpdate)
         ui->outputLineEdit->setText(suggestedOutput);
     }
 
+    updateConvertButton();
+
     if (normalizedInput.isEmpty() || direction != MetadataConverterUtil::MetadataConversionDirection::Unknown) {
         ui->statusLabel->clear();
     } else {
         ui->statusLabel->setText(tr("Input must end with .json or .db so conversion direction can be determined."));
     }
+}
+
+// Convert needs an input whose direction is known and an output
+void MetadataConversionDialog::updateConvertButton()
+{
+    const QString normalizedInput = MetadataConverterUtil::normalizePathForCurrentPlatform(ui->inputLineEdit->text());
+    ui->convertButton->setEnabled(
+        MetadataConverterUtil::inferMetadataConversionDirection(normalizedInput)
+            != MetadataConverterUtil::MetadataConversionDirection::Unknown
+        && !ui->outputLineEdit->text().trimmed().isEmpty());
 }
