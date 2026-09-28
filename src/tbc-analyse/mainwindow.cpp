@@ -1205,38 +1205,6 @@ qint32 sliderValueForContextPoint(const QSlider *slider, const QPoint &contextPo
                                            option.upsideDown);
 }
 
-#if defined(Q_OS_MACOS)
-QString chooseFileViaAppleScript(const QString &startPath)
-{
-    QString directoryPath = startPath;
-    QFileInfo pathInfo(directoryPath);
-    if (directoryPath.isEmpty() || !pathInfo.exists()) {
-        directoryPath = QDir::homePath();
-    } else if (pathInfo.isFile()) {
-        directoryPath = pathInfo.absolutePath();
-    }
-
-    QString escapedPath = directoryPath;
-    escapedPath.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
-    escapedPath.replace(QStringLiteral("\""), QStringLiteral("\\\""));
-
-    const QString script = QStringLiteral(
-        "set defaultLocation to POSIX file \"%1\"\n"
-        "set chosenFile to choose file with prompt \"Open TBC/metadata file\" default location defaultLocation\n"
-        "POSIX path of chosenFile").arg(escapedPath);
-
-    QProcess process;
-    process.start(QStringLiteral("/usr/bin/osascript"), {QStringLiteral("-e"), script});
-    if (!process.waitForFinished(120000)) {
-        return QString();
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        return QString();
-    }
-
-    return QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-}
-#endif
 
 // A new window is shown (and takes focus); one already open is brought to the
 // front instead
@@ -4869,9 +4837,6 @@ void MainWindow::on_actionOpen_TBC_file_triggered()
             << tr("All Files (*)");
 
     QString inputFileName;
-#if defined(Q_OS_MACOS)
-    inputFileName = chooseFileViaAppleScript(startPath);
-#else
     QFileDialog fileDialog(this, tr("Open TBC/metadata file"), startPath);
     fileDialog.setFileMode(QFileDialog::ExistingFile);
     fileDialog.setNameFilters(filters);
@@ -4883,7 +4848,6 @@ void MainWindow::on_actionOpen_TBC_file_triggered()
             inputFileName = selectedFiles.first();
         }
     }
-#endif
 
     // Remember where the user browsed to as soon as they pick something. The
     // source directory used to be written only after a load succeeded, so an
@@ -5014,14 +4978,10 @@ void MainWindow::on_actionProcess_VBI_triggered()
 
     if (inputFileName.isEmpty()) {
         const QString startPath = defaultInput.isEmpty() ? configuration.getSourceDirectory() : defaultInput;
-#if defined(Q_OS_MACOS)
-        inputFileName = chooseFileViaAppleScript(startPath);
-#else
         inputFileName = QFileDialog::getOpenFileName(this,
                                                      tr("Select TBC file for VBI processing"),
                                                      startPath,
                                                      tr("TBC files (*.tbc *.ytbc *.ctbc *.tbcy *.tbcc);;All Files (*)"));
-#endif
     }
     if (inputFileName.isEmpty()) {
         return;
