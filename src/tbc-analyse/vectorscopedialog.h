@@ -59,8 +59,8 @@ private slots:
     void on_multiColourCheckBox_clicked();
     void on_graticuleButtonGroup_buttonClicked(QAbstractButton *button);
     void on_fieldSelectButtonGroup_buttonClicked(QAbstractButton *button);
-    void on_renderModeButtonGroup_buttonClicked(QAbstractButton *button);
-    void on_areaModeButtonGroup_buttonClicked(QAbstractButton *button);
+    void onRenderModeClicked(QAbstractButton *button);
+    void onAreaModeClicked(QAbstractButton *button);
 
 private:
     Ui::VectorscopeDialog *ui;

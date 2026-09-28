@@ -28,6 +28,8 @@
 #include <QTemporaryFile>
 #include <QStandardPaths>
 #include <QRegularExpression>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include "tbc/buildinfo.h"
 namespace {
 QString archiveStem(const QString &fileName)
@@ -377,84 +379,33 @@ void CudaPluginManager::downloadAndInstall(const QString &installDirectory)
                 emit installFailed(tr("Failed to download package: %1").arg(packageReply->errorString()));
                 return;
             }
-            // Save the archive to a temp file.
-            QTemporaryFile tempArchive(QDir::tempPath() + QStringLiteral("/tbc-cuda-plugin-XXXXXX"));
-            tempArchive.setAutoRemove(true);
-            if (!tempArchive.open() || tempArchive.write(packageReply->readAll()) == -1) {
-                emit installFailed(tr("Could not save the downloaded package archive."));
-                return;
-            }
-            tempArchive.close();
-
-            // Step 3: extract the archive to the install dir.
-            QDir installDir(m_targetInstallDir);
-            if (!installDir.mkpath(m_targetInstallDir)) {
-                emit installFailed(tr("Could not create install directory:\n%1").arg(m_targetInstallDir));
-                return;
-            }
-
-            // tar (available on Linux + Windows 10 1803+ as bsdtar; handles
-            // .tar.gz on Linux and .zip on Windows).
-            QStringList tarArgs;
-            tarArgs << QStringLiteral("-xf") << tempArchive.fileName()
-                    << QStringLiteral("-C") << m_targetInstallDir;
-            QProcess tar;
-            tar.start(QStringLiteral("tar"), tarArgs);
-            if (!tar.waitForFinished(120000) || tar.exitStatus() != QProcess::NormalExit || tar.exitCode() != 0) {
-                const QString stderrOut = QString::fromUtf8(tar.readAllStandardError()).trimmed();
-                emit installFailed(tr("Failed to extract the package (tar exit %1): %2")
-                                       .arg(tar.exitCode()).arg(stderrOut));
-                return;
-            }
-
-            // Step 4: verify each manifest file's SHA-256.
-            QStringList failedFiles;
-            for (const QJsonValue &fileVal : files) {
-                const QJsonObject fileObj = fileVal.toObject();
-                const QString fileName = fileObj.value(QStringLiteral("name")).toString();
-                const QString expectedSha = fileObj.value(QStringLiteral("sha256")).toString().toLower();
-                if (fileName.isEmpty() || expectedSha.isEmpty()) {
-                    continue;
+            // Steps 3-4 on a worker thread: save the archive, extract it and
+            // verify each manifest file's SHA-256 (a ~1.6 GB package)
+            const QByteArray packageData = packageReply->readAll();
+            const QString installDir = m_targetInstallDir;
+            continueAfterWorker([packageData, installDir, files]() -> QString {
+                QTemporaryFile tempArchive(QDir::tempPath() + QStringLiteral("/tbc-cuda-plugin-XXXXXX"));
+                tempArchive.setAutoRemove(true);
+                if (!tempArchive.open() || tempArchive.write(packageData) == -1) {
+                    return tr("Could not save the downloaded package archive.");
                 }
-                const QString filePath = QDir(m_targetInstallDir).filePath(fileName);
-                QFile file(filePath);
-                if (!file.open(QIODevice::ReadOnly)) {
-                    failedFiles << QStringLiteral("%1 (missing)").arg(fileName);
-                    continue;
-                }
-                QCryptographicHash hash(QCryptographicHash::Sha256);
-                if (!hash.addData(&file)) {
-                    failedFiles << QStringLiteral("%1 (read error)").arg(fileName);
-                    continue;
-                }
-                const QString actualSha = QString::fromLatin1(hash.result().toHex());
-                if (actualSha != expectedSha) {
-                    failedFiles << QStringLiteral("%1 (sha256 mismatch)").arg(fileName);
-                }
-            }
+                tempArchive.close();
+                return extractAndVerify(tempArchive.fileName(), installDir, files);
+            }, [this, manifest]() {
+                // Step 5: persist to Configuration.
+                const QString version = manifest.value(QStringLiteral("plugin_version")).toString();
+                Configuration c;
+                c.setCudaPluginInstalledVersion(version.isEmpty() ? m_latestVersion : version);
+                c.setCudaPluginReleaseTag(m_latestReleaseTag);
+                c.setCudaPluginEnabled(true);
+                c.setCudaPluginTrusted(true);
+                c.setCudaPluginInstallPath(m_targetInstallDir);
+                c.writeConfiguration();
 
-            if (!failedFiles.isEmpty()) {
-                // Quarantine: move the install dir to .quarantine
-                const QString quarantineDir = m_targetInstallDir + QStringLiteral(".quarantine");
-                QDir().rename(m_targetInstallDir, quarantineDir);
-                emit installFailed(tr("SHA-256 verification failed for:\n%1\n\nThe plugin has been quarantined.")
-                                        .arg(failedFiles.join(QStringLiteral("\n"))));
-                return;
-            }
-
-            // Step 5: persist to Configuration.
-            const QString version = manifest.value(QStringLiteral("plugin_version")).toString();
-            Configuration c;
-            c.setCudaPluginInstalledVersion(version.isEmpty() ? m_latestVersion : version);
-            c.setCudaPluginReleaseTag(m_latestReleaseTag);
-            c.setCudaPluginEnabled(true);
-            c.setCudaPluginTrusted(true);
-            c.setCudaPluginInstallPath(m_targetInstallDir);
-            c.writeConfiguration();
-
-            tbcDebugStream() << "CudaPluginManager: installed CUDA plugin v"
-                             << c.getCudaPluginInstalledVersion() << "to" << m_targetInstallDir;
-            emit installSucceeded(m_targetInstallDir);
+                tbcDebugStream() << "CudaPluginManager: installed CUDA plugin v"
+                                 << c.getCudaPluginInstalledVersion() << "to" << m_targetInstallDir;
+                emit installSucceeded(m_targetInstallDir);
+            });
         });
     });
 }
@@ -542,23 +493,50 @@ void CudaPluginManager::installFromLocalArchive(const QString &archivePath,
     }
 
     m_targetInstallDir = installDirectory.isEmpty() ? defaultInstallDirectory() : installDirectory;
-    QDir installDir(m_targetInstallDir);
-    if (!installDir.mkpath(m_targetInstallDir)) {
-        emit installFailed(tr("Could not create install directory:\n%1").arg(m_targetInstallDir));
-        return;
+
+    // Extraction and verification on a worker thread, then the record here
+    emit installProgress(0, 0, archiveInfo.fileName());
+    const QString archiveFilePath = archiveInfo.absoluteFilePath();
+    const QString installDir = m_targetInstallDir;
+    continueAfterWorker([archiveFilePath, installDir, files]() {
+        return extractAndVerify(archiveFilePath, installDir, files);
+    }, [this, manifest, archiveInfo, manifestPath]() {
+        const QString version = manifest.value(QStringLiteral("plugin_version")).toString().trimmed();
+        QString releaseTag = manifest.value(QStringLiteral("release_tag")).toString().trimmed();
+        if (releaseTag.isEmpty()) {
+            releaseTag = archiveInfo.fileName();
+        }
+        Configuration c;
+        c.setCudaPluginInstalledVersion(version.isEmpty() ? QStringLiteral("local") : version);
+        c.setCudaPluginReleaseTag(releaseTag);
+        c.setCudaPluginEnabled(true);
+        c.setCudaPluginTrusted(true);
+        c.setCudaPluginInstallPath(m_targetInstallDir);
+        c.writeConfiguration();
+
+        tbcDebugStream() << "CudaPluginManager: installed local CUDA plugin from"
+                         << archiveInfo.absoluteFilePath() << "using manifest" << manifestPath
+                         << "to" << m_targetInstallDir;
+        emit installSucceeded(m_targetInstallDir);
+    });
+}
+
+// Extract archivePath into installDir with tar (Linux, and bsdtar on Windows
+// 10 1803+; .tar.gz and .zip) and verify each manifest file's SHA-256,
+// quarantining the install on a mismatch. File work only, so it can run on a
+// worker thread. Returns an error message, or an empty string on success.
+QString CudaPluginManager::extractAndVerify(const QString &archivePath, const QString &installDir,
+                                            const QJsonArray &files)
+{
+    if (!QDir().mkpath(installDir)) {
+        return tr("Could not create install directory:\n%1").arg(installDir);
     }
 
-    emit installProgress(0, 0, archiveInfo.fileName());
-    QStringList tarArgs;
-    tarArgs << QStringLiteral("-xf") << archiveInfo.absoluteFilePath()
-            << QStringLiteral("-C") << m_targetInstallDir;
     QProcess tar;
-    tar.start(QStringLiteral("tar"), tarArgs);
+    tar.start(QStringLiteral("tar"), {QStringLiteral("-xf"), archivePath, QStringLiteral("-C"), installDir});
     if (!tar.waitForFinished(120000) || tar.exitStatus() != QProcess::NormalExit || tar.exitCode() != 0) {
         const QString stderrOut = QString::fromUtf8(tar.readAllStandardError()).trimmed();
-        emit installFailed(tr("Failed to extract the local archive (tar exit %1): %2")
-                               .arg(tar.exitCode()).arg(stderrOut));
-        return;
+        return tr("Failed to extract the package (tar exit %1): %2").arg(tar.exitCode()).arg(stderrOut);
     }
 
     QStringList failedFiles;
@@ -569,8 +547,7 @@ void CudaPluginManager::installFromLocalArchive(const QString &archivePath,
         if (fileName.isEmpty() || expectedSha.isEmpty()) {
             continue;
         }
-        const QString filePath = QDir(m_targetInstallDir).filePath(fileName);
-        QFile file(filePath);
+        QFile file(QDir(installDir).filePath(fileName));
         if (!file.open(QIODevice::ReadOnly)) {
             failedFiles << QStringLiteral("%1 (missing)").arg(fileName);
             continue;
@@ -580,36 +557,34 @@ void CudaPluginManager::installFromLocalArchive(const QString &archivePath,
             failedFiles << QStringLiteral("%1 (read error)").arg(fileName);
             continue;
         }
-        const QString actualSha = QString::fromLatin1(hash.result().toHex());
-        if (actualSha != expectedSha) {
+        if (QString::fromLatin1(hash.result().toHex()) != expectedSha) {
             failedFiles << QStringLiteral("%1 (sha256 mismatch)").arg(fileName);
         }
     }
     if (!failedFiles.isEmpty()) {
-        const QString quarantineDir = m_targetInstallDir + QStringLiteral(".quarantine");
-        QDir().rename(m_targetInstallDir, quarantineDir);
-        emit installFailed(tr("SHA-256 verification failed for:\n%1\n\nThe plugin has been quarantined.")
-                               .arg(failedFiles.join(QStringLiteral("\n"))));
-        return;
+        // Quarantine: move the install dir to .quarantine
+        QDir().rename(installDir, installDir + QStringLiteral(".quarantine"));
+        return tr("SHA-256 verification failed for:\n%1\n\nThe plugin has been quarantined.")
+            .arg(failedFiles.join(QStringLiteral("\n")));
     }
+    return QString();
+}
 
-    const QString version = manifest.value(QStringLiteral("plugin_version")).toString().trimmed();
-    QString releaseTag = manifest.value(QStringLiteral("release_tag")).toString().trimmed();
-    if (releaseTag.isEmpty()) {
-        releaseTag = archiveInfo.fileName();
-    }
-    Configuration c;
-    c.setCudaPluginInstalledVersion(version.isEmpty() ? QStringLiteral("local") : version);
-    c.setCudaPluginReleaseTag(releaseTag);
-    c.setCudaPluginEnabled(true);
-    c.setCudaPluginTrusted(true);
-    c.setCudaPluginInstallPath(m_targetInstallDir);
-    c.writeConfiguration();
-
-    tbcDebugStream() << "CudaPluginManager: installed local CUDA plugin from"
-                     << archiveInfo.absoluteFilePath() << "using manifest" << manifestPath
-                     << "to" << m_targetInstallDir;
-    emit installSucceeded(m_targetInstallDir);
+// Run an install's file work on a worker thread, then carry on here: report
+// installFailed with its error, or call onSuccess.
+void CudaPluginManager::continueAfterWorker(std::function<QString()> work, std::function<void()> onSuccess)
+{
+    auto *watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, onSuccess]() {
+        watcher->deleteLater();
+        const QString error = watcher->result();
+        if (!error.isEmpty()) {
+            emit installFailed(error);
+            return;
+        }
+        onSuccess();
+    });
+    watcher->setFuture(QtConcurrent::run(std::move(work)));
 }
 
 void CudaPluginManager::handleAssetDownloadReply(QNetworkReply *reply)

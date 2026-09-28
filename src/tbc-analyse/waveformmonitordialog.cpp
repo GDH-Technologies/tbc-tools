@@ -18,7 +18,6 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QSettings>
 #include <QSlider>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -47,34 +46,15 @@ WaveformMonitorDialog::WaveformMonitorDialog(QWidget *parent)
       gain_slider_(nullptr),
       gain_value_label_(nullptr) {
   setWindowFlags(Qt::Window);
-  setModal(false);
-  setAttribute(Qt::WA_DeleteOnClose, false);
   setWindowTitle("Waveform Monitor");
 
   setupUI();
-
-  QSettings settings;
-  const QByteArray geom =
-      settings.value("WaveformMonitorDialog/geometry").toByteArray();
-  if (!geom.isEmpty()) {
-    restoreGeometry(geom);
-  } else {
-    resize(900, 500);
-  }
-
-  const bool phosphor =
-      settings.value("WaveformMonitorDialog/phosphorMode", false).toBool();
-  phosphor_check_->setChecked(phosphor);
-  monitor_widget_->setPhosphorMode(phosphor);
 }
 
-WaveformMonitorDialog::~WaveformMonitorDialog() {
-  QSettings settings;
-  settings.setValue("WaveformMonitorDialog/geometry", saveGeometry());
-  if (phosphor_check_) {
-    settings.setValue("WaveformMonitorDialog/phosphorMode",
-                      phosphor_check_->isChecked());
-  }
+void WaveformMonitorDialog::setPhosphorMode(bool on) { phosphor_check_->setChecked(on); }
+
+bool WaveformMonitorDialog::phosphorMode() const {
+  return phosphor_check_->isChecked();
 }
 
 void WaveformMonitorDialog::setupUI() {
@@ -148,10 +128,10 @@ void WaveformMonitorDialog::setupUI() {
   });
 
   connect(channel_combo_,
-          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &QComboBox::currentIndexChanged, this,
           [this](int) { updateWidgetForCurrentChannel(); });
 
-  connect(range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+  connect(range_combo_, &QComboBox::currentIndexChanged,
           this, [this](int) { updateWidgetForCurrentChannel(); });
 
   connect(phosphor_check_, &QCheckBox::toggled, this,

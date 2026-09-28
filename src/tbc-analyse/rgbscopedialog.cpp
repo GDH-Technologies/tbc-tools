@@ -20,7 +20,6 @@ RgbScopeDialog::RgbScopeDialog(QWidget *parent)
 {
     setWindowTitle(tr("RGB Scope"));
     setWindowFlags(Qt::Window);
-    setModal(false);
     resize(960, 540);
 
     auto *mainLayout = new QVBoxLayout(this);

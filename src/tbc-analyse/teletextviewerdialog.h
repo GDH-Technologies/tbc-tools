@@ -67,6 +67,7 @@ private slots:
     void setDebugInfoEnabled(bool enabled);
 
 private:
+    int pageWheelRemainder = 0; // angleDelta not yet a whole notch
     void autoSizeWindowForCurrentRenderer();
     bool cyclePageSelection(int direction);
     bool openTeletextStreamPath(const QString &streamPath, QString *errorMessage = nullptr);

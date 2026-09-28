@@ -36,9 +36,9 @@ MetadataEditorDialog::MetadataEditorDialog(QWidget *parent) :
     ui->palTransformThresholdSpinBox->setValue(-1.0);
 
     // Connect signals
-    connect(ui->systemComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(ui->systemComboBox, &QComboBox::currentIndexChanged,
             this, &MetadataEditorDialog::onSystemChanged);
-    connect(ui->chromaDecoderComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(ui->chromaDecoderComboBox, &QComboBox::currentIndexChanged,
             this, &MetadataEditorDialog::onChromaDecoderChanged);
     connect(ui->widescreenCheckBox, &QCheckBox::toggled,
             this, &MetadataEditorDialog::onWidescreenToggled);
@@ -48,35 +48,35 @@ MetadataEditorDialog::MetadataEditorDialog(QWidget *parent) :
             this, &MetadataEditorDialog::onMappedToggled);
     connect(ui->tapeFormatLineEdit, &QLineEdit::textChanged,
             this, &MetadataEditorDialog::onTapeFormatChanged);
-    connect(ui->chromaGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->chromaGainSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onChromaGainChanged);
-    connect(ui->chromaPhaseSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->chromaPhaseSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onChromaPhaseChanged);
-    connect(ui->lumaNrSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->lumaNrSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onLumaNrChanged);
     connect(ui->ntscAdaptiveCheckBox, &QCheckBox::toggled,
             this, &MetadataEditorDialog::onNtscAdaptiveToggled);
-    connect(ui->ntscAdaptThresholdSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->ntscAdaptThresholdSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onNtscAdaptThresholdChanged);
-    connect(ui->ntscChromaWeightSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->ntscChromaWeightSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onNtscChromaWeightChanged);
     connect(ui->ntscPhaseCompensationCheckBox, &QCheckBox::toggled,
             this, &MetadataEditorDialog::onNtscPhaseCompensationToggled);
-    connect(ui->palTransformThresholdSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->palTransformThresholdSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onPalTransformThresholdChanged);
-    connect(ui->sampleRateSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->sampleRateSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onSampleRateChanged);
-    connect(ui->colourBurstStartSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(ui->colourBurstStartSpinBox, &QSpinBox::valueChanged,
             this, &MetadataEditorDialog::onColourBurstStartChanged);
-    connect(ui->colourBurstEndSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(ui->colourBurstEndSpinBox, &QSpinBox::valueChanged,
             this, &MetadataEditorDialog::onColourBurstEndChanged);
     connect(ui->gitBranchLineEdit, &QLineEdit::textChanged,
             this, &MetadataEditorDialog::onGitBranchChanged);
     connect(ui->gitCommitLineEdit, &QLineEdit::textChanged,
             this, &MetadataEditorDialog::onGitCommitChanged);
-    connect(ui->pcmSampleRateSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(ui->pcmSampleRateSpinBox, &QDoubleSpinBox::valueChanged,
             this, &MetadataEditorDialog::onPcmSampleRateChanged);
-    connect(ui->pcmBitsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(ui->pcmBitsSpinBox, &QSpinBox::valueChanged,
             this, &MetadataEditorDialog::onPcmBitsChanged);
     connect(ui->pcmSignedCheckBox, &QCheckBox::toggled,
             this, &MetadataEditorDialog::onPcmSignedToggled);

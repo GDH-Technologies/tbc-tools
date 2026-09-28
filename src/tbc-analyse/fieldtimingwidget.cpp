@@ -177,7 +177,7 @@ void FieldTimingWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton && scrollBar_->isEnabled()) {
         isDragging_ = true;
-        dragStartPos_ = event->pos();
+        dragStartPos_ = event->position().toPoint();
         dragStartScrollValue_ = scrollBar_->value();
         setCursor(Qt::ClosedHandCursor);
         event->accept();
@@ -194,7 +194,7 @@ void FieldTimingWidget::mouseMoveEvent(QMouseEvent *event)
         return;
     }
 
-    const int dx = event->pos().x() - dragStartPos_.x();
+    const int dx = event->position().toPoint().x() - dragStartPos_.x();
     const double pixelsPerSample = getBasePixelsPerSample() * zoomFactor_;
     const int sampleDelta = static_cast<int>(-dx / pixelsPerSample);
     scrollBar_->setValue(dragStartScrollValue_ + sampleDelta);

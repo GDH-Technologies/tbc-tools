@@ -67,6 +67,13 @@ signals:
 private:
     QNetworkAccessManager *m_networkManager;
     QNetworkReply *m_inFlightReply = nullptr;  // set during install(); used by cancelInstall()
+
+    // install()'s file work, run on a worker thread: returns an error message
+    // or an empty string
+    static QString extractAndVerify(const QByteArray &data, const QString &installDir,
+                                    const QList<PluginCatalogFile> &files);
+    void writeInstallRecord(const QString &installDir, const QList<PluginCatalogFile> &files,
+                            const QString &version, const QString &packageUrl, const QString &entryId);
 };
 
 #endif // GENERICPLUGININSTALLER_H

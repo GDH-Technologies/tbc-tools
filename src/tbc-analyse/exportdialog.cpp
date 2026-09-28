@@ -4,6 +4,7 @@
 
 #include "tbcsource.h"
 #include "configuration.h"
+#include "gui/processprogressrunner.h"
 
 #include "tbc/uistyle.h"
 
@@ -1122,15 +1123,18 @@ bool executableSupportsOption(const QString &program, const QString &option)
         return supportCache.value(cacheKey);
     }
 
-    QProcess helpProcess;
-    helpProcess.setProcessChannelMode(QProcess::MergedChannels);
-    helpProcess.start(program, QStringList() << QStringLiteral("--help"));
-
-    bool supportsOption = false;
-    if (helpProcess.waitForStarted(3000) && helpProcess.waitForFinished(5000)) {
-        const QString helpOutput = QString::fromLocal8Bit(helpProcess.readAllStandardOutput());
-        supportsOption = helpOutput.contains(option);
-    }
+    // Through ProcessProgressRunner, so the GUI keeps its event loop while the
+    // probe runs (a slow one gets a progress dialog with Cancel)
+    QString helpOutput;
+    ProcessProgressRunner::Options options;
+    options.onLine = [&helpOutput](const QString &line, int *, QString *) {
+        helpOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result result = ProcessProgressRunner::run(
+        program, {QStringLiteral("--help")}, QApplication::activeWindow(),
+        ExportDialog::tr("Checking %1...").arg(QFileInfo(program).fileName()), options);
+    const bool supportsOption = result.status == ProcessProgressRunner::Result::Finished
+                                && helpOutput.contains(option);
 
     supportCache.insert(cacheKey, supportsOption);
     return supportsOption;
@@ -1469,7 +1473,7 @@ ExportDialog::ExportDialog(QWidget *parent) :
         ui->segmentSelectionComboBox->addItem(tr("All segments"), QStringLiteral("all"));
         ui->segmentSelectionComboBox->setToolTip(
             tr("Which recording segments become files: enabled clips (blank/noise/unknown skipped), every enabled segment, or all of them."));
-        connect(ui->segmentSelectionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+        connect(ui->segmentSelectionComboBox, &QComboBox::currentIndexChanged, this,
                 [this](int) { updateSegmentExportControls(); });
     }
     if (ui->exportSegmentsCheckBox) {
@@ -2616,22 +2620,26 @@ void ExportDialog::refreshProfiles()
     }
     QStringList availableProfiles;
 
-    QProcess listProcess;
-    listProcess.setProcessChannelMode(QProcess::MergedChannels);
     QStringList listArguments;
     if (!selectedProfileConfigPath.isEmpty()) {
         listArguments << QStringLiteral("--config-file") << selectedProfileConfigPath;
     }
     listArguments << QStringLiteral("--list-profiles");
-    listProcess.start(exportPath, listArguments);
-    if (!listProcess.waitForStarted(3000)) {
+    // Through ProcessProgressRunner so the dialog keeps its event loop; a slow
+    // listing gets a progress dialog with Cancel
+    QString profileOutput;
+    ProcessProgressRunner::Options listOptions;
+    listOptions.onLine = [&profileOutput](const QString &line, int *, QString *) {
+        profileOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result listResult = ProcessProgressRunner::run(
+        exportPath, listArguments, this, tr("Listing export profiles..."), listOptions);
+    if (listResult.status == ProcessProgressRunner::Result::FailedToStart) {
         appendLog(tr("Failed to start profile listing; using built-in condensed profile options."));
-    } else if (!listProcess.waitForFinished(10000)) {
-        listProcess.kill();
-        appendLog(tr("Profile list timed out; using built-in condensed profile options."));
+    } else if (listResult.status != ProcessProgressRunner::Result::Finished) {
+        appendLog(tr("Profile listing did not finish; using built-in condensed profile options."));
     } else {
-        const QString profileOutput = QString::fromLocal8Bit(listProcess.readAllStandardOutput());
-        if (listProcess.exitStatus() == QProcess::NormalExit && listProcess.exitCode() == 0) {
+        if (listResult.exitStatus == QProcess::NormalExit && listResult.exitCode == 0) {
             QString ignoredDefault;
             availableProfiles = parseProfiles(profileOutput, &ignoredDefault);
         } else {
@@ -3017,11 +3025,17 @@ void ExportDialog::on_exportProfileConfigEjectButton_clicked()
         return;
     }
 
-    QProcess dumpProcess;
-    dumpProcess.setProcessChannelMode(QProcess::MergedChannels);
-    dumpProcess.setWorkingDirectory(dumpDirPath);
-    dumpProcess.start(exportPath, QStringList() << QStringLiteral("--dump-default-config"));
-    if (!dumpProcess.waitForStarted(3000)) {
+    // Through ProcessProgressRunner so the dialog keeps its event loop
+    QString dumpOutput;
+    ProcessProgressRunner::Options dumpOptions;
+    dumpOptions.workingDirectory = dumpDirPath;
+    dumpOptions.onLine = [&dumpOutput](const QString &line, int *, QString *) {
+        dumpOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result dumpResult = ProcessProgressRunner::run(
+        exportPath, {QStringLiteral("--dump-default-config")}, this,
+        tr("Ejecting the default profile set..."), dumpOptions);
+    if (dumpResult.status == ProcessProgressRunner::Result::FailedToStart) {
         cleanupDumpDir();
         const QString errorText = tr("Failed to start default profile ejection.");
         appendStatus(errorText);
@@ -3029,17 +3043,16 @@ void ExportDialog::on_exportProfileConfigEjectButton_clicked()
         QMessageBox::warning(this, tr("Error"), errorText);
         return;
     }
-    if (!dumpProcess.waitForFinished(15000)) {
-        dumpProcess.kill();
+    if (dumpResult.status != ProcessProgressRunner::Result::Finished) {
         cleanupDumpDir();
-        const QString errorText = tr("Default profile ejection timed out.");
+        const QString errorText = tr("Default profile ejection did not finish.");
         appendStatus(errorText);
         appendLog(errorText);
         QMessageBox::warning(this, tr("Error"), errorText);
         return;
     }
-    const QString dumpOutput = QString::fromLocal8Bit(dumpProcess.readAllStandardOutput()).trimmed();
-    if (dumpProcess.exitStatus() != QProcess::NormalExit || dumpProcess.exitCode() != 0) {
+    dumpOutput = dumpOutput.trimmed();
+    if (dumpResult.exitStatus != QProcess::NormalExit || dumpResult.exitCode != 0) {
         cleanupDumpDir();
         const QString errorText = dumpOutput.isEmpty()
                                       ? tr("Failed to eject default profile set.")
@@ -5002,173 +5015,6 @@ void ExportDialog::clearRunState()
     cleanupTemporaryMetadataSnapshot();
     updateSegmentExportControls();
 }
-bool ExportDialog::prepareTrimmedAudioTracks(int zeroBasedStartFrame,
-                                             int rangeLengthFrames,
-                                             QStringList *audioTracks,
-                                             QString *errorMessage)
-{
-    if (errorMessage) {
-        errorMessage->clear();
-    }
-    if (!audioTracks) {
-        if (errorMessage) {
-            *errorMessage = tr("Internal error: no audio track list supplied.");
-        }
-        return false;
-    }
-    if (audioTracks->isEmpty()) {
-        return true;
-    }
-    if (!tbcSource) {
-        if (errorMessage) {
-            *errorMessage = tr("No source loaded.");
-        }
-        return false;
-    }
-
-    for (const QString &path : temporaryAudioTrackPaths) {
-        QFile::remove(path);
-    }
-    temporaryAudioTrackPaths.clear();
-
-    const QString ffmpegPath = resolveFfmpegPath();
-    if (ffmpegPath.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = tr("ffmpeg not found in PATH or alongside tbc-analyse.");
-        }
-        return false;
-    }
-
-    const int totalFrames = qMax(1, tbcSource->getNumberOfFrames());
-    const int clampedStart = qBound(0, zeroBasedStartFrame, qMax(0, totalFrames - 1));
-    const int maxLength = qMax(0, totalFrames - clampedStart);
-    const int clampedLength = qBound(1, rangeLengthFrames, qMax(1, maxLength));
-    if (clampedLength <= 0) {
-        if (errorMessage) {
-            *errorMessage = tr("Invalid audio trim range.");
-        }
-        return false;
-    }
-
-    const TbcMetaData::VideoParameters &videoParameters = tbcSource->getVideoParameters();
-    const double fps = frameRateForSystem(videoParameters.system);
-    if (fps <= 0.0) {
-        if (errorMessage) {
-            *errorMessage = tr("Invalid video frame rate for audio trimming.");
-        }
-        return false;
-    }
-
-    const QString startArg = QString::number(static_cast<double>(clampedStart) / fps, 'f', 6);
-    const QString durationArg = QString::number(static_cast<double>(clampedLength) / fps, 'f', 6);
-    const double trimDurationSeconds = static_cast<double>(clampedLength) / fps;
-    const qint64 minTrimTimeoutMs = 120000LL;
-    const qint64 maxTrimTimeoutMs = 21600000LL;
-    const qint64 estimatedTrimTimeoutMs =
-        static_cast<qint64>((trimDurationSeconds + 60.0) * 4000.0);
-    const qint64 trimTimeoutMs = qMax(minTrimTimeoutMs,
-                                      qMin(estimatedTrimTimeoutMs, maxTrimTimeoutMs));
-
-    QStringList trimmedTracks;
-    trimmedTracks.reserve(audioTracks->size());
-    for (int index = 0; index < audioTracks->size(); ++index) {
-        const QString sourceTrack = normalizeAudioTrackPathInput(audioTracks->at(index));
-        if (sourceTrack.isEmpty()) {
-            continue;
-        }
-
-        const QFileInfo sourceInfo(sourceTrack);
-        if (!sourceInfo.exists() || !sourceInfo.isFile()) {
-            for (const QString &path : trimmedTracks) {
-                QFile::remove(path);
-            }
-            trimmedTracks.clear();
-            temporaryAudioTrackPaths.clear();
-            if (errorMessage) {
-                *errorMessage = tr("Audio track not found: %1").arg(sourceTrack);
-            }
-            return false;
-        }
-
-        const QString trimmedPath = sourceStorageTemporaryPath(
-            QStringLiteral("tbc-analyse-audio-range-%1-%2.wav")
-                .arg(index + 1)
-                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-        const bool isRawPcmTrack = sourceInfo.suffix().compare(QStringLiteral("pcm"), Qt::CaseInsensitive) == 0;
-        QStringList ffmpegArgs;
-        ffmpegArgs << QStringLiteral("-hide_banner")
-                   << QStringLiteral("-v") << QStringLiteral("error")
-                   << QStringLiteral("-nostdin")
-                   << QStringLiteral("-y")
-                   << QStringLiteral("-ss") << startArg
-                   << QStringLiteral("-t") << durationArg;
-        if (isRawPcmTrack) {
-            ffmpegArgs << QStringLiteral("-f") << QStringLiteral("s16le")
-                       << QStringLiteral("-ar") << QStringLiteral("44100")
-                       << QStringLiteral("-ac") << QStringLiteral("2");
-        }
-        ffmpegArgs << QStringLiteral("-i") << sourceTrack
-                   << QStringLiteral("-map") << QStringLiteral("0:a:0")
-                   << QStringLiteral("-vn")
-                   << QStringLiteral("-sn")
-                   << QStringLiteral("-dn")
-                   << QStringLiteral("-c:a") << QStringLiteral("pcm_s24le")
-                   << trimmedPath;
-
-        QProcess ffmpegProcess;
-        ffmpegProcess.setProcessChannelMode(QProcess::MergedChannels);
-        ffmpegProcess.start(ffmpegPath, ffmpegArgs);
-        if (!ffmpegProcess.waitForStarted(5000)) {
-            for (const QString &path : trimmedTracks) {
-                QFile::remove(path);
-            }
-            trimmedTracks.clear();
-            temporaryAudioTrackPaths.clear();
-            if (errorMessage) {
-                *errorMessage = tr("Failed to start ffmpeg for audio track trimming.");
-            }
-            return false;
-        }
-        if (!ffmpegProcess.waitForFinished(trimTimeoutMs)) {
-            ffmpegProcess.kill();
-            for (const QString &path : trimmedTracks) {
-                QFile::remove(path);
-            }
-            trimmedTracks.clear();
-            temporaryAudioTrackPaths.clear();
-            if (errorMessage) {
-                *errorMessage = tr("ffmpeg timed out while trimming audio tracks (timeout: %1 seconds).")
-                                    .arg(trimTimeoutMs / 1000);
-            }
-            return false;
-        }
-
-        const QString ffmpegOutput = QString::fromLocal8Bit(ffmpegProcess.readAllStandardOutput()).trimmed();
-        const bool ffmpegOk = ffmpegProcess.exitStatus() == QProcess::NormalExit
-                              && ffmpegProcess.exitCode() == 0
-                              && QFileInfo::exists(trimmedPath);
-        if (!ffmpegOk) {
-            QFile::remove(trimmedPath);
-            for (const QString &path : trimmedTracks) {
-                QFile::remove(path);
-            }
-            trimmedTracks.clear();
-            temporaryAudioTrackPaths.clear();
-            if (errorMessage) {
-                *errorMessage = ffmpegOutput.isEmpty()
-                                    ? tr("ffmpeg failed while trimming audio tracks.")
-                                    : ffmpegOutput;
-            }
-            return false;
-        }
-
-        trimmedTracks << trimmedPath;
-    }
-
-    temporaryAudioTrackPaths = trimmedTracks;
-    *audioTracks = trimmedTracks;
-    return true;
-}
 
 QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &inputTbcJsonOverride,
                                          bool overwriteExisting,
@@ -5596,27 +5442,32 @@ QString ExportDialog::createTemporaryExportConfig(QString *errorMessage,
             return QString();
         }
 
-        QProcess dumpProcess;
-        dumpProcess.setProcessChannelMode(QProcess::MergedChannels);
-        dumpProcess.setWorkingDirectory(dumpDirPath);
-        dumpProcess.start(exportPath, QStringList() << QStringLiteral("--dump-default-config"));
-        if (!dumpProcess.waitForStarted(3000)) {
+        // Through ProcessProgressRunner so the dialog keeps its event loop
+        QString dumpOutput;
+        ProcessProgressRunner::Options dumpOptions;
+        dumpOptions.workingDirectory = dumpDirPath;
+        dumpOptions.onLine = [&dumpOutput](const QString &line, int *, QString *) {
+            dumpOutput += line + QLatin1Char('\n');
+        };
+        const ProcessProgressRunner::Result dumpResult = ProcessProgressRunner::run(
+            exportPath, {QStringLiteral("--dump-default-config")}, this,
+            tr("Generating the export configuration..."), dumpOptions);
+        if (dumpResult.status == ProcessProgressRunner::Result::FailedToStart) {
             cleanupDumpDir();
             if (errorMessage) {
                 *errorMessage = tr("Failed to start export config generation.");
             }
             return QString();
         }
-        if (!dumpProcess.waitForFinished(15000)) {
-            dumpProcess.kill();
+        if (dumpResult.status != ProcessProgressRunner::Result::Finished) {
             cleanupDumpDir();
             if (errorMessage) {
-                *errorMessage = tr("Export config generation timed out.");
+                *errorMessage = tr("Export config generation did not finish.");
             }
             return QString();
         }
-        const QString dumpOutput = QString::fromLocal8Bit(dumpProcess.readAllStandardOutput()).trimmed();
-        if (dumpProcess.exitStatus() != QProcess::NormalExit || dumpProcess.exitCode() != 0) {
+        dumpOutput = dumpOutput.trimmed();
+        if (dumpResult.exitStatus != QProcess::NormalExit || dumpResult.exitCode != 0) {
             cleanupDumpDir();
             if (errorMessage) {
                 *errorMessage = dumpOutput.isEmpty()

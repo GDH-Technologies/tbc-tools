@@ -3,7 +3,6 @@ add_compile_definitions(_USE_MATH_DEFINES)
 
 set(tbc-analyse_SOURCES
     blacksnranalysisdialog.cpp blacksnranalysisdialog.ui
-    busydialog.cpp busydialog.ui
     ../audio-align/audioalignmentdialog.cpp ../audio-align/audioalignmentdialog.h ../audio-align/audioalignmentdialog.ui
     ../audio-align/audioalignmentutil.cpp ../audio-align/audioalignmentutil.h
     closedcaptionsdialog.cpp closedcaptionsdialog.ui
@@ -77,6 +76,9 @@ endif()
 
 target_include_directories(tbc-analyse PRIVATE
     ${FFTW_INCLUDE_DIR}
+    # For headers of custom widgets promoted in .ui files (uic's generated
+    # ui_*.h include them by name)
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(tbc-analyse PRIVATE

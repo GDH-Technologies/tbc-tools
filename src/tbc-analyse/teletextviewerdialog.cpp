@@ -12,6 +12,7 @@
 #include "teletextviewerdialog.h"
 #include "teletextnativeviewwidget.h"
 #include "configuration.h"
+#include "gui/processprogressrunner.h"
 #ifdef emit
 #undef emit
 #endif
@@ -281,28 +282,33 @@ bool runPythonStep(const QString &pythonExecutable,
                    const QProcessEnvironment &environment,
                    QString *errorMessage)
 {
-    QProcess process;
-    process.setProcessEnvironment(environment);
-    process.start(pythonExecutable, arguments);
+    // Through ProcessProgressRunner, so the GUI keeps its event loop during a
+    // conversion that can take tens of seconds (a progress dialog with Cancel
+    // appears after half a second)
+    ProcessProgressRunner::Options options;
+    options.environment = environment;
+    const ProcessProgressRunner::Result result = ProcessProgressRunner::run(
+        pythonExecutable, arguments, QApplication::activeWindow(),
+        QObject::tr("Converting the teletext stream..."), options);
 
-    if (!process.waitForStarted(5000)) {
+    if (result.status == ProcessProgressRunner::Result::FailedToStart) {
         if (errorMessage) {
             *errorMessage = QObject::tr("Could not start Python teletext converter.");
         }
         return false;
     }
-    if (!process.waitForFinished(120000)) {
-        process.kill();
-        process.waitForFinished(3000);
+    if (result.status != ProcessProgressRunner::Result::Finished) {
         if (errorMessage) {
-            *errorMessage = QObject::tr("Teletext conversion timed out.");
+            *errorMessage = result.status == ProcessProgressRunner::Result::Cancelled
+                                ? QObject::tr("Teletext conversion cancelled.")
+                                : QObject::tr("Teletext conversion did not finish.");
         }
         return false;
     }
 
-    const QString stdoutText = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
-    const QString stderrText = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    const QString stdoutText = QString::fromLocal8Bit(result.standardOutput).trimmed();
+    const QString stderrText = QString::fromLocal8Bit(result.standardError).trimmed();
+    if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
         QString details = stderrText;
         if (details.isEmpty()) {
             details = stdoutText;
@@ -1480,8 +1486,6 @@ TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("Teletext Viewer"));
-    setModal(false);
-    setAttribute(Qt::WA_DeleteOnClose, false);
     setMinimumSize(520, 420);
     setAcceptDrops(true);
 
@@ -1557,7 +1561,7 @@ TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
             this, &TeletextViewerDialog::browseForTeletextStream);
     connect(refreshListButton, &QPushButton::clicked,
             this, &TeletextViewerDialog::refreshPageList);
-    connect(pageComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(pageComboBox, &QComboBox::currentIndexChanged,
             this, &TeletextViewerDialog::loadSelectedPage);
     connect(refreshPageButton, &QPushButton::clicked,
             this, &TeletextViewerDialog::loadSelectedPage);
@@ -1569,7 +1573,7 @@ TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
             this, &TeletextViewerDialog::setAutoRefreshEnabled);
     connect(refreshTimer, &QTimer::timeout,
             this, &TeletextViewerDialog::handlePeriodicRefresh);
-    connect(rendererComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(rendererComboBox, &QComboBox::currentIndexChanged,
             this, [this](int index) { setNativeRendererEnabled(index == 1); });
     connect(flashAnimationCheckBox, &QCheckBox::toggled,
             this, &TeletextViewerDialog::setFlashAnimationEnabled);
@@ -1666,20 +1670,23 @@ bool TeletextViewerDialog::eventFilter(QObject *watched, QEvent *event)
                                       || (pageViewer && watched == pageViewer->viewport());
         if (navigationTarget) {
             auto *wheelEvent = static_cast<QWheelEvent *>(event);
-            const int wheelDeltaY = wheelEvent->angleDelta().y();
-            if (wheelDeltaY != 0) {
-                const int direction = wheelDeltaY > 0 ? -1 : 1;
-                const int stepCount = qMax(1, qAbs(wheelDeltaY) / 120);
-                bool pageChanged = false;
-                for (int step = 0; step < stepCount; ++step) {
-                    if (cyclePageSelection(direction)) {
-                        pageChanged = true;
-                    }
+            // One page per whole notch: a touchpad's small deltas add up
+            pageWheelRemainder += wheelEvent->angleDelta().y();
+            const int notches = pageWheelRemainder / 120;
+            pageWheelRemainder -= notches * 120;
+            if (notches == 0) {
+                return wheelEvent->angleDelta().y() != 0;
+            }
+            const int direction = notches > 0 ? -1 : 1;
+            bool pageChanged = false;
+            for (int step = 0; step < qAbs(notches); ++step) {
+                if (cyclePageSelection(direction)) {
+                    pageChanged = true;
                 }
-                if (pageChanged) {
-                    wheelEvent->accept();
-                    return true;
-                }
+            }
+            if (pageChanged) {
+                wheelEvent->accept();
+                return true;
             }
         }
     }

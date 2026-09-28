@@ -23,6 +23,9 @@
 #include <QString>
 #include <QStringList>
 #include <QNetworkAccessManager>
+#include <QJsonArray>
+
+#include <functional>
 
 class QNetworkReply;
 
@@ -126,6 +129,12 @@ private:
     // Helper: find the manifest + package asset URLs for the current platform
     // from a GitHub release JSON payload. Returns true if both found.
     bool resolveAssetsFromReleaseJson(const QByteArray &payload, QString &error);
+
+    // The install's file work, run on a worker thread: returns an error
+    // message or an empty string
+    static QString extractAndVerify(const QString &archivePath, const QString &installDir,
+                                    const QJsonArray &files);
+    void continueAfterWorker(std::function<QString()> work, std::function<void()> onSuccess);
 };
 
 #endif // CUDAPLUGINMANAGER_H

@@ -137,9 +137,6 @@ inline void applyCommonFileDialogOptions(QFileDialog *dialog)
     }
 
     dialog->setOption(QFileDialog::DontResolveSymlinks, true);
-#if defined(Q_OS_MACOS)
-    dialog->setOption(QFileDialog::DontUseNativeDialog, true);
-#endif
 }
 
 inline QString runOpenFileDialog(QWidget *parent,

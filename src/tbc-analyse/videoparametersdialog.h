@@ -69,6 +69,7 @@ private:
     void updateResultingFrameSizeLabel();
 
     Ui::VideoParametersDialog *ui;
+    int wheelAngleRemainder = 0; // angleDelta not yet a whole notch
     TbcMetaData::VideoParameters videoParameters;
     qint32 originalActiveVideoStart = -1;
     qint32 originalActiveVideoWidth = -1;

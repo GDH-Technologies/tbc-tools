@@ -558,7 +558,7 @@ void PlotWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
         // Map click position to scene coordinates
-        QPoint viewPos = m_view->mapFromParent(event->pos());
+        QPoint viewPos = m_view->mapFromParent(event->position().toPoint());
         QPointF scenePos = m_view->mapToScene(viewPos);
         
         // Check if click is within plot area
@@ -580,7 +580,7 @@ void PlotWidget::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_isDragging) {
         // Left-drag pans the view (in addition to right-drag pan).
-        QPoint viewPos = m_view->mapFromParent(event->pos());
+        QPoint viewPos = m_view->mapFromParent(event->position().toPoint());
         QPointF scenePos = m_view->mapToScene(viewPos);
         const QPointF sceneDelta = scenePos - m_lastPanScenePos;
         m_lastPanScenePos = scenePos;
@@ -630,7 +630,7 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
         if (event->type() == QEvent::MouseButtonDblClick) {
             QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
-                const QPointF scenePos = m_view->mapToScene(mouseEvent->pos());
+                const QPointF scenePos = m_view->mapToScene(mouseEvent->position().toPoint());
                 if (m_plotRect.contains(scenePos)) {
                     m_isDragging = false;
                     m_isPanning = false;
@@ -655,15 +655,16 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
                 return true;
             }
 
-            // < 1 zooms in, > 1 zooms out.
-            const double scaleFactor = (deltaY > 0) ? 0.85 : 1.18;
+            // < 1 zooms in, > 1 zooms out; 0.85 per notch, in proportion for
+            // a touchpad's smaller deltas
+            const double scaleFactor = std::pow(0.85, deltaY / 120.0);
             zoomAt(scenePos, scaleFactor);
             return true;
         }
         if (event->type() == QEvent::MouseButtonPress) {
             QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::RightButton) {
-                const QPointF scenePos = m_view->mapToScene(mouseEvent->pos());
+                const QPointF scenePos = m_view->mapToScene(mouseEvent->position().toPoint());
                 if (m_panEnabled && m_plotRect.contains(scenePos)) {
                     m_isPanning = true;
                     m_lastPanScenePos = scenePos;
@@ -672,7 +673,7 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
             }
             if (mouseEvent->button() == Qt::LeftButton) {
                 // Map to scene coordinates
-                QPointF scenePos = m_view->mapToScene(mouseEvent->pos());
+                QPointF scenePos = m_view->mapToScene(mouseEvent->position().toPoint());
                 
                 // Check if click is within plot area
                 if (m_plotRect.contains(scenePos)) {
@@ -689,7 +690,7 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
         } else if (event->type() == QEvent::MouseMove) {
             QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
             if (m_isPanning) {
-                const QPointF scenePos = m_view->mapToScene(mouseEvent->pos());
+                const QPointF scenePos = m_view->mapToScene(mouseEvent->position().toPoint());
                 const QPointF sceneDelta = scenePos - m_lastPanScenePos;
                 m_lastPanScenePos = scenePos;
                 panBySceneDelta(sceneDelta);
@@ -697,7 +698,7 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
             }
             if (m_isDragging) {
                 // Left-drag pans the view (in addition to right-drag pan).
-                const QPointF scenePos = m_view->mapToScene(mouseEvent->pos());
+                const QPointF scenePos = m_view->mapToScene(mouseEvent->position().toPoint());
                 const QPointF sceneDelta = scenePos - m_lastPanScenePos;
                 m_lastPanScenePos = scenePos;
                 panBySceneDelta(sceneDelta);
@@ -705,7 +706,7 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
             }
             // No button held: hover readout (snap crosshair to nearest point).
             if (m_hoverEnabled) {
-                const QPointF scenePos = m_view->mapToScene(mouseEvent->pos());
+                const QPointF scenePos = m_view->mapToScene(mouseEvent->position().toPoint());
                 if (m_plotRect.contains(scenePos)) {
                     QPointF nearestPoint;
                     const PlotSeries *nearestSeries = nullptr;

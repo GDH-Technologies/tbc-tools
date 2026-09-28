@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -114,15 +115,12 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     deriveLayout->setColumnStretch(11, 1);
     mainLayout->addLayout(deriveLayout);
 
-    auto *buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch(1);
-    applyButton_ = new QPushButton(tr("Apply"), this);
+    // No default button: Enter belongs to the table's editors
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Close, this);
+    applyButton_ = buttonBox->button(QDialogButtonBox::Apply);
     applyButton_->setAutoDefault(false);
-    auto *closeButton = new QPushButton(tr("Close"), this);
-    closeButton->setAutoDefault(false);
-    buttonLayout->addWidget(applyButton_);
-    buttonLayout->addWidget(closeButton);
-    mainLayout->addLayout(buttonLayout);
+    buttonBox->button(QDialogButtonBox::Close)->setAutoDefault(false);
+    mainLayout->addWidget(buttonBox);
 
     connect(table_, &QTableWidget::itemSelectionChanged, this, &SegmentsViewerDialog::updateButtons);
     connect(table_, &QTableWidget::cellChanged, this, &SegmentsViewerDialog::handleItemChanged);
@@ -161,14 +159,14 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     connect(splitButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::splitAtCurrentFrame);
     connect(mergeButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::mergeWithNext);
     connect(deleteButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::deleteSelected);
-    connect(presetCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SegmentsViewerDialog::applyPreset);
+    connect(presetCombo_, &QComboBox::currentIndexChanged, this, &SegmentsViewerDialog::applyPreset);
     connect(rederiveButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::rederive);
     connect(applyButton_, &QPushButton::clicked, this, [this]() {
         emit segmentsUpdated(segments_);
         dirty_ = false;
         updateButtons();
     });
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     applyPreset(1);   // after every button exists: it refreshes their enabled state
     updateInfoLabel();
@@ -334,8 +332,24 @@ void SegmentsViewerDialog::updateButtons()
     goStartButton_->setEnabled(hasRow);
     goEndButton_->setEnabled(hasRow);
     setInOutButton_->setEnabled(hasRow && !state_.metadataOnly);
-    moveStartButton_->setEnabled(hasRow && hasCurrent);
-    moveEndButton_->setEnabled(hasRow && hasCurrent);
+    // Move Start/End only where the move is valid (the same rules the moves
+    // themselves check): the new start must stay before the segment's end and
+    // after the previous segment's start; the new (exclusive) end, which keeps
+    // the current frame's two fields inside, must stay after the segment's
+    // start and before the next segment's end.
+    bool canMoveStart = false;
+    bool canMoveEnd = false;
+    if (hasRow && hasCurrent) {
+        const TbcMetaData::Segment &segment = segments_.at(row);
+        const qint32 startField = state_.currentFirstField;
+        canMoveStart = startField < segment.endFieldExclusive
+                       && !(row > 0 && startField <= segments_.at(row - 1).startField);
+        const qint32 endField = qMin(state_.totalFields, state_.currentFirstField + 2);
+        canMoveEnd = endField > segment.startField
+                     && !(row + 1 < segments_.size() && endField >= segments_.at(row + 1).endFieldExclusive);
+    }
+    moveStartButton_->setEnabled(canMoveStart);
+    moveEndButton_->setEnabled(canMoveEnd);
     splitButton_->setEnabled(hasRow && hasCurrent
                              && state_.currentFirstField > segments_.at(row).startField
                              && state_.currentFirstField < segments_.at(row).endFieldExclusive);
@@ -455,12 +469,8 @@ void SegmentsViewerDialog::moveStartHere()
         return;
     }
     TbcMetaData::Segment &segment = segments_[row];
-    if (field >= segment.endFieldExclusive) {
-        QMessageBox::information(this, tr("Move Start"), tr("The current frame is not before the segment's end."));
-        return;
-    }
-    if (row > 0 && field <= segments_.at(row - 1).startField) {
-        QMessageBox::information(this, tr("Move Start"), tr("The current frame is inside an earlier segment."));
+    // updateButtons() disables Move Start where these fail
+    if (field >= segment.endFieldExclusive || (row > 0 && field <= segments_.at(row - 1).startField)) {
         return;
     }
     const qint32 oldStart = segment.startField;
@@ -486,12 +496,9 @@ void SegmentsViewerDialog::moveEndHere()
     // The end is exclusive: the current frame's two fields stay inside the segment
     const qint32 field = qMin(state_.totalFields, state_.currentFirstField + 2);
     TbcMetaData::Segment &segment = segments_[row];
-    if (field <= segment.startField) {
-        QMessageBox::information(this, tr("Move End"), tr("The current frame is not after the segment's start."));
-        return;
-    }
-    if (row + 1 < segments_.size() && field >= segments_.at(row + 1).endFieldExclusive) {
-        QMessageBox::information(this, tr("Move End"), tr("The current frame is beyond the next segment."));
+    // updateButtons() disables Move End where these fail
+    if (field <= segment.startField
+        || (row + 1 < segments_.size() && field >= segments_.at(row + 1).endFieldExclusive)) {
         return;
     }
     const qint32 oldEnd = segment.endFieldExclusive;

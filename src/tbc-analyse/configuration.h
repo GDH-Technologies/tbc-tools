@@ -86,12 +86,16 @@ public:
     QByteArray getVideoParametersDialogGeometry(void);
     void setChromaDecoderConfigDialogGeometry(QByteArray chromaDecoderConfigDialogGeometry);
     QByteArray getChromaDecoderConfigDialogGeometry(void);
+    void setFieldTimingDialogGeometry(QByteArray fieldTimingDialogGeometry);
+    QByteArray getFieldTimingDialogGeometry(void);
 
     // Get and set methods - view options
     void setToggleChromaDuringSeek(bool toggleChromaDuringSeek);
     bool getToggleChromaDuringSeek(void);
     void setSkipBySegments(bool skipBySegments);
     bool getSkipBySegments(void);
+    void setWaveformPhosphorMode(bool waveformPhosphorMode);
+    bool getWaveformPhosphorMode(void);
     // Colour scheme: "dark" (default) or "light"
     void setTheme(QString theme);
     QString getTheme(void);
@@ -169,12 +173,14 @@ private:
         QByteArray closedCaptionDialogGeometry;
         QByteArray videoParametersDialogGeometry;
         QByteArray chromaDecoderConfigDialogGeometry;
+        QByteArray fieldTimingDialogGeometry;
     };
 
     // View options
     struct ViewOptions {
         bool toggleChromaDuringSeek;
         bool skipBySegments;
+        bool waveformPhosphorMode;
         QString theme;
         bool generateProxyEnabled;
         bool exportProfileConfigEnabled;

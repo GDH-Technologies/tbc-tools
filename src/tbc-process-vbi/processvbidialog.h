@@ -21,6 +21,7 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QProcess;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
@@ -38,13 +39,17 @@ public:
     void setDefaultInputTbc(const QString &tbcFilename);
     void setDefaultOutputMetadata(const QString &metadataFilename);
 
+    // Escape and the close button: refused while a run is in progress (Stop it
+    // first)
+    void reject() override;
+
 private slots:
     void onBrowseInputTbcClicked();
     void onBrowseOutputMetadataClicked();
     void onBrowseTeletextDirClicked();
     void onTeletextToggled(bool checked);
     void onRunClicked();
-    void onCancelClicked();
+    void onStopClicked();
 
 private:
     void buildUi();
@@ -54,14 +59,19 @@ private:
     void appendStatus(const QString &text);
     void appendLog(const QString &text);
     QString formatCommand(const QString &program, const QStringList &arguments) const;
-    QString resolveLdProcessVbi() const;
-    bool toolSupportsOption(const QString &toolPath, const QString &option) const;
-    QStringList buildToolArguments(const QString &toolPath, const VbiProcessingOptions &opts) const;
-    bool runProcessStep(const QString &program, const QStringList &arguments, QString *errorMessage);
+    QStringList buildToolArguments(const VbiProcessingOptions &opts) const;
+    void consumeOutput(const QByteArray &chunk);
+    void finishRun(const QString &startError);
 
     QString sourceDirectory;
     bool runInProgress = false;
     bool cancelRequested = false;
+
+    // The run in progress: this same binary in CLI mode
+    QProcess *process = nullptr;
+    QString runInputTbc;
+    QByteArray pendingOutputBuffer;
+    QString lastOutputLine;
 
     QLineEdit *inputTbcLineEdit = nullptr;
     QPushButton *inputTbcBrowseButton = nullptr;
@@ -84,12 +94,8 @@ private:
     QProgressBar *progressBar = nullptr;
     QPlainTextEdit *logTextEdit = nullptr;
     QPushButton *runButton = nullptr;
-    QPushButton *cancelButton = nullptr;
+    QPushButton *stopButton = nullptr;
     QPushButton *closeButton = nullptr;
-
-    // Cached capability flags for the resolved tbc-process-vbi (populated lazily).
-    mutable QString cachedToolPath;
-    mutable QString cachedHelpText;
 };
 
 #endif // PROCESSVBIDIALOG_H

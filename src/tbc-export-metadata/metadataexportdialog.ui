@@ -46,6 +46,9 @@
        </item>
        <item>
         <widget class="QPushButton" name="inputBrowseButton">
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
          <property name="text">
           <string>Browse...</string>
          </property>
@@ -204,16 +207,34 @@
      <item row="10" column="1">
       <layout class="QHBoxLayout" name="ffmetadataRangeLayout">
        <item>
-        <widget class="QLineEdit" name="ffmetadataStartLineEdit">
-         <property name="placeholderText">
-          <string>--start (optional, frame &gt;= 1)</string>
+        <widget class="QSpinBox" name="ffmetadataStartSpinBox">
+         <property name="toolTip">
+          <string>First frame to export (--start)</string>
+         </property>
+         <property name="specialValueText">
+          <string>From the first frame</string>
+         </property>
+         <property name="prefix">
+          <string>Start frame </string>
+         </property>
+         <property name="maximum">
+          <number>99999999</number>
          </property>
         </widget>
        </item>
        <item>
-        <widget class="QLineEdit" name="ffmetadataLengthLineEdit">
-         <property name="placeholderText">
-          <string>--length (optional, frames &gt;= 1)</string>
+        <widget class="QSpinBox" name="ffmetadataLengthSpinBox">
+         <property name="toolTip">
+          <string>Number of frames to export (--length)</string>
+         </property>
+         <property name="specialValueText">
+          <string>To the last frame</string>
+         </property>
+         <property name="suffix">
+          <string> frames</string>
+         </property>
+         <property name="maximum">
+          <number>99999999</number>
          </property>
         </widget>
        </item>
@@ -314,6 +335,9 @@
      </item>
      <item>
       <widget class="QPushButton" name="exportButton">
+       <property name="default">
+        <bool>true</bool>
+       </property>
        <property name="text">
         <string>Export</string>
        </property>
@@ -321,6 +345,9 @@
      </item>
      <item>
       <widget class="QPushButton" name="closeButton">
+       <property name="autoDefault">
+        <bool>false</bool>
+       </property>
        <property name="text">
         <string>Close</string>
        </property>

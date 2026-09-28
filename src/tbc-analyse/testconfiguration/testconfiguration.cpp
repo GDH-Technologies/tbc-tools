@@ -154,6 +154,30 @@ void testThemeChoice(const QString &configFile)
     }
 }
 
+// The field timing scope geometry and the waveform phosphor mode moved from a
+// stray QSettings into Configuration: empty and off by default, round-tripped,
+// and (being additive keys) no wipe of an existing file.
+void testScopeSettings()
+{
+    std::cerr << "Testing the scope settings keys\n";
+
+    const QByteArray geometry("field-timing-geometry");
+    {
+        Configuration fresh;
+        CHECK(fresh.getFieldTimingDialogGeometry().isEmpty());
+        CHECK(!fresh.getWaveformPhosphorMode());
+        fresh.setFieldTimingDialogGeometry(geometry);
+        fresh.setWaveformPhosphorMode(true);
+        fresh.writeConfiguration();
+    }
+    {
+        Configuration reader;
+        CHECK(reader.getFieldTimingDialogGeometry() == geometry);
+        CHECK(reader.getWaveformPhosphorMode());
+        CHECK(reader.getSourceDirectory() == QDir::tempPath());
+    }
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -172,6 +196,7 @@ int main(int argc, char *argv[])
     testRemovalSurvivesLongLivedWriter();
     testFrameSnapshotStillModeMigration(configFile);
     testThemeChoice(configFile);
+    testScopeSettings();
 
     QFile::remove(configFile);
     std::cerr << "All configuration tests passed\n";

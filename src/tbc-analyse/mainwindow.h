@@ -32,6 +32,8 @@
 #include <QVector>
 #include <QActionGroup>
 #include <QImage>
+#include <QProgressDialog>
+#include <functional>
 #include <QFutureWatcher>
 
 #include "oscilloscopedialog.h"
@@ -48,7 +50,6 @@
 #include "visibledropoutanalysisdialog.h"
 #include "blacksnranalysisdialog.h"
 #include "whitesnranalysisdialog.h"
-#include "busydialog.h"
 #include "closedcaptionsdialog.h"
 #include "videoparametersdialog.h"
 #include "chromadecoderconfigdialog.h"
@@ -109,8 +110,8 @@ private slots:
     void on_actionWhite_SNR_analysis_triggered();
     void on_actionSave_frame_as_PNG_triggered();
     void on_actionSave_frame_as_PNG_with_options_triggered();
-    void on_actionSave_all_modes_as_PNGs_triggered();
-    void on_actionCopy_current_display_to_clipboard_triggered();
+    void saveAllModesAsPngs();
+    void copyCurrentDisplayToClipboard();
     void on_actionZoom_In_triggered();
     void on_actionZoom_Out_triggered();
     void on_actionZoom_1x_triggered();
@@ -155,11 +156,8 @@ private slots:
     void on_sourcesPushButton_clicked();
     void on_viewPushButton_clicked();
     void on_fieldOrderPushButton_clicked();
-    void on_zoomInPushButton_clicked();
-    void on_zoomOutPushButton_clicked();
-    void on_originalSizePushButton_clicked();
     void on_mouseModePushButton_clicked();
-    void on_vectorscopeSelectionPushButton_toggled(bool checked);
+    void onVectorscopeSelectionToggled(bool checked);
     //void on_autoResizeButton_clicked();
 	void on_toggleAutoResize_toggled(bool checked);
 	void on_actionResizeFrameWithWindow_toggled(bool checked);
@@ -178,15 +176,14 @@ private slots:
     void exportBoundaryThicknessChangedSignalHandler(int thickness);
 
     // Tbc Source signal handlers
-    void on_busy(QString infoMessage);
-    void on_finishedLoading(bool success);
-    void on_finishedSaving(bool success);
-    void on_asyncFrameRenderFinished();
+    void onSourceBusy(QString infoMessage);
+    void onSourceLoaded(bool success);
+    void onSourceSaved(bool success);
+    void onAsyncFrameRenderFinished();
 	
 	// UI handler
 	void resize_on_aspect();
 protected:
-    void keyPressEvent(QKeyEvent *event) override;
     bool event(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -237,7 +234,7 @@ private:
     VisibleDropOutAnalysisDialog* visibleDropoutAnalysisDialog;
     BlackSnrAnalysisDialog* blackSnrAnalysisDialog;
     WhiteSnrAnalysisDialog* whiteSnrAnalysisDialog;
-    BusyDialog* busyDialog;
+    QProgressDialog *busyProgress = nullptr;
     ClosedCaptionsDialog *closedCaptionDialog;
     VideoParametersDialog *videoParametersDialog;
     ChromaDecoderConfigDialog *chromaDecoderConfigDialog;
@@ -272,6 +269,7 @@ private:
     QPoint vectorscopeSelectionAnchor;
     ExportBoundaryHandle exportBoundaryDragHandle = ExportBoundaryHandle::None;
     ExportBoundaryHandle exportBoundarySelectedHandle = ExportBoundaryHandle::None;
+    int exportBoundaryWheelRemainder = 0; // angleDelta not yet a whole notch
     double scaleFactor;
     QString lastFilename;
     bool metadataJsonLoaded = false;
@@ -395,6 +393,8 @@ private:
     void refreshThemeDependentUi();
     void mouseScanLineSelect(qint32 oX, qint32 oY);
 	void resizeEvent(QResizeEvent *event);
+    void closeEvent(QCloseEvent *event) override;
+    bool maybeSave(std::function<void()> continueAfterSave);
     void requestSourceOpen(const QString &inputFileName);
     void processPendingSourceOpenRequest();
     bool runExternalToolWithProgress(const QString &program, const QStringList &arguments,
@@ -409,11 +409,17 @@ private:
     QAction *notesViewerAction = nullptr;
     QAction *skipBySegmentsAction = nullptr;
     QAction *segmentsViewerAction = nullptr;
+    // The viewer's key actions and their shortcuts, which apply only while
+    // the viewer tab is showing (updateViewerKeyShortcuts)
+    QList<QPair<QAction *, QList<QKeySequence>>> viewerKeyActions;
+    void updateViewerKeyShortcuts();
+    void addOrEditMarkerAtCurrentFrame();
     QPushButton *vectorscopeSelectionPushButton = nullptr;
-    TimelineMarkerSlider *timelineMarkerSlider = nullptr;
     UiStateSnapshot pendingUiStateSnapshot;
     bool restoreUiStateAfterReload = false;
     QString pendingSourceOpenFilename;
+    // Runs once a save started by maybeSave() has succeeded
+    std::function<void()> afterSaveAction;
     bool sourceOperationInProgress = false;
     void updateTimelineMarkers();
     void updateNotesViewerState();

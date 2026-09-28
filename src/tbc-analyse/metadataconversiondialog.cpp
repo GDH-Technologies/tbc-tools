@@ -173,8 +173,7 @@ void MetadataConversionDialog::on_convertButton_clicked()
             return;
         }
         ui->statusLabel->setText(tr("Conversion failed."));
-        QMessageBox messageBox;
-        messageBox.warning(this, tr("Error"), errorMessage);
+        QMessageBox::warning(this, tr("Error"), errorMessage);
         return;
     }
 

@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include "ui_mainwindow.h"
+#include "gui/processprogressrunner.h"
 #include "tbc/logging.h"
 
 #include <QAbstractButton>
@@ -37,7 +38,6 @@
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOptionSlider>
-#include <QSvgRenderer>
 #include <QStringList>
 #include <QTextStream>
 #include <QDateTime>
@@ -57,7 +57,6 @@
 #include <QTextEdit>
 #include <QAbstractSpinBox>
 #include <QKeySequence>
-#include <QShortcut>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -69,6 +68,7 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
 #include <optional>
+#include <utility>
 #if defined(Q_OS_UNIX)
 #include <signal.h>
 #endif
@@ -264,43 +264,6 @@ EfmAutoloadCandidates discoverEfmAutoloadCandidates(const QString &directoryPath
     return candidates;
 }
 
-void ensureSvgButtonIcon(QAbstractButton *button, const QString &resourcePath)
-{
-    if (!button) {
-        return;
-    }
-
-    const QSize iconSize = button->iconSize().isValid() ? button->iconSize() : QSize(24, 24);
-    QIcon icon(resourcePath);
-    if (icon.isNull() || icon.availableSizes().isEmpty()) {
-        QSvgRenderer renderer(resourcePath);
-        if (renderer.isValid()) {
-            // Rasterise at the device pixel ratio, not the logical icon size, or
-            // this path produces a blurry icon on a HiDPI display. (It is not a
-            // rare fallback: QIcon reports no availableSizes() for an SVG, so
-            // every toolbar button comes through here.)
-            //
-            // The render bounds must be given explicitly and in LOGICAL units.
-            // QSvgRenderer::render(painter) with no bounds fills the painter's
-            // viewport, which is the pixmap's device rect - and the painter is
-            // already scaled by the device pixel ratio, so the drawing came out
-            // ratio-times too large and cropped at anything above 100%.
-            const qreal devicePixelRatio = button->devicePixelRatioF();
-            QPixmap pixmap(iconSize * devicePixelRatio);
-            pixmap.setDevicePixelRatio(devicePixelRatio);
-            pixmap.fill(Qt::transparent);
-            QPainter painter(&pixmap);
-            renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(iconSize)));
-            icon = QIcon(pixmap);
-        }
-    }
-
-    if (!icon.isNull()) {
-        button->setIcon(icon);
-        button->setIconSize(iconSize);
-    }
-}
-
 
 QString formatOptionalString(const QString &value)
 {
@@ -355,20 +318,20 @@ bool toolHelpListsOption(const QString &toolPath, const QString &optionName)
         return supportCache.value(cacheKey);
     }
 
-    QProcess probeProcess;
-    probeProcess.setProcessChannelMode(QProcess::MergedChannels);
-    probeProcess.start(toolPath, {QStringLiteral("--help")});
-
-    bool supportsOption = false;
-    if (probeProcess.waitForStarted(2000)) {
-        if (!probeProcess.waitForFinished(6000)) {
-            probeProcess.kill();
-            probeProcess.waitForFinished(1000);
-        } else {
-            const QString helpOutput = QString::fromLocal8Bit(probeProcess.readAllStandardOutput());
-            supportsOption = helpOutput.contains(optionName);
-        }
-    }
+    // Run through ProcessProgressRunner so the GUI keeps its event loop: a
+    // probe slower than half a second gets a progress dialog with Cancel
+    // instead of a frozen window
+    QString helpOutput;
+    ProcessProgressRunner::Options options;
+    options.onLine = [&helpOutput](const QString &line, int *, QString *) {
+        helpOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result result = ProcessProgressRunner::run(
+        toolPath, {QStringLiteral("--help")}, QApplication::activeWindow(),
+        QCoreApplication::translate("MainWindow", "Checking %1...").arg(QFileInfo(toolPath).fileName()),
+        options);
+    const bool supportsOption = result.status == ProcessProgressRunner::Result::Finished
+                                && helpOutput.contains(optionName);
 
     supportCache.insert(cacheKey, supportsOption);
     return supportsOption;
@@ -1242,38 +1205,18 @@ qint32 sliderValueForContextPoint(const QSlider *slider, const QPoint &contextPo
                                            option.upsideDown);
 }
 
-#if defined(Q_OS_MACOS)
-QString chooseFileViaAppleScript(const QString &startPath)
+
+// A new window is shown (and takes focus); one already open is brought to the
+// front instead
+void showOrRaise(QWidget *window)
 {
-    QString directoryPath = startPath;
-    QFileInfo pathInfo(directoryPath);
-    if (directoryPath.isEmpty() || !pathInfo.exists()) {
-        directoryPath = QDir::homePath();
-    } else if (pathInfo.isFile()) {
-        directoryPath = pathInfo.absolutePath();
+    if (window->isVisible()) {
+        window->raise();
+        window->activateWindow();
+    } else {
+        window->show();
     }
-
-    QString escapedPath = directoryPath;
-    escapedPath.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
-    escapedPath.replace(QStringLiteral("\""), QStringLiteral("\\\""));
-
-    const QString script = QStringLiteral(
-        "set defaultLocation to POSIX file \"%1\"\n"
-        "set chosenFile to choose file with prompt \"Open TBC/metadata file\" default location defaultLocation\n"
-        "POSIX path of chosenFile").arg(escapedPath);
-
-    QProcess process;
-    process.start(QStringLiteral("/usr/bin/osascript"), {QStringLiteral("-e"), script});
-    if (!process.waitForFinished(120000)) {
-        return QString();
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        return QString();
-    }
-
-    return QString::fromUtf8(process.readAllStandardOutput()).trimmed();
 }
-#endif
 } // namespace
 
 MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QString themeChoiceParam, QWidget *parent) :
@@ -1283,57 +1226,37 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
 {
     ui->setupUi(this);
 
-    if (ui->posHorizontalSlider && ui->mediaControl_frame) {
-        QSlider *existingSlider = ui->posHorizontalSlider;
-        auto *replacementSlider = new TimelineMarkerSlider(ui->mediaControl_frame);
-        replacementSlider->setObjectName(existingSlider->objectName());
-        replacementSlider->setOrientation(existingSlider->orientation());
-        replacementSlider->setMinimum(existingSlider->minimum());
-        replacementSlider->setMaximum(existingSlider->maximum());
-        replacementSlider->setSingleStep(existingSlider->singleStep());
-        replacementSlider->setPageStep(existingSlider->pageStep());
-        replacementSlider->setTracking(existingSlider->hasTracking());
-        replacementSlider->setValue(existingSlider->value());
-        replacementSlider->setEnabled(existingSlider->isEnabled());
-        replacementSlider->setMinimumSize(existingSlider->minimumSize());
-        replacementSlider->setMaximumSize(existingSlider->maximumSize());
-        replacementSlider->setSizePolicy(existingSlider->sizePolicy());
-        replacementSlider->setInvertedAppearance(existingSlider->invertedAppearance());
-        replacementSlider->setInvertedControls(existingSlider->invertedControls());
-        replacementSlider->setContextMenuPolicy(existingSlider->contextMenuPolicy());
+    // The platform's standard keys where one exists (Ctrl+O / Ctrl+S / Ctrl+Q
+    // and Ctrl+W / F5 or Ctrl+R / Ctrl++ and Ctrl+= / Ctrl+- on Linux and
+    // Windows; the Cmd equivalents on macOS). Exit takes Quit and Close: Quit
+    // has no binding on Windows.
+    ui->actionOpen_TBC_file->setShortcuts(QKeySequence::Open);
+    ui->actionSave_Metadata->setShortcuts(QKeySequence::Save);
+    ui->actionReload_TBC->setShortcuts(QKeySequence::Refresh);
+    ui->actionExit->setShortcuts(QKeySequence::keyBindings(QKeySequence::Quit)
+                                 + QKeySequence::keyBindings(QKeySequence::Close));
+    ui->actionZoom_In->setShortcuts(QKeySequence::keyBindings(QKeySequence::ZoomIn)
+                                    << QKeySequence(Qt::CTRL | Qt::Key_Equal));
+    ui->actionZoom_Out->setShortcuts(QKeySequence::ZoomOut);
 
-        if (QLayout *sliderLayout = ui->mediaControl_frame->layout()) {
-            sliderLayout->replaceWidget(existingSlider, replacementSlider);
-        }
+    // Icons from the desktop's icon theme; none is shown where it has none
+    ui->actionOpen_TBC_file->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::DocumentOpen));
+    ui->actionReload_TBC->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ViewRefresh));
+    ui->actionSave_Metadata->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::DocumentSave));
+    ui->actionExit->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ApplicationExit));
+    ui->actionAbout_ld_analyse->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::HelpAbout));
 
-        existingSlider->deleteLater();
-        ui->posHorizontalSlider = replacementSlider;
-        timelineMarkerSlider = replacementSlider;
-
-        connect(timelineMarkerSlider, &QSlider::valueChanged,
-                this, &MainWindow::on_posHorizontalSlider_valueChanged);
-        connect(timelineMarkerSlider, &QSlider::sliderPressed,
-                this, &MainWindow::on_posHorizontalSlider_sliderPressed);
-        connect(timelineMarkerSlider, &QSlider::sliderReleased,
-                this, &MainWindow::on_posHorizontalSlider_sliderReleased);
-        connect(timelineMarkerSlider, &QWidget::customContextMenuRequested,
-                this, &MainWindow::on_posHorizontalSlider_customContextMenuRequested);
-    }
-    if (ui->posHorizontalSlider) {
-        ui->posHorizontalSlider->setToolTip(tr("Use [ & ] keys to set in & out points at the current frame\n"
-                                               "M — add/edit a marker comment at the current frame\n"
-                                               "C — open the marker viewer"));
-    }
-    copyCurrentDisplayAction = new QAction(tr("Copy current display"), this);
+    copyCurrentDisplayAction = new QAction(tr("&Copy Current Display"), this);
+    copyCurrentDisplayAction->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::EditCopy));
     copyCurrentDisplayAction->setShortcut(QKeySequence::Copy);
     copyCurrentDisplayAction->setShortcutContext(Qt::WindowShortcut);
     connect(copyCurrentDisplayAction, &QAction::triggered,
-            this, &MainWindow::on_actionCopy_current_display_to_clipboard_triggered);
+            this, &MainWindow::copyCurrentDisplayToClipboard);
     addAction(copyCurrentDisplayAction);
 
     saveAllModesPngAction = new QAction(tr("Save all mode views as PNGs..."), this);
     connect(saveAllModesPngAction, &QAction::triggered,
-            this, &MainWindow::on_actionSave_all_modes_as_PNGs_triggered);
+            this, &MainWindow::saveAllModesAsPngs);
     if (ui->menuFile) {
         if (ui->actionExit) {
             ui->menuFile->insertAction(ui->actionExit, saveAllModesPngAction);
@@ -1380,8 +1303,8 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         valueFont.setPointSize(qMax(12, valueFont.pointSize() + 3));
         ui->posTimecodeLineEdit->setFont(valueFont);
         ui->posTimecodeLineEdit->setTextMargins(3, 0, 1, 0);
-        ui->posTimecodeLineEdit->setMinimumHeight(30);
-        ui->posTimecodeLineEdit->setMaximumHeight(30);
+        // Height from the enlarged font (Fixed vertical policy = sizeHint),
+        // not a fixed 30 px that clips it under a larger system font
         const QFontMetrics valueMetrics(valueFont);
         const int valueMinWidth = valueMetrics.horizontalAdvance(QStringLiteral("00:00:00:00")) + 8;
         ui->posTimecodeLineEdit->setMinimumWidth(valueMinWidth);
@@ -1405,15 +1328,20 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         }
     }
     ui->posHorizontalSlider->setContextMenuPolicy(Qt::CustomContextMenu);
-    ensureSvgButtonIcon(ui->startPushButton, QStringLiteral(":/icons/Graphics/start-frame.svg"));
-    ensureSvgButtonIcon(ui->previousPushButton, QStringLiteral(":/icons/Graphics/prev-frame.svg"));
-    ensureSvgButtonIcon(ui->playPushButton, QStringLiteral(":/icons/Graphics/start-playback.svg"));
-    ensureSvgButtonIcon(ui->nextPushButton, QStringLiteral(":/icons/Graphics/next-frame.svg"));
-    ensureSvgButtonIcon(ui->endPushButton, QStringLiteral(":/icons/Graphics/end-frame.svg"));
-    ensureSvgButtonIcon(ui->zoomInPushButton, QStringLiteral(":/icons/Graphics/zoom-in.svg"));
-    ensureSvgButtonIcon(ui->zoomOutPushButton, QStringLiteral(":/icons/Graphics/zoom-out.svg"));
-    ensureSvgButtonIcon(ui->originalSizePushButton, QStringLiteral(":/icons/Graphics/zoom-original.svg"));
-    ensureSvgButtonIcon(ui->mouseModePushButton, QStringLiteral(":/icons/Graphics/oscilloscope-target.svg"));
+    ui->startPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/start-frame.svg")));
+    ui->previousPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/prev-frame.svg")));
+    ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/start-playback.svg")));
+    ui->nextPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/next-frame.svg")));
+    ui->endPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/end-frame.svg")));
+    // The zoom buttons mirror the View menu's zoom actions (enabled state,
+    // tooltip, icon), so the actions carry the media bar's icons
+    ui->actionZoom_In->setIcon(QIcon(QStringLiteral(":/icons/Graphics/zoom-in.svg")));
+    ui->actionZoom_Out->setIcon(QIcon(QStringLiteral(":/icons/Graphics/zoom-out.svg")));
+    ui->actionZoom_1x->setIcon(QIcon(QStringLiteral(":/icons/Graphics/zoom-original.svg")));
+    ui->zoomInPushButton->setDefaultAction(ui->actionZoom_In);
+    ui->zoomOutPushButton->setDefaultAction(ui->actionZoom_Out);
+    ui->originalSizePushButton->setDefaultAction(ui->actionZoom_1x);
+    ui->mouseModePushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/oscilloscope-target.svg")));
     vectorscopeSelectionPushButton = new QPushButton(ui->mediaControl_frame);
     vectorscopeSelectionPushButton->setObjectName(QStringLiteral("vectorscopeSelectionPushButton"));
     vectorscopeSelectionPushButton->setMinimumSize(QSize(30, 30));
@@ -1421,7 +1349,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     vectorscopeSelectionPushButton->setCheckable(true);
     vectorscopeSelectionPushButton->setChecked(false);
     vectorscopeSelectionPushButton->setToolTip(tr("Enable vectorscope custom-area selection on the main viewer"));
-    ensureSvgButtonIcon(vectorscopeSelectionPushButton, QStringLiteral(":/icons/Graphics/highlight-selection.svg"));
+    vectorscopeSelectionPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/highlight-selection.svg")));
     if (ui->horizontalLayout_3 && ui->mouseModePushButton) {
         const int mouseModeButtonIndex = ui->horizontalLayout_3->indexOf(ui->mouseModePushButton);
         if (mouseModeButtonIndex >= 0) {
@@ -1431,7 +1359,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         }
     }
     connect(vectorscopeSelectionPushButton, &QPushButton::toggled,
-            this, &MainWindow::on_vectorscopeSelectionPushButton_toggled);
+            this, &MainWindow::onVectorscopeSelectionToggled);
     populateThemesMenu();
 
     // Set up dialogues
@@ -1448,7 +1376,24 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     visibleDropoutAnalysisDialog = new VisibleDropOutAnalysisDialog(this);
     blackSnrAnalysisDialog = new BlackSnrAnalysisDialog(this);
     whiteSnrAnalysisDialog = new WhiteSnrAnalysisDialog(this);
-    busyDialog = new BusyDialog(this);
+    // Busy indicator while TbcSource loads or saves on its worker thread.
+    // Application-modal because the scopes and dialogs read tbcSource too; no
+    // cancel. Escape or the title-bar close only hide a QProgressDialog, so
+    // while the operation runs it is shown again.
+    busyProgress = new QProgressDialog(this);
+    busyProgress->setWindowTitle(tr("tbc-analyse"));
+    busyProgress->setCancelButton(nullptr);
+    busyProgress->setRange(0, 0);
+    busyProgress->setWindowModality(Qt::ApplicationModal);
+    busyProgress->reset(); // stops the auto-show timer a new QProgressDialog starts
+    busyProgress->setAutoReset(false);
+    busyProgress->setAutoClose(false);
+    busyProgress->hide();
+    connect(busyProgress, &QDialog::finished, this, [this]() {
+        if (sourceOperationInProgress) {
+            busyProgress->show();
+        }
+    });
     closedCaptionDialog = new ClosedCaptionsDialog(this);
     videoParametersDialog = new VideoParametersDialog(this);
     chromaDecoderConfigDialog = new ChromaDecoderConfigDialog(this);
@@ -1462,15 +1407,16 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
             this, [this](const TbcMetaData::PcmAudioParameters &pcmAudioParameters) {
         if (!tbcSource.getIsSourceLoaded()) return;
         tbcSource.setPcmAudioParameters(pcmAudioParameters);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
     });
     // Apply: save the metadata to disk. TbcSource::saveSourceMetadata() writes
     // to a .new file, backs up the original to .bup (timestamped fallback),
-    // renames .new to the target, then on_finishedSaving reloads the source
+    // renames .new to the target, then onSourceSaved reloads the source
     // with the new metadata.
     connect(metadataEditorDialog, &MetadataEditorDialog::refreshRequested,
             this, [this]() {
         if (!tbcSource.getIsSourceLoaded()) return;
+        sourceOperationInProgress = true;
         tbcSource.saveSourceMetadata();
     });
     // SECAM per-field first-line-identity edits from the Metadata Editor.
@@ -1478,12 +1424,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
             this, [this](qint32 fieldNumber, bool value, bool applyToAll) {
         if (!tbcSource.getIsSourceLoaded()) return;
         tbcSource.setSecamFirstLineIsRed(fieldNumber, value, applyToAll);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
         updateMetadataStatusPanel();
         updateImage();
     });
     notesViewerDialog = new NotesViewerDialog(this);
-    notesViewerDialog->setWindowFlag(Qt::Window, true);
     connect(notesViewerDialog, &NotesViewerDialog::goToFrameRequested, this, [this](qint32 frameNumber) {
         if (!tbcSource.getIsSourceLoaded()) {
             return;
@@ -1537,7 +1482,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
                 }
 
                 tbcSource.setVideoParameters(videoParameters);
-                ui->actionSave_Metadata->setEnabled(true);
+                setWindowModified(true);
                 updateMetadataStatusPanel();
                 updateTimelineMarkers();
                 updateNotesViewerState();
@@ -1570,14 +1515,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     connect(notesViewerAction, &QAction::triggered, this, [this]() {
         updateNotesViewerState();
         updateSegmentsViewerState();
-        notesViewerDialog->show();
-        notesViewerDialog->raise();
-        notesViewerDialog->activateWindow();
+        showOrRaise(notesViewerDialog);
     });
 
     // Segments viewer: the editable recording-segment layer of the metadata
     segmentsViewerDialog = new SegmentsViewerDialog(this);
-    segmentsViewerDialog->setWindowFlag(Qt::Window, true);
     connect(segmentsViewerDialog, &SegmentsViewerDialog::goToFieldRequested, this, &MainWindow::goToField);
     connect(segmentsViewerDialog, &SegmentsViewerDialog::setInOutRequested, this, [this](qint32 segmentIndex) {
         setInOutFromSegment(segmentIndex, true, true);
@@ -1596,6 +1538,59 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         ui->menuWindow->addAction(segmentsViewerAction);
     }
     connect(segmentsViewerAction, &QAction::triggered, this, &MainWindow::showSegmentsViewer);
+
+    // The viewer's keys, as actions: listed in the Edit menu with their
+    // shortcuts (next to Copy) and enabled with the source like everything
+    // else. Their shortcuts apply only while the viewer tab is showing, so
+    // they never take keys from the Export tab's controls; a focused text
+    // field still gets typed letters (Qt's ShortcutOverride).
+    QMenu *editMenu = new QMenu(tr("&Edit"), this);
+    menuBar()->insertMenu(ui->menuView->menuAction(), editMenu);
+    editMenu->addAction(copyCurrentDisplayAction);
+    editMenu->addSeparator();
+    const auto addViewerKeyAction = [this, editMenu](const QString &text, const QList<QKeySequence> &keys,
+                                                     const std::function<void()> &handler) {
+        QAction *action = editMenu->addAction(text);
+        action->setAutoRepeat(false);
+        connect(action, &QAction::triggered, this, handler);
+        viewerKeyActions.append({action, keys});
+    };
+    addViewerKeyAction(tr("Set &In Point Here"), {QKeySequence(Qt::Key_BracketLeft)},
+                       [this]() { setInPointAtCurrentFrame(); });
+    addViewerKeyAction(tr("Set &Out Point Here"), {QKeySequence(Qt::Key_BracketRight)},
+                       [this]() { setOutPointAtCurrentFrame(); });
+    const auto setFromSegment = [this](bool setIn, bool setOut) {
+        const qint32 index = segmentIndexContainingField(currentFirstFieldZeroBased());
+        if (index >= 0) {
+            setInOutFromSegment(index, setIn, setOut);
+        } else {
+            statusBar()->showMessage(tr("No recording segment at the current frame"), 3000);
+        }
+    };
+    addViewerKeyAction(tr("In Point from Segment &Start"),
+                       {QKeySequence(Qt::Key_BraceLeft), QKeySequence(Qt::SHIFT | Qt::Key_BracketLeft)},
+                       [setFromSegment]() { setFromSegment(true, false); });
+    addViewerKeyAction(tr("Out Point from Segment &End"),
+                       {QKeySequence(Qt::Key_BraceRight), QKeySequence(Qt::SHIFT | Qt::Key_BracketRight)},
+                       [setFromSegment]() { setFromSegment(false, true); });
+    editMenu->addSeparator();
+    addViewerKeyAction(tr("Add/Edit &Marker..."), {QKeySequence(Qt::Key_M), QKeySequence(Qt::SHIFT | Qt::Key_M)},
+                       [this]() { addOrEditMarkerAtCurrentFrame(); });
+    // The viewers' own menu items take their keys the same way
+    notesViewerAction->setAutoRepeat(false);
+    segmentsViewerAction->setAutoRepeat(false);
+    viewerKeyActions.append({notesViewerAction, {QKeySequence(Qt::Key_C)}});
+    viewerKeyActions.append({segmentsViewerAction, {QKeySequence(Qt::Key_S)}});
+    connect(ui->mainTabWidget, &QTabWidget::currentChanged, this, &MainWindow::updateViewerKeyShortcuts);
+    updateViewerKeyShortcuts();
+    ui->posHorizontalSlider->setToolTip(
+        tr("%1 / %2 set the in / out point at the current frame\n"
+           "%3 adds or edits a marker comment at the current frame\n"
+           "%4 opens the marker viewer")
+            .arg(QKeySequence(Qt::Key_BracketLeft).toString(QKeySequence::NativeText),
+                 QKeySequence(Qt::Key_BracketRight).toString(QKeySequence::NativeText),
+                 QKeySequence(Qt::Key_M).toString(QKeySequence::NativeText),
+                 QKeySequence(Qt::Key_C).toString(QKeySequence::NativeText)));
 
     // Add a status bar to show the state of the source video file
     ui->statusBar->addWidget(&sourceVideoStatus);
@@ -1674,11 +1669,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     connect(chromaDecoderConfigDialog, &ChromaDecoderConfigDialog::videoLevelsChanged, this, &MainWindow::videoLevelsChangedSignalHandler);
 
     // Connect to the TbcSource signals (busy and finished loading)
-    connect(&tbcSource, &TbcSource::busy, this, &MainWindow::on_busy);
-    connect(&tbcSource, &TbcSource::finishedLoading, this, &MainWindow::on_finishedLoading);
-    connect(&tbcSource, &TbcSource::finishedSaving, this, &MainWindow::on_finishedSaving);
+    connect(&tbcSource, &TbcSource::busy, this, &MainWindow::onSourceBusy);
+    connect(&tbcSource, &TbcSource::finishedLoading, this, &MainWindow::onSourceLoaded);
+    connect(&tbcSource, &TbcSource::finishedSaving, this, &MainWindow::onSourceSaved);
     connect(&asyncFrameRenderWatcher, &QFutureWatcher<QImage>::finished,
-            this, &MainWindow::on_asyncFrameRenderFinished);
+            this, &MainWindow::onAsyncFrameRenderFinished);
 
     // Load the window geometry and settings from the configuration
     const QByteArray savedMainGeometry = configuration.getMainWindowGeometry();
@@ -1703,6 +1698,8 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     closedCaptionDialog->restoreGeometry(configuration.getClosedCaptionDialogGeometry());
     videoParametersDialog->restoreGeometry(configuration.getVideoParametersDialogGeometry());
     chromaDecoderConfigDialog->restoreGeometry(configuration.getChromaDecoderConfigDialogGeometry());
+    fieldTimingDialog->restoreGeometry(configuration.getFieldTimingDialogGeometry());
+    waveformMonitorDialog->setPhosphorMode(configuration.getWaveformPhosphorMode());
 
     // Load view options from configuration
     resizeFrameWithWindow = configuration.getResizeFrameWithWindow();
@@ -1837,6 +1834,8 @@ MainWindow::~MainWindow()
     configuration.setClosedCaptionDialogGeometry(closedCaptionDialog->saveGeometry());
     configuration.setVideoParametersDialogGeometry(videoParametersDialog->saveGeometry());
     configuration.setChromaDecoderConfigDialogGeometry(chromaDecoderConfigDialog->saveGeometry());
+    configuration.setFieldTimingDialogGeometry(fieldTimingDialog->saveGeometry());
+    configuration.setWaveformPhosphorMode(waveformMonitorDialog->phosphorMode());
     configuration.writeConfiguration();
 
     // Close the source video if open
@@ -1844,12 +1843,6 @@ MainWindow::~MainWindow()
         tbcSource.unloadSource();
     }
     cleanupTempMetadataFile();
-    if (teletextViewerDialog) {
-        teletextViewerDialog->close();
-        delete teletextViewerDialog;
-        teletextViewerDialog = nullptr;
-    }
-
     delete ui;
 }
 
@@ -1948,6 +1941,13 @@ bool MainWindow::event(QEvent *event)
 
     const bool baseHandled = QMainWindow::event(event);
 
+    // The window's modified flag is the one record of unsaved metadata edits
+    // (it also puts the [*] marker in the title); Save follows it.
+    if (event && event->type() == QEvent::ModifiedChange) {
+        ui->actionSave_Metadata->setEnabled(tbcSource.getIsSourceLoaded() && isWindowModified());
+        updateMetadataStatusPanel();
+    }
+
     if (event && (event->type() == QEvent::PaletteChange
                   || event->type() == QEvent::StyleChange)) {
         if (!themeRefreshPending) {
@@ -1964,9 +1964,15 @@ bool MainWindow::event(QEvent *event)
 
 // Update GUI methods for when TBC source files are loaded and unloaded -----------------------------------------------
 
-// Enable or disable all the GUI controls
+// Enable or disable the GUI controls for whether a source is loaded
+// ("enabled"). This is the one place their enabled state is decided: an
+// action that can't work in the current state is disabled here, not refused
+// after it is chosen. Metadata-only sources have no pictures, so everything
+// that needs video data also needs !metadataOnly.
 void MainWindow::setGuiEnabled(bool enabled)
 {
+    const bool video = enabled && !tbcSource.getIsMetadataOnly();
+
     // Enable the field/frame controls
     ui->posNumberSpinBox->setEnabled(enabled);
     if (ui->posTimecodeLineEdit) {
@@ -1980,16 +1986,24 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->posHorizontalSlider->setEnabled(enabled);
     ui->mediaControl_frame->setEnabled(enabled);
 
-    // Enable menu options
-    ui->actionLine_scope->setEnabled(enabled);
-    ui->actionRGB_scope->setEnabled(enabled);
-    ui->actionYUV_range_scope->setEnabled(enabled);
-    ui->actionVectorscope->setEnabled(enabled);
-    ui->actionField_timing_scope->setEnabled(enabled);
+    // Enable menu options: those that need pictures
+    ui->actionLine_scope->setEnabled(video);
+    ui->actionRGB_scope->setEnabled(video);
+    ui->actionYUV_range_scope->setEnabled(video);
+    ui->actionVectorscope->setEnabled(video);
+    ui->actionWaveform_monitor->setEnabled(video);
+    ui->actionField_timing_scope->setEnabled(video);
+    ui->actionSave_frame_as_PNG->setEnabled(video);
+    ui->actionSave_frame_as_PNG_with_options->setEnabled(video);
+    if (saveAllModesPngAction) {
+        saveAllModesPngAction->setEnabled(video);
+    }
+    if (copyCurrentDisplayAction) {
+        copyCurrentDisplayAction->setEnabled(video);
+    }
+
+    // ... and those that need a source or its metadata
     ui->actionVBI->setEnabled(enabled);
-    ui->actionNTSC->setEnabled(enabled);
-    ui->actionVideo_metadata->setEnabled(enabled);
-    ui->actionVITS_Metrics->setEnabled(enabled);
     ui->actionZoom_In->setEnabled(enabled);
     ui->actionZoom_Out->setEnabled(enabled);
     ui->actionZoom_1x->setEnabled(enabled);
@@ -1999,15 +2013,9 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->actionVisible_Dropout_analysis->setEnabled(enabled);
     ui->actionSNR_analysis->setEnabled(enabled); // Black SNR
     ui->actionWhite_SNR_analysis->setEnabled(enabled);
-    ui->actionSave_frame_as_PNG->setEnabled(enabled);
-    ui->actionSave_frame_as_PNG_with_options->setEnabled(enabled);
-    if (saveAllModesPngAction) {
-        saveAllModesPngAction->setEnabled(enabled);
-    }
-    if (copyCurrentDisplayAction) {
-        copyCurrentDisplayAction->setEnabled(enabled);
-    }
     ui->actionClosed_Captions->setEnabled(enabled);
+    ui->actionFix_JSON_SNR->setEnabled(enabled);
+    ui->actionMetadata_Editor->setEnabled(enabled);
     ui->actionVideo_parameters->setEnabled(enabled);
     ui->actionChroma_decoder_configuration->setEnabled(enabled);
     ui->actionReload_TBC->setEnabled(enabled);
@@ -2015,14 +2023,15 @@ void MainWindow::setGuiEnabled(bool enabled)
     if (notesViewerAction) {
         notesViewerAction->setEnabled(enabled);
     }
+    // The viewer's key actions (including the Marker and Segments viewers)
+    for (const auto &entry : std::as_const(viewerKeyActions)) {
+        entry.first->setEnabled(enabled);
+    }
 
-    // "Save Metadata" should be disabled by default
-    ui->actionSave_Metadata->setEnabled(false);
+    // "Save Metadata" is available while there are unsaved edits
+    ui->actionSave_Metadata->setEnabled(enabled && isWindowModified());
 
-    // Set zoom button states
-    ui->zoomInPushButton->setEnabled(enabled);
-    ui->zoomOutPushButton->setEnabled(enabled);
-    ui->originalSizePushButton->setEnabled(enabled);
+    // (The zoom buttons follow their actions above)
     if (vectorscopeSelectionPushButton) {
         vectorscopeSelectionPushButton->setEnabled(enabled);
     }
@@ -2067,13 +2076,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
         if (event->type() == QEvent::MouseMove) {
             const auto *mouseEvent = static_cast<QMouseEvent *>(event);
-            QPoint globalPos;
-            if (watchingImageLabel) {
-                globalPos = ui->imageViewerLabel->mapToGlobal(mouseEvent->pos());
-            } else {
-                globalPos = ui->scrollArea->viewport()->mapToGlobal(mouseEvent->pos());
-            }
-            const QPoint viewerPos = ui->imageViewerLabel->mapFromGlobal(globalPos);
+            const QPoint viewerPos = ui->imageViewerLabel->mapFromGlobal(mouseEvent->globalPosition().toPoint());
             updateCursorReadout(viewerPos);
             if (exportBoundaryDragHandle == ExportBoundaryHandle::None) {
                 updateExportBoundaryHoverCursor(viewerPos);
@@ -2083,14 +2086,13 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 return QMainWindow::eventFilter(watched, event);
             }
             const auto *wheelEvent = static_cast<QWheelEvent *>(event);
-            const int rawDelta = (wheelEvent->angleDelta().y() != 0)
-                                     ? wheelEvent->angleDelta().y()
-                                     : wheelEvent->pixelDelta().y();
-            if (rawDelta == 0) {
-                return QMainWindow::eventFilter(watched, event);
+            // One step per whole notch: a touchpad's small deltas add up
+            exportBoundaryWheelRemainder += wheelEvent->angleDelta().y();
+            const int notches = exportBoundaryWheelRemainder / 120;
+            exportBoundaryWheelRemainder -= notches * 120;
+            for (int step = 0; step < qAbs(notches); ++step) {
+                applyExportBoundaryWheelStep(notches > 0 ? -1 : 1);
             }
-            const qint32 step = (rawDelta > 0) ? -1 : 1;
-            applyExportBoundaryWheelStep(step);
             updateExportBoundaryHoverCursor(QPoint(-1, -1));
             event->accept();
             return true;
@@ -2109,13 +2111,7 @@ bool MainWindow::mapViewerToSourceCoordinates(const QPoint &viewerPoint, qint32 
         return false;
     }
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const QPixmap viewerPixmap = ui->imageViewerLabel->pixmap();
-#elif QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    const QPixmap viewerPixmap = ui->imageViewerLabel->pixmap(Qt::ReturnByValue);
-#else
-    const QPixmap viewerPixmap = *(ui->imageViewerLabel->pixmap());
-#endif
     // viewerPoint and QLabel::width()/height() are logical (device-independent)
     // pixels, but QPixmap::width()/height() are device pixels. On a HiDPI or
     // fractionally-scaled display the two differ, so the pixmap's logical size
@@ -2239,9 +2235,8 @@ void MainWindow::dropEvent(QDropEvent *event)
     event->acceptProposedAction();
     if (isTeletextStreamInputExtension(droppedFile)) {
         if (!teletextViewerDialog) {
-            teletextViewerDialog = new TeletextViewerDialog(nullptr);
+            teletextViewerDialog = new TeletextViewerDialog(this);
             teletextViewerDialog->setConfiguration(&configuration);
-            teletextViewerDialog->setWindowFlag(Qt::Window, true);
         }
         QString errorMessage;
         if (!teletextViewerDialog->openTeletextStream(droppedFile, &errorMessage)) {
@@ -2251,9 +2246,7 @@ void MainWindow::dropEvent(QDropEvent *event)
                                      : errorMessage);
             return;
         }
-        teletextViewerDialog->show();
-        teletextViewerDialog->raise();
-        teletextViewerDialog->activateWindow();
+        showOrRaise(teletextViewerDialog);
         if (statusBar()) {
             statusBar()->showMessage(tr("Opened teletext stream: %1").arg(droppedFile), 5000);
         }
@@ -2271,11 +2264,13 @@ void MainWindow::requestSourceOpen(const QString &inputFileName)
         return;
     }
 
+    // Opening, reloading or dropping a file replaces the loaded metadata
+    if (!maybeSave([this, normalizedInputFileName]() { requestSourceOpen(normalizedInputFileName); })) {
+        return;
+    }
+
     lastFilename = normalizedInputFileName;
-    const bool busy = sourceOperationInProgress
-                      || (busyDialog && busyDialog->isVisible())
-                      || !isEnabled();
-    if (busy) {
+    if (sourceOperationInProgress) {
         pendingSourceOpenFilename = normalizedInputFileName;
         return;
     }
@@ -2289,10 +2284,7 @@ void MainWindow::processPendingSourceOpenRequest()
         return;
     }
 
-    const bool busy = sourceOperationInProgress
-                      || (busyDialog && busyDialog->isVisible())
-                      || !isEnabled();
-    if (busy) {
+    if (sourceOperationInProgress) {
         return;
     }
 
@@ -2320,7 +2312,7 @@ void MainWindow::resetGui()
         ui->posTimecodeLineEdit->setVisible(true);
     }
     ui->posHorizontalSlider->setValue(1);
-   (this->width() >= 930) ? ui->dropoutsPushButton->setText(tr("Dropouts Off")) : ui->dropoutsPushButton->setText(tr("Drop N"));
+    ui->dropoutsPushButton->setChecked(tbcSource.getHighlightDropouts());
 
     setViewValues();
 
@@ -2337,12 +2329,7 @@ void MainWindow::resetGui()
     displayAspectRatio = true;
     updateAspectPushButton();
     updateSourcesPushButton();
-    if (this->width() > 1000)
-		ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-	else if (this->width() >= 930)
-		ui->fieldOrderPushButton->setText(tr("Normal order"));
-	else
-		ui->fieldOrderPushButton->setText(tr("Normal"));
+    ui->fieldOrderPushButton->setChecked(tbcSource.getFieldOrder());
 
     // Zoom button options
     ui->zoomInPushButton->setAutoRepeat(true);
@@ -2373,17 +2360,6 @@ void MainWindow::updateGuiLoaded()
     // Enable the GUI controls
     setGuiEnabled(true);
     setPlaybackRunning(false);
-    const bool metadataOnly = tbcSource.getIsMetadataOnly();
-
-    if (metadataOnly) {
-        ui->actionSave_frame_as_PNG->setEnabled(false);
-        ui->actionSave_frame_as_PNG_with_options->setEnabled(false);
-        ui->actionLine_scope->setEnabled(false);
-        ui->actionRGB_scope->setEnabled(false);
-        ui->actionYUV_range_scope->setEnabled(false);
-        ui->actionVectorscope->setEnabled(false);
-        ui->actionField_timing_scope->setEnabled(false);
-    }
 
     // Update the status bar readout
     updateBottomStatusReadout();
@@ -2406,12 +2382,6 @@ void MainWindow::updateGuiLoaded()
                                                 tbcSource.getSourceMode(),
                                                 false); // set to false to init the chroma decoder selection
     chromaDecoderConfigDialog->setVideoLevels(tbcSource.getVideoParameters());
-
-    // Ensure the busy dialogue is hidden
-    busyDialog->hide();
-
-    // Disable "Save Metadata", now we've loaded the metadata into the GUI
-    ui->actionSave_Metadata->setEnabled(false);
 
     // Keep load-time sizing stable: either fit frame to existing window, or
     // resize window to image size (legacy auto-resize behavior), but not both.
@@ -2455,7 +2425,8 @@ void MainWindow::updateGuiUnloaded()
     ui->posHorizontalSlider->setValue(1);
 
     // Set the window title
-    this->setWindowTitle(tr("tbc-analyse"));
+    setWindowFilePath(QString());
+    setWindowTitle(tr("tbc-analyse[*]"));
 
     // Set the status bar text
     sourceVideoStatus.setText(tr("No source video file loaded"));
@@ -2465,16 +2436,11 @@ void MainWindow::updateGuiUnloaded()
 
     // Set option button states
     updateVideoPushButton();
-    (this->width() >= 930) ? ui->dropoutsPushButton->setText(tr("Dropouts Off")) : ui->dropoutsPushButton->setText(tr("Drop N"));
+    ui->dropoutsPushButton->setChecked(false);
     displayAspectRatio = false;
     updateAspectPushButton();
     updateSourcesPushButton();
-    if (this->width() > 1000)
-		ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-	else if (this->width() >= 930)
-		ui->fieldOrderPushButton->setText(tr("Normal order"));
-	else
-		ui->fieldOrderPushButton->setText(tr("Normal"));
+    ui->fieldOrderPushButton->setChecked(false);
 
     // Hide the displayed image
     hideImage();
@@ -2539,7 +2505,7 @@ void MainWindow::updateAspectPushButton()
     if (!displayAspectRatio) {
         ui->aspectPushButton->setText(tr("SAR 1:1"));
     } else if (tbcSource.getIsWidescreen()) {
-        (this->width() >= 1020) ? ui->aspectPushButton->setText(tr("DAR 16:9")) : ui->aspectPushButton->setText(tr("16:9"));
+        ui->aspectPushButton->setText(tr("DAR 16:9"));
     } else {
         ui->aspectPushButton->setText(tr("DAR 4:3"));
     }
@@ -2558,39 +2524,22 @@ void MainWindow::updateSourcesPushButton()
 		return;
 	}
 	
-	if (this->width() >= 930)
-	{
-		switch (tbcSource.getSourceMode()) {
-		case TbcSource::ONE_SOURCE:
-			// This case should not be reached due to early return above
-			break;
-		case TbcSource::LUMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("Y Source"));
-			break;
-		case TbcSource::CHROMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("C Source"));
-			break;
-		case TbcSource::BOTH_SOURCES:
-			ui->sourcesPushButton->setText(tr("Y/C Sources"));
-			break;
-		}
-	}
-	else
-	{
-		switch (tbcSource.getSourceMode()) {
-		case TbcSource::ONE_SOURCE:
-			// This case should not be reached due to early return above
-			break;
-		case TbcSource::LUMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("Y"));
-			break;
-		case TbcSource::CHROMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("C"));
-			break;
-		case TbcSource::BOTH_SOURCES:
-			ui->sourcesPushButton->setText(tr("Y/C"));
-			break;
-		}
+	switch (tbcSource.getSourceMode()) {
+	case TbcSource::ONE_SOURCE:
+		// This case should not be reached due to early return above
+		break;
+	case TbcSource::LUMA_SOURCE:
+		ui->sourcesPushButton->setText(tr("Y"));
+		ui->sourcesPushButton->setToolTip(tr("Showing the Y (luma) source; click to switch sources"));
+		break;
+	case TbcSource::CHROMA_SOURCE:
+		ui->sourcesPushButton->setText(tr("C"));
+		ui->sourcesPushButton->setToolTip(tr("Showing the C (chroma) source; click to switch sources"));
+		break;
+	case TbcSource::BOTH_SOURCES:
+		ui->sourcesPushButton->setText(tr("Y/C"));
+		ui->sourcesPushButton->setToolTip(tr("Showing both Y/C sources; click to switch sources"));
+		break;
 	}
 	chromaDecoderConfigDialog->updateSourceMode(tbcSource.getSourceMode());
 }
@@ -2645,7 +2594,7 @@ void MainWindow::updateMetadataStatusPanel()
     data.ntscChromaWeight = formatOptionalDouble(videoParameters.ntscChromaWeight);
     data.ntscPhaseComp = formatOptionalBoolFromInt(videoParameters.ntscPhaseCompensation);
     data.palTransformThreshold = formatOptionalDouble(videoParameters.palTransformThreshold);
-    data.savePending = ui->actionSave_Metadata->isEnabled() ? QStringLiteral("Yes") : QStringLiteral("No");
+    data.savePending = isWindowModified() ? QStringLiteral("Yes") : QStringLiteral("No");
 
     metadataStatusDialog->updateStatus(data);
 }
@@ -2677,11 +2626,7 @@ void MainWindow::startAsyncFrameRender()
     asyncFrameRenderFrameNumber = currentFrameNumber;
     asyncFrameRenderFieldNumber = currentFieldNumber;
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    QFuture<QImage> renderFuture = QtConcurrent::run(&tbcSource, &TbcSource::getImage);
-#else
     QFuture<QImage> renderFuture = QtConcurrent::run(&TbcSource::getImage, &tbcSource);
-#endif
     asyncFrameRenderWatcher.setFuture(renderFuture);
 
     if (statusBar()) {
@@ -2689,7 +2634,7 @@ void MainWindow::startAsyncFrameRender()
     }
 }
 
-void MainWindow::on_asyncFrameRenderFinished()
+void MainWindow::onAsyncFrameRenderFinished()
 {
     asyncFrameRenderInProgress = false;
     if (!tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
@@ -2892,11 +2837,7 @@ QImage MainWindow::renderedCurrentFrameImage()
     } else if (!asyncFrameImage.isNull() && isCurrent()) {
         return asyncFrameImage;
     }
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    return waitWithProgress(this, QtConcurrent::run(&tbcSource, &TbcSource::getImage), label);
-#else
     return waitWithProgress(this, QtConcurrent::run(&TbcSource::getImage, &tbcSource), label);
-#endif
 }
 
 QImage MainWindow::renderedCurrentImageForExport()
@@ -3482,6 +3423,9 @@ void MainWindow::hideImage()
 // Load a TBC file based on the passed file name
 void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool preserveStatusDuringReload)
 {
+    // The current metadata is being replaced; callers have already offered to
+    // save any edits (maybeSave), or just saved them.
+    setWindowModified(false);
     setPlaybackRunning(false);
     if (asyncFrameRenderInProgress) {
         cancelInFlightAsyncFrameRender();
@@ -3535,10 +3479,9 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
         }
 
         if (metadataCandidate.isEmpty()) {
-            QMessageBox messageBox;
-            messageBox.warning(this, tr("Error"),
-                               tr("Metadata-only mode requires a .db or .json file. '%1' and '%2' were not found.")
-                               .arg(dbCandidate, jsonCandidate));
+            QMessageBox::warning(this, tr("Error"),
+                                 tr("Metadata-only mode requires a .db or .json file. '%1' and '%2' were not found.")
+                                 .arg(dbCandidate, jsonCandidate));
             return;
         }
 
@@ -3559,6 +3502,7 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
 
             // Keep reload behaviour aligned with the file the user selected.
             lastFilename = resolvedInput;
+            sourceOperationInProgress = true;
             tbcSource.loadSource(resolvedSourceFilename, resolvedInput);
             return;
         }
@@ -3576,11 +3520,13 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
         }
 
         lastFilename = metadataDisplayName;
+        sourceOperationInProgress = true;
         tbcSource.loadMetadata(resolvedInput, metadataDisplayName);
         return;
     }
 
     lastFilename = inputFileName;
+    sourceOperationInProgress = true;
     tbcSource.loadSource(inputFileName);
 
     // Note: loading continues in the background...
@@ -3934,13 +3880,13 @@ void MainWindow::setPlaybackRunning(bool running)
 
     if (playbackRunning) {
         playbackTickCarryMs = 0.0;
-        ensureSvgButtonIcon(ui->playPushButton, QStringLiteral(":/icons/Graphics/stop-playback.svg"));
+        ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/stop-playback.svg")));
         ui->playPushButton->setToolTip(tr("Stop playback"));
         scheduleNextPlaybackTick();
         return;
     }
 
-    ensureSvgButtonIcon(ui->playPushButton, QStringLiteral(":/icons/Graphics/start-playback.svg"));
+    ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/start-playback.svg")));
     ui->playPushButton->setToolTip(playbackStartToolTip());
 }
 
@@ -4025,52 +3971,17 @@ void MainWindow::setViewValues()
     qint32 currentNumber, maximum;
     QString buttonLabel, spinLabel;
 
-	if (this->width() >= 930)
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			currentNumber = currentFieldNumber;
-			maximum = tbcSource.getNumberOfFields();
-			spinLabel = QString("Field #:");
-			if (tbcSource.getStretchField()) {
-				buttonLabel = QString("Field 2:1");
-			} else {
-				buttonLabel = QString("Field 1:1");
-			}
-		} else {
-			currentNumber = currentFrameNumber;
-			maximum = tbcSource.getNumberOfFrames();
-			spinLabel = QString("Frame #:");
-
-			if (tbcSource.getSplitViewEnabled()) {
-				buttonLabel = QString("Split View");
-			} else {
-				buttonLabel = QString("Frame View");
-			}
-		}
-	}
-	else
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			currentNumber = currentFieldNumber;
-			maximum = tbcSource.getNumberOfFields();
-			spinLabel = QString("Field #:");
-			if (tbcSource.getStretchField()) {
-				buttonLabel = QString("Field 2:1");
-			} else {
-				buttonLabel = QString("Field 1:1");
-			}
-		} else {
-			currentNumber = currentFrameNumber;
-			maximum = tbcSource.getNumberOfFrames();
-			spinLabel = QString("Frame #:");
-
-			if (tbcSource.getSplitViewEnabled()) {
-				buttonLabel = QString("Split");
-			} else {
-				buttonLabel = QString("Frame");
-			}
-		}
-	}
+    if (tbcSource.getFieldViewEnabled()) {
+        currentNumber = currentFieldNumber;
+        maximum = tbcSource.getNumberOfFields();
+        spinLabel = tr("Field #:");
+        buttonLabel = tbcSource.getStretchField() ? tr("Field 2:1") : tr("Field 1:1");
+    } else {
+        currentNumber = currentFrameNumber;
+        maximum = tbcSource.getNumberOfFrames();
+        spinLabel = tr("Frame #:");
+        buttonLabel = tbcSource.getSplitViewEnabled() ? tr("Split") : tr("Frame");
+    }
 
     ui->posNumberSpinBox->setMaximum(maximum);
     updatePositionEditorValue(currentNumber);
@@ -4129,12 +4040,8 @@ qint32 MainWindow::frameForSliderPosition(qint32 sliderPosition) const
 
 void MainWindow::updateTimelineMarkers()
 {
-    if (!timelineMarkerSlider) {
-        return;
-    }
-
     if (!tbcSource.getIsSourceLoaded()) {
-        timelineMarkerSlider->setMarkerFrames(-1, -1, {});
+        ui->posHorizontalSlider->setMarkerFrames(-1, -1, {});
         return;
     }
     const qint32 totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
@@ -4151,7 +4058,7 @@ void MainWindow::updateTimelineMarkers()
             notePositions.append(markerPosition);
         }
     }
-    timelineMarkerSlider->setMarkerFrames(inPosition, outPosition, notePositions);
+    ui->posHorizontalSlider->setMarkerFrames(inPosition, outPosition, notePositions);
 
     // Recording segments: a tick per boundary (with a tooltip), a tint over
     // noise, blank and disabled spans
@@ -4186,7 +4093,7 @@ void MainWindow::updateTimelineMarkers()
             }
         }
     }
-    timelineMarkerSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
+    ui->posHorizontalSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
 }
 
 qint32 MainWindow::sliderPositionForField(qint32 field) const
@@ -4267,7 +4174,7 @@ QString MainWindow::segmentSummaryText(const TbcMetaData::Segment &segment) cons
 void MainWindow::applySegmentEdit(const QVector<TbcMetaData::Segment> &segments, const QString &statusText)
 {
     tbcSource.setSegments(segments);
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
     updateMetadataStatusPanel();
     updateTimelineMarkers();
     updateBottomStatusReadout();
@@ -4380,9 +4287,7 @@ void MainWindow::showSegmentsViewer()
         return;
     }
     updateSegmentsViewerState();
-    segmentsViewerDialog->show();
-    segmentsViewerDialog->raise();
-    segmentsViewerDialog->activateWindow();
+    showOrRaise(segmentsViewerDialog);
 }
 
 void MainWindow::goToField(qint32 field)
@@ -4568,65 +4473,11 @@ void MainWindow::sanitizeCurrentPosition()
 bool MainWindow::runExternalToolWithProgress(const QString &program, const QStringList &arguments,
                                              const QString &toolDisplayName, QString *errorMessage)
 {
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(program, arguments);
-    QDialog progressDialog(this);
-    progressDialog.setWindowTitle(toolDisplayName);
-    progressDialog.setWindowModality(Qt::ApplicationModal);
-    progressDialog.setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::CustomizeWindowHint);
-    progressDialog.setMinimumWidth(540);
-
-    auto *dialogLayout = new QVBoxLayout(&progressDialog);
-    dialogLayout->setContentsMargins(14, 12, 14, 12);
-    dialogLayout->setSpacing(8);
-
-    auto *stageLabel = new QLabel(&progressDialog);
-    stageLabel->setWordWrap(true);
-    dialogLayout->addWidget(stageLabel);
-
-    auto *countsLabel = new QLabel(&progressDialog);
-    countsLabel->setWordWrap(true);
-    QFont countsFont = countsLabel->font();
-    countsFont.setStyleHint(QFont::TypeWriter);
-    countsLabel->setFont(countsFont);
-    dialogLayout->addWidget(countsLabel);
-
-    auto *percentLabel = new QLabel(&progressDialog);
-    percentLabel->setWordWrap(true);
-    dialogLayout->addWidget(percentLabel);
-
-    auto *progressBar = new QProgressBar(&progressDialog);
-    progressBar->setRange(0, 0);
-    progressBar->setTextVisible(true);
-    progressBar->setFormat(tr("Working..."));
-    dialogLayout->addWidget(progressBar);
-
-    auto *buttonRowLayout = new QHBoxLayout();
-    buttonRowLayout->addStretch(1);
-    auto *cancelButton = new QPushButton(tr("Cancel"), &progressDialog);
-    buttonRowLayout->addWidget(cancelButton);
-    dialogLayout->addLayout(buttonRowLayout);
-
     ExternalToolStage stage = ExternalToolStage::Starting;
     qint32 totalFields = 0;
     qint32 processedFields = 0;
     qint32 teletextProgressPercent = -1;
     QString lastOutputLine;
-    bool cancelRequested = false;
-    bool terminateSent = false;
-    QElapsedTimer cancelTimer;
-
-    connect(cancelButton, &QPushButton::clicked, &progressDialog, [&]() {
-        if (cancelRequested) {
-            return;
-        }
-        cancelRequested = true;
-        cancelButton->setEnabled(false);
-        stageLabel->setText(tr("%1: Cancel requested...").arg(toolDisplayName));
-        percentLabel->setText(tr("Cancelling..."));
-        QCoreApplication::processEvents();
-    });
 
     const QRegularExpression totalFieldsExpression(
         QStringLiteral("Using\\s+\\d+\\s+threads\\s+to\\s+process\\s+([0-9,]+)\\s+fields"),
@@ -4647,42 +4498,24 @@ bool MainWindow::runExternalToolWithProgress(const QString &program, const QStri
     const QRegularExpression ansiEscapeExpression(QStringLiteral("\\x1B\\[[0-9;]*[A-Za-z]"));
     const QRegularExpression teletextTqdmPercentExpression(QStringLiteral("(\\d{1,3})%\\|"));
 
-    auto updateProgressDialog = [&]() {
+    // The progress dialog's text and percentage for the current stage and counts
+    const auto describeProgress = [&](int *percent, QString *label) {
         const bool teletextStage = externalToolStageIsTeletext(stage);
-        int percent = 0;
-        bool hasDeterminateProgress = false;
-
         if (teletextStage && teletextProgressPercent >= 0) {
-            percent = qBound<qint32>(0, teletextProgressPercent, 100);
-            hasDeterminateProgress = true;
+            *percent = qBound<qint32>(0, teletextProgressPercent, 100);
         } else if (!teletextStage && totalFields > 0) {
-            percent = externalToolProgressPercent(processedFields, totalFields);
-            hasDeterminateProgress = true;
+            *percent = externalToolProgressPercent(processedFields, totalFields);
         }
-
-        if (hasDeterminateProgress) {
-            progressBar->setRange(0, 100);
-            progressBar->setValue(percent);
-            progressBar->setFormat(QStringLiteral("%p%"));
-        } else {
-            progressBar->setRange(0, 0);
-            progressBar->setFormat(tr("Working..."));
-        }
-        const QString progressLine = hasDeterminateProgress
-            ? tr("Progress: %1%").arg(percent)
-            : tr("Progress: --");
-        stageLabel->setText(externalToolStageLabel(toolDisplayName, stage));
+        QString counts = externalToolProgressSummary(processedFields, totalFields);
         if (teletextStage) {
-            countsLabel->setText(tr("%1\n%2")
-                                     .arg(externalToolProgressSummary(processedFields, totalFields),
-                                          externalToolTeletextProgressSummary(teletextProgressPercent)));
-        } else {
-            countsLabel->setText(externalToolProgressSummary(processedFields, totalFields));
+            counts += QLatin1Char('\n') + externalToolTeletextProgressSummary(teletextProgressPercent);
         }
-        percentLabel->setText(progressLine);
+        *label = externalToolStageLabel(toolDisplayName, stage) + QLatin1Char('\n') + counts;
     };
 
-    auto processOutputLine = [&](const QString &line) {
+    // Follow tbc-process-vbi's output: the stage it is in and its field counts
+    // (or, for the teletext export, tqdm's percentage)
+    const auto processOutputLine = [&](const QString &line, int *percent, QString *label) {
         QString normalizedLine = line;
         normalizedLine.remove(ansiEscapeExpression);
         const QString trimmedLine = normalizedLine.trimmed();
@@ -4798,105 +4631,47 @@ bool MainWindow::runExternalToolWithProgress(const QString &program, const QStri
             }
         }
 
-        updateProgressDialog();
+        describeProgress(percent, label);
     };
 
-    auto processOutputChunk = [&](const QByteArray &chunk, QByteArray &buffer) {
-        QByteArray normalizedChunk = chunk;
-        normalizedChunk.replace('\r', '\n');
-        buffer.append(normalizedChunk);
-        qsizetype newLineIndex = -1;
-        while ((newLineIndex = buffer.indexOf('\n')) != -1) {
-            QByteArray lineBytes = buffer.left(newLineIndex);
-            buffer.remove(0, newLineIndex + 1);
-            if (!lineBytes.isEmpty() && lineBytes.endsWith('\r')) {
-                lineBytes.chop(1);
-            }
-            processOutputLine(QString::fromLocal8Bit(lineBytes));
-        }
-    };
+    // A load or save must not start underneath the reprocessing; a file opened
+    // meanwhile is queued (requestSourceOpen)
+    sourceOperationInProgress = true;
+    ProcessProgressRunner::Options options;
+    options.onLine = processOutputLine;
+    options.interruptFirst = true; // tbc-process-vbi stops cleanly on SIGINT
+    int initialPercent = -1;
+    QString initialLabel;
+    describeProgress(&initialPercent, &initialLabel);
+    const ProcessProgressRunner::Result result =
+        ProcessProgressRunner::run(program, arguments, this, initialLabel, options);
+    sourceOperationInProgress = false;
 
-    updateProgressDialog();
-    progressDialog.show();
-    progressDialog.raise();
-    progressDialog.activateWindow();
-    QElapsedTimer progressVisibleTimer;
-    progressVisibleTimer.start();
-    QCoreApplication::processEvents();
-
-    if (!process.waitForStarted(5000)) {
-        progressDialog.close();
+    switch (result.status) {
+    case ProcessProgressRunner::Result::FailedToStart:
         if (errorMessage) {
             *errorMessage = tr("Unable to start %1.").arg(toolDisplayName.toLower());
         }
         return false;
-    }
-
-    QByteArray outputBuffer;
-    while (process.state() != QProcess::NotRunning) {
-        if (cancelRequested) {
-            if (!terminateSent) {
-#if defined(Q_OS_UNIX)
-                const qint64 processId = process.processId();
-                if (processId > 0) {
-                    ::kill(static_cast<pid_t>(processId), SIGINT);
-                } else {
-                    process.terminate();
-                }
-#else
-                process.terminate();
-#endif
-                terminateSent = true;
-                cancelTimer.start();
-            } else if (cancelTimer.isValid() && cancelTimer.elapsed() > 2000) {
-                process.kill();
-            }
-        }
-        process.waitForReadyRead(100);
-        const QByteArray outputChunk = process.readAllStandardOutput();
-        if (!outputChunk.isEmpty()) {
-            processOutputChunk(outputChunk, outputBuffer);
-        }
-        QCoreApplication::processEvents();
-    }
-
-    const QByteArray trailingChunk = process.readAllStandardOutput();
-    if (!trailingChunk.isEmpty()) {
-        processOutputChunk(trailingChunk, outputBuffer);
-    }
-    if (!outputBuffer.trimmed().isEmpty()) {
-        processOutputLine(QString::fromLocal8Bit(outputBuffer));
-    }
-
-    stage = ExternalToolStage::Finishing;
-    if (totalFields > 0) {
-        processedFields = totalFields;
-    }
-    teletextProgressPercent = qMax<qint32>(teletextProgressPercent, 100);
-    updateProgressDialog();
-    QCoreApplication::processEvents();
-    constexpr qint64 minimumVisibleMilliseconds = 700;
-    const qint64 visibleMilliseconds = progressVisibleTimer.elapsed();
-    if (visibleMilliseconds < minimumVisibleMilliseconds) {
-        QEventLoop delayLoop;
-        QTimer::singleShot(static_cast<int>(minimumVisibleMilliseconds - visibleMilliseconds),
-                           &delayLoop, &QEventLoop::quit);
-        delayLoop.exec();
-    }
-    progressDialog.close();
-
-    if (cancelRequested) {
+    case ProcessProgressRunner::Result::Cancelled:
         if (errorMessage) {
             *errorMessage = tr("%1 cancelled by user.").arg(toolDisplayName);
         }
         return false;
+    case ProcessProgressRunner::Result::DidNotFinish:
+        if (errorMessage) {
+            *errorMessage = tr("%1 did not finish.").arg(toolDisplayName);
+        }
+        return false;
+    case ProcessProgressRunner::Result::Finished:
+        break;
     }
 
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
         if (errorMessage) {
             *errorMessage = !lastOutputLine.isEmpty()
                 ? lastOutputLine
-                : tr("%1 failed with exit code %2.").arg(toolDisplayName).arg(process.exitCode());
+                : tr("%1 failed with exit code %2.").arg(toolDisplayName).arg(result.exitCode);
         }
         return false;
     }
@@ -5038,20 +4813,15 @@ void MainWindow::on_actionExit_triggered()
 {
     tbcDebugStream() << "MainWindow::on_actionExit_triggered(): Called";
 
-    // Quit the application
-    qApp->quit();
+    // Close the main window like the title-bar button: closeEvent() offers to
+    // save unsaved metadata edits, and the application quits once it closes.
+    close();
 }
 
 // Load a TBC file based on the file selection from the GUI
 void MainWindow::on_actionOpen_TBC_file_triggered()
 {
     tbcDebugStream() << "MainWindow::on_actionOpen_TBC_file_triggered(): Called";
-    if (busyDialog && busyDialog->isVisible()) {
-        busyDialog->hide();
-    }
-    if (!isEnabled()) {
-        setEnabled(true);
-    }
     QString startPath = configuration.getSourceDirectory();
     QFileInfo startPathInfo(startPath);
     if (startPath.isEmpty() || !startPathInfo.exists()) {
@@ -5067,9 +4837,6 @@ void MainWindow::on_actionOpen_TBC_file_triggered()
             << tr("All Files (*)");
 
     QString inputFileName;
-#if defined(Q_OS_MACOS)
-    inputFileName = chooseFileViaAppleScript(startPath);
-#else
     QFileDialog fileDialog(this, tr("Open TBC/metadata file"), startPath);
     fileDialog.setFileMode(QFileDialog::ExistingFile);
     fileDialog.setNameFilters(filters);
@@ -5081,7 +4848,6 @@ void MainWindow::on_actionOpen_TBC_file_triggered()
             inputFileName = selectedFiles.first();
         }
     }
-#endif
 
     // Remember where the user browsed to as soon as they pick something. The
     // source directory used to be written only after a load succeeded, so an
@@ -5122,17 +4888,13 @@ void MainWindow::on_actionMetadata_Conversion_triggered()
         defaultInput = tbcSource.getCurrentMetadataFilename();
     }
     metadataConversionDialog->setDefaultInput(defaultInput);
-    metadataConversionDialog->show();
-    metadataConversionDialog->raise();
-    metadataConversionDialog->activateWindow();
+    showOrRaise(metadataConversionDialog);
 }
 
 void MainWindow::on_actionMetadata_Status_triggered()
 {
     updateMetadataStatusPanel();
-    metadataStatusDialog->show();
-    metadataStatusDialog->raise();
-    metadataStatusDialog->activateWindow();
+    showOrRaise(metadataStatusDialog);
 }
 void MainWindow::on_actionExport_Decode_Metadata_triggered()
 {
@@ -5172,18 +4934,10 @@ void MainWindow::on_actionExport_Decode_Metadata_triggered()
 
     if (!metadataExportDialog) {
         metadataExportDialog = new MetadataExportDialog(this);
-        metadataExportDialog->setModal(false);
-        metadataExportDialog->setWindowModality(Qt::NonModal);
-        metadataExportDialog->setWindowFlag(Qt::Dialog, true);
-        metadataExportDialog->setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-        metadataExportDialog->setWindowFlag(Qt::WindowMinimizeButtonHint, false);
         connect(metadataExportDialog, &QObject::destroyed, this, [this]() {
             metadataExportDialog = nullptr;
         });
     }
-
-    metadataExportDialog->setModal(false);
-    metadataExportDialog->setWindowModality(Qt::NonModal);
     metadataExportDialog->setExportExecutablePath(toolPath);
 
     const QString sourceDirectory = configuration.getSourceDirectory();
@@ -5194,15 +4948,7 @@ void MainWindow::on_actionExport_Decode_Metadata_triggered()
         metadataExportDialog->setDefaultInputFile(defaultInput);
     }
 
-    if (!metadataExportDialog->windowHandle()) {
-        metadataExportDialog->winId();
-    }
-    if (metadataExportDialog->windowHandle() && windowHandle()) {
-        metadataExportDialog->windowHandle()->setTransientParent(windowHandle());
-    }
-    metadataExportDialog->show();
-    metadataExportDialog->raise();
-    metadataExportDialog->activateWindow();
+    showOrRaise(metadataExportDialog);
 
     if (!defaultInput.isEmpty()) {
         statusBar()->showMessage(tr("Opened Metadata Export GUI with %1").arg(defaultInput), 5000);
@@ -5213,6 +4959,11 @@ void MainWindow::on_actionExport_Decode_Metadata_triggered()
 
 void MainWindow::on_actionProcess_VBI_triggered()
 {
+    // Processing rewrites the metadata on disk and reloads it
+    if (!maybeSave([this]() { on_actionProcess_VBI_triggered(); })) {
+        return;
+    }
+
     QString defaultInput;
     if (tbcSource.getIsSourceLoaded()) {
         defaultInput = tbcSource.getCurrentSourceFilename();
@@ -5227,14 +4978,10 @@ void MainWindow::on_actionProcess_VBI_triggered()
 
     if (inputFileName.isEmpty()) {
         const QString startPath = defaultInput.isEmpty() ? configuration.getSourceDirectory() : defaultInput;
-#if defined(Q_OS_MACOS)
-        inputFileName = chooseFileViaAppleScript(startPath);
-#else
         inputFileName = QFileDialog::getOpenFileName(this,
                                                      tr("Select TBC file for VBI processing"),
                                                      startPath,
                                                      tr("TBC files (*.tbc *.ytbc *.ctbc *.tbcy *.tbcc);;All Files (*)"));
-#endif
     }
     if (inputFileName.isEmpty()) {
         return;
@@ -5375,16 +5122,13 @@ void MainWindow::on_actionProcess_VBI_triggered()
         });
         if (!autoTeletextDirectory.isEmpty()) {
             if (!teletextViewerDialog) {
-                teletextViewerDialog = new TeletextViewerDialog(nullptr);
+                teletextViewerDialog = new TeletextViewerDialog(this);
                 teletextViewerDialog->setConfiguration(&configuration);
-                teletextViewerDialog->setWindowFlag(Qt::Window, true);
             }
             if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
                 teletextViewerDialog->setDirectory(autoTeletextDirectory);
             }
-            teletextViewerDialog->show();
-            teletextViewerDialog->raise();
-            teletextViewerDialog->activateWindow();
+            showOrRaise(teletextViewerDialog);
         }
     }
     if (reloadingCurrentSource) {
@@ -5404,6 +5148,11 @@ void MainWindow::on_actionProcess_VBI_triggered()
 
 void MainWindow::on_actionFix_JSON_SNR_triggered()
 {
+    // Fixing rewrites the metadata on disk and reloads it
+    if (!maybeSave([this]() { on_actionFix_JSON_SNR_triggered(); })) {
+        return;
+    }
+
     const auto isMetadataFile = [](const QString &filename) {
         return filename.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)
                || filename.endsWith(QStringLiteral(".db"), Qt::CaseInsensitive);
@@ -5591,18 +5340,12 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
 
     if (!audioAlignmentDialog) {
         audioAlignmentDialog = new AudioAlignmentDialog(this);
-        audioAlignmentDialog->setModal(false);
-        audioAlignmentDialog->setWindowModality(Qt::NonModal);
         audioAlignmentDialog->setWindowFlags(Qt::Window
                                              | Qt::CustomizeWindowHint
                                              | Qt::WindowTitleHint
                                              | Qt::WindowSystemMenuHint
                                              | Qt::WindowMinimizeButtonHint
                                              | Qt::WindowCloseButtonHint);
-        audioAlignmentDialog->setAttribute(Qt::WA_TranslucentBackground, false);
-        audioAlignmentDialog->setAttribute(Qt::WA_NoSystemBackground, false);
-        audioAlignmentDialog->setAutoFillBackground(true);
-        audioAlignmentDialog->setWindowOpacity(1.0);
         connect(audioAlignmentDialog, &QObject::destroyed, this, [this]() {
             audioAlignmentDialog = nullptr;
         });
@@ -5622,9 +5365,6 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
                                      5000);
         });
     }
-    audioAlignmentDialog->setModal(false);
-    audioAlignmentDialog->setWindowModality(Qt::NonModal);
-    audioAlignmentDialog->setWindowOpacity(1.0);
 
     const QString sourceDirectory = configuration.getSourceDirectory();
     if (!sourceDirectory.isEmpty()) {
@@ -5644,12 +5384,7 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
         }
     }
 
-    audioAlignmentDialog->show();
-    if (audioAlignmentDialog->windowHandle() && windowHandle()) {
-        audioAlignmentDialog->windowHandle()->setTransientParent(windowHandle());
-    }
-    audioAlignmentDialog->raise();
-    audioAlignmentDialog->activateWindow();
+    showOrRaise(audioAlignmentDialog);
 
     if (!defaultJsonPath.isEmpty()) {
         statusBar()->showMessage(tr("Opened Auto Audio Align with %1").arg(defaultJsonPath), 5000);
@@ -5663,18 +5398,12 @@ void MainWindow::on_actionEFM_Handler_triggered()
     if (!efmHandlerDialog) {
         efmHandlerDialog = new EfmHandlerDialog(this);
         efmHandlerDialog->setConfiguration(&configuration);
-        efmHandlerDialog->setModal(false);
-        efmHandlerDialog->setWindowModality(Qt::NonModal);
         efmHandlerDialog->setWindowFlags(Qt::Window
                                          | Qt::CustomizeWindowHint
                                          | Qt::WindowTitleHint
                                          | Qt::WindowSystemMenuHint
                                          | Qt::WindowMinimizeButtonHint
                                          | Qt::WindowCloseButtonHint);
-        efmHandlerDialog->setAttribute(Qt::WA_TranslucentBackground, false);
-        efmHandlerDialog->setAttribute(Qt::WA_NoSystemBackground, false);
-        efmHandlerDialog->setAutoFillBackground(true);
-        efmHandlerDialog->setWindowOpacity(1.0);
         connect(efmHandlerDialog, &QObject::destroyed, this, [this]() {
             efmHandlerDialog = nullptr;
         });
@@ -5692,10 +5421,6 @@ void MainWindow::on_actionEFM_Handler_triggered()
                                              5000);
                 });
     }
-
-    efmHandlerDialog->setModal(false);
-    efmHandlerDialog->setWindowModality(Qt::NonModal);
-    efmHandlerDialog->setWindowOpacity(1.0);
 
     QString sourceDirectory = outputRootDirectoryForCurrentSource();
     if (sourceDirectory.isEmpty()) {
@@ -5721,12 +5446,7 @@ void MainWindow::on_actionEFM_Handler_triggered()
     }
     applyEfmHandlerAutoloads(sourceDirectory);
 
-    efmHandlerDialog->show();
-    if (efmHandlerDialog->windowHandle() && windowHandle()) {
-        efmHandlerDialog->windowHandle()->setTransientParent(windowHandle());
-    }
-    efmHandlerDialog->raise();
-    efmHandlerDialog->activateWindow();
+    showOrRaise(efmHandlerDialog);
     statusBar()->showMessage(tr("Opened EFM Handler. Configure EFM/AC3 stages and run the pipeline."), 5000);
 }
 
@@ -5759,9 +5479,50 @@ void MainWindow::on_actionLDS_Converter_triggered()
 // Start saving the modified metadata
 void MainWindow::on_actionSave_Metadata_triggered()
 {
+    sourceOperationInProgress = true;
     tbcSource.saveSourceMetadata();
 
     // Saving continues in the background...
+}
+
+// Before anything that would discard unsaved metadata edits (closing, opening
+// or reloading a source, reprocessing it), offer to save them. Returns true
+// when the caller may go ahead now. Choosing Save starts the (asynchronous)
+// save and returns false: continueAfterSave then runs once it has succeeded,
+// and nothing runs if it fails.
+bool MainWindow::maybeSave(std::function<void()> continueAfterSave)
+{
+    if (!isWindowModified()) {
+        return true;
+    }
+
+    const QMessageBox::StandardButton choice = QMessageBox::warning(
+        this, tr("Unsaved metadata changes"),
+        tr("The metadata of %1 has unsaved changes.\nDo you want to save them?")
+            .arg(tbcSource.getCurrentSourceFilename()),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    if (choice == QMessageBox::Discard) {
+        return true;
+    }
+    if (choice == QMessageBox::Save) {
+        afterSaveAction = std::move(continueAfterSave);
+        on_actionSave_Metadata_triggered();
+    }
+    return false;
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // A load or save is running on the worker thread; its busy dialog is up
+    if (sourceOperationInProgress) {
+        event->ignore();
+        return;
+    }
+    if (!maybeSave([this]() { close(); })) {
+        event->ignore();
+        return;
+    }
+    QMainWindow::closeEvent(event);
 }
 
 // Display the scan line oscilloscope view
@@ -5769,12 +5530,8 @@ void MainWindow::on_actionLine_scope_triggered()
 {
     if (tbcSource.getIsSourceLoaded()) {
         // Show the oscilloscope dialogue for the selected scan-line
-        if (!oscilloscopeDialog->isVisible()) {
-            oscilloscopeDialog->show();
-        }
+        showOrRaise(oscilloscopeDialog);
         updateOscilloscopeDialogue();
-        oscilloscopeDialog->raise();
-        oscilloscopeDialog->activateWindow();
     }
 }
 
@@ -5783,12 +5540,8 @@ void MainWindow::on_actionVectorscope_triggered()
 {
     if (tbcSource.getIsSourceLoaded()) {
         // Show the vectorscope dialogue
-        if (!vectorscopeDialog->isVisible()) {
-            vectorscopeDialog->show();
-        }
+        showOrRaise(vectorscopeDialog);
         updateVectorscopeDialogue();
-        vectorscopeDialog->raise();
-        vectorscopeDialog->activateWindow();
     }
 }
 
@@ -5796,12 +5549,8 @@ void MainWindow::on_actionVectorscope_triggered()
 void MainWindow::on_actionWaveform_monitor_triggered()
 {
     if (tbcSource.getIsSourceLoaded() && !tbcSource.getIsMetadataOnly()) {
-        if (!waveformMonitorDialog->isVisible()) {
-            waveformMonitorDialog->show();
-        }
+        showOrRaise(waveformMonitorDialog);
         updateWaveformMonitorDialogue();
-        waveformMonitorDialog->raise();
-        waveformMonitorDialog->activateWindow();
     }
 }
 
@@ -5811,12 +5560,8 @@ void MainWindow::on_actionRGB_scope_triggered()
     if (!tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
         return;
     }
-    if (!rgbScopeDialog->isVisible()) {
-        rgbScopeDialog->show();
-    }
+    showOrRaise(rgbScopeDialog);
     updateRgbScopeDialogue(true);
-    rgbScopeDialog->raise();
-    rgbScopeDialog->activateWindow();
 }
 
 // Display the YUV range scope pop-out view
@@ -5825,12 +5570,8 @@ void MainWindow::on_actionYUV_range_scope_triggered()
     if (!tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
         return;
     }
-    if (!yuvRangeDialog->isVisible()) {
-        yuvRangeDialog->show();
-    }
+    showOrRaise(yuvRangeDialog);
     updateYuvRangeScopeDialogue(true);
-    yuvRangeDialog->raise();
-    yuvRangeDialog->activateWindow();
 }
 
 // Display the field timing scope view
@@ -5838,9 +5579,7 @@ void MainWindow::on_actionField_timing_scope_triggered()
 {
     if (tbcSource.getIsSourceLoaded()) {
         updateFieldTimingDialogue();
-        fieldTimingDialog->show();
-        fieldTimingDialog->raise();
-        fieldTimingDialog->activateWindow();
+        showOrRaise(fieldTimingDialog);
     }
 }
 
@@ -5871,11 +5610,8 @@ void MainWindow::on_actionPluginManager_triggered()
     if (!pluginManagerDialog) {
         pluginManagerDialog = new PluginManagerDialog(this);
         pluginManagerDialog->setConfiguration(&configuration);
-        pluginManagerDialog->setWindowFlag(Qt::Window, true);
     }
-    pluginManagerDialog->show();
-    pluginManagerDialog->raise();
-    pluginManagerDialog->activateWindow();
+    showOrRaise(pluginManagerDialog);
 }
 
 // Show the Metadata Editor (Tools > Metadata Editor...)
@@ -5896,9 +5632,7 @@ void MainWindow::on_actionMetadata_Editor_triggered()
         const bool firstLineIsRed = (firstField >= 1) ? tbcSource.getSecamFirstLineIsRed(firstField) : false;
         metadataEditorDialog->setSecamFieldContext(firstField, firstLineIsRed, isSecamFamily);
     }
-    metadataEditorDialog->show();
-    metadataEditorDialog->raise();
-    metadataEditorDialog->activateWindow();
+    showOrRaise(metadataEditorDialog);
 }
 
 // Check for updates - manual trigger from the Help menu
@@ -6014,63 +5748,70 @@ void MainWindow::onUpdateCheckFailed(const QString &errorString)
         return;
     }
 
-    QMessageBox box(this);
-    box.setIcon(QMessageBox::Warning);
-    box.setWindowTitle(tr("Update check failed"));
-    box.setText(tr("Could not check for updates."));
-    box.setInformativeText(errorString + QStringLiteral("\n\n") +
+    // Window-modal and asynchronous: no nested event loop
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setIcon(QMessageBox::Warning);
+    box->setWindowTitle(tr("Update check failed"));
+    box->setText(tr("Could not check for updates."));
+    box->setInformativeText(errorString + QStringLiteral("\n\n") +
         tr("You can view the latest release in your browser instead."));
-    QPushButton *openButton = box.addButton(tr("Open releases page"), QMessageBox::AcceptRole);
-    box.addButton(QMessageBox::Close);
-    box.exec();
-    if (box.clickedButton() == openButton) {
-        QDesktopServices::openUrl(QUrl(UpdateChecker::releasesUrl()));
-    }
+    QPushButton *openButton = box->addButton(tr("Open releases page"), QMessageBox::AcceptRole);
+    box->addButton(QMessageBox::Close);
+    connect(box, &QMessageBox::finished, this, [box, openButton]() {
+        if (box->clickedButton() == openButton) {
+            QDesktopServices::openUrl(QUrl(UpdateChecker::releasesUrl()));
+        }
+    });
+    box->open();
 }
 
 void MainWindow::showUpdateAvailableDialog(const QString &latestVersion, const QString &releaseUrl, const QString &releaseName)
 {
     const QString currentVersion = TbcBuildInfo::version();
 
-    QMessageBox box(this);
-    box.setIcon(QMessageBox::Information);
-    box.setWindowTitle(tr("Update available"));
-    box.setText(tr("A new version of tbc-tools is available."));
+    // Window-modal and asynchronous: no nested event loop
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setIcon(QMessageBox::Information);
+    box->setWindowTitle(tr("Update available"));
+    box->setText(tr("A new version of tbc-tools is available."));
     QString info = tr("Installed: %1\nLatest: %2").arg(currentVersion, latestVersion);
     if (!releaseName.isEmpty()) {
         info += QStringLiteral("\n") + releaseName;
     }
     info += QStringLiteral("\n\n") + tr("Would you like to open the release page to download it?");
-    box.setInformativeText(info);
+    box->setInformativeText(info);
 
-    QPushButton *downloadButton = box.addButton(tr("Download"), QMessageBox::AcceptRole);
-    QPushButton *skipButton = box.addButton(tr("Skip this version"), QMessageBox::ActionRole);
-    QPushButton *laterButton = box.addButton(tr("Remind me later"), QMessageBox::RejectRole);
-    box.exec();
-
-    QAbstractButton *clicked = box.clickedButton();
-    if (clicked == downloadButton) {
-        const QUrl url(releaseUrl.isEmpty() ? UpdateChecker::releasesUrl() : releaseUrl);
-        if (!QDesktopServices::openUrl(url)) {
-            QMessageBox::warning(this, tr("Warning"),
-                tr("Could not open the release URL:\n%1").arg(url.toString()));
+    QPushButton *downloadButton = box->addButton(tr("Download"), QMessageBox::AcceptRole);
+    QPushButton *skipButton = box->addButton(tr("Skip this version"), QMessageBox::ActionRole);
+    // "Remind me later" is a no-op: the timestamp was already recorded, so it
+    // won't prompt again for a week.
+    box->addButton(tr("Remind me later"), QMessageBox::RejectRole);
+    connect(box, &QMessageBox::finished, this,
+            [this, box, downloadButton, skipButton, latestVersion, releaseUrl]() {
+        QAbstractButton *clicked = box->clickedButton();
+        if (clicked == downloadButton) {
+            const QUrl url(releaseUrl.isEmpty() ? UpdateChecker::releasesUrl() : releaseUrl);
+            if (!QDesktopServices::openUrl(url)) {
+                QMessageBox::warning(this, tr("Warning"),
+                    tr("Could not open the release URL:\n%1").arg(url.toString()));
+            }
+        } else if (clicked == skipButton) {
+            configuration.setSkippedUpdateVersion(latestVersion);
+            configuration.writeConfiguration();
+            if (statusBar()) {
+                statusBar()->showMessage(tr("Skipped version %1. You can still check manually via Help > Check for Updates.").arg(latestVersion), 6000);
+            }
         }
-    } else if (clicked == skipButton) {
-        configuration.setSkippedUpdateVersion(latestVersion);
-        configuration.writeConfiguration();
-        if (statusBar()) {
-            statusBar()->showMessage(tr("Skipped version %1. You can still check manually via Help > Check for Updates.").arg(latestVersion), 6000);
-        }
-    } else if (clicked == laterButton) {
-        // No-op; the timestamp was already recorded so it won't prompt again for a week.
-    }
+    });
+    box->open();
 }
 void MainWindow::on_actionTeletext_Viewer_triggered()
 {
     if (!teletextViewerDialog) {
-        teletextViewerDialog = new TeletextViewerDialog(nullptr);
+        teletextViewerDialog = new TeletextViewerDialog(this);
         teletextViewerDialog->setConfiguration(&configuration);
-        teletextViewerDialog->setWindowFlag(Qt::Window, true);
     }
     const QString suggestedDirectory = resolveTeletextHtmlDirectoryFromHints({
         tbcSource.getCurrentSourceFilename(),
@@ -6083,9 +5824,7 @@ void MainWindow::on_actionTeletext_Viewer_triggered()
         teletextViewerDialog->setDirectory(suggestedDirectory);
     }
 
-    teletextViewerDialog->show();
-    teletextViewerDialog->raise();
-    teletextViewerDialog->activateWindow();
+    showOrRaise(teletextViewerDialog);
 }
 
 // Show the VBI window
@@ -6414,7 +6153,7 @@ void MainWindow::copyCurrentFrameToClipboard()
     statusBar()->showMessage(tr("Copied current frame to clipboard."), 3000);
 }
 
-void MainWindow::on_actionCopy_current_display_to_clipboard_triggered()
+void MainWindow::copyCurrentDisplayToClipboard()
 {
     if (!tbcSource.getIsSourceLoaded()) {
         statusBar()->showMessage(tr("No source loaded to copy."), 3000);
@@ -6438,7 +6177,7 @@ void MainWindow::on_actionCopy_current_display_to_clipboard_triggered()
     copyCurrentFrameToClipboard();
 }
 
-void MainWindow::on_actionSave_all_modes_as_PNGs_triggered()
+void MainWindow::saveAllModesAsPngs()
 {
     if (!tbcSource.getIsSourceLoaded()) {
         QMessageBox::warning(this, tr("Warning"), tr("No source file loaded."));
@@ -6460,12 +6199,11 @@ void MainWindow::on_actionSave_all_modes_as_PNGs_triggered()
     if (QPushButton *defaultButton = qobject_cast<QPushButton *>(everythingButton)) {
         exportModeDialog.setDefaultButton(defaultButton);
     }
-    QShortcut escapeShortcut(QKeySequence(Qt::Key_Escape), &exportModeDialog);
-    connect(&escapeShortcut, &QShortcut::activated, &exportModeDialog, &QDialog::reject);
+    QAbstractButton *cancelButton = exportModeDialog.addButton(QMessageBox::Cancel);
     exportModeDialog.exec();
 
     const QAbstractButton *selectedExportModeButton = exportModeDialog.clickedButton();
-    if (!selectedExportModeButton) {
+    if (!selectedExportModeButton || selectedExportModeButton == cancelButton) {
         return;
     }
 
@@ -6942,25 +6680,36 @@ void MainWindow::on_actionSave_all_modes_as_PNGs_triggered()
                              .arg(failedFiles.size()));
 }
 
-// Zoom in menu option
+// Zoom in (menu, shortcut and the media bar's zoom-in button)
 void MainWindow::on_actionZoom_In_triggered()
 {
-    on_zoomInPushButton_clicked();
-	MainWindow::resize_on_aspect();
+    constexpr double factor = 1.1;
+    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
+        scaleFactor *= factor;
+    }
+
+    updateImageViewer();
+    resize_on_aspect();
 }
 
-// Zoom out menu option
+// Zoom out (menu, shortcut and the media bar's zoom-out button)
 void MainWindow::on_actionZoom_Out_triggered()
 {
-    on_zoomOutPushButton_clicked();
-	MainWindow::resize_on_aspect();
+    constexpr double factor = 0.9;
+    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
+        scaleFactor *= factor;
+    }
+
+    updateImageViewer();
+    resize_on_aspect();
 }
 
-// Original size 1:1 zoom menu option
+// Original size 1:1 zoom (menu, shortcut and the media bar's 1:1 button)
 void MainWindow::on_actionZoom_1x_triggered()
 {
-    on_originalSizePushButton_clicked();
-	MainWindow::resize_on_aspect();
+    scaleFactor = 1.0;
+    updateImageViewer();
+    resize_on_aspect();
 }
 
 // Build the View -> UI Scale submenu. The zoom actions above size the picture;
@@ -7040,9 +6789,8 @@ void MainWindow::handleUiScaleSelected(QAction *action)
         return;
     }
 
-    // Never restart out from under unsaved metadata edits. "Save Metadata"
-    // being enabled is how the rest of the GUI tracks that state.
-    if (ui->actionSave_Metadata && ui->actionSave_Metadata->isEnabled()) {
+    // Never restart out from under unsaved metadata edits
+    if (isWindowModified()) {
         QMessageBox::warning(this, tr("Unsaved metadata changes"),
                              tr("This source has unsaved metadata changes, so tbc-analyse was not "
                                 "restarted. Save the metadata and restart when you are ready; the "
@@ -7480,7 +7228,7 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
             return false;
         }
         tbcSource.setVideoParameters(videoParameters);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
         updateTimelineMarkers();
         updateNotesViewerState();
         updateSegmentsViewerState();
@@ -7531,9 +7279,7 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
     } else if (selectedAction == openNotesViewerAction) {
         updateNotesViewerState();
         updateSegmentsViewerState();
-        notesViewerDialog->show();
-        notesViewerDialog->raise();
-        notesViewerDialog->activateWindow();
+        showOrRaise(notesViewerDialog);
     } else if (setInOutFromSegmentAction && selectedAction == setInOutFromSegmentAction) {
         setInOutFromSegment(segmentIndexAtFrame, true, true);
     } else if (splitSegmentAction && selectedAction == splitSegmentAction) {
@@ -7589,13 +7335,7 @@ void MainWindow::on_aspectPushButton_clicked()
 
 void MainWindow::resize_on_aspect()
 {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     QPixmap pixmap = ui->imageViewerLabel->pixmap();
-#elif QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    QPixmap pixmap = ui->imageViewerLabel->pixmap(Qt::ReturnByValue);
-#else
-    QPixmap pixmap = *(ui->imageViewerLabel->pixmap());
-#endif
     if (pixmap.isNull() || !ui || !ui->scrollArea) {
         return;
     }
@@ -7703,46 +7443,20 @@ void MainWindow::enterChromaSeekMode(QPushButton* button)
 // Helper method to exit chroma seek mode
 void MainWindow::exitChromaSeekMode(QPushButton* button)
 {
-    if (chromaSeekMode) {
-        // Use a shorter timer to check if button is truly released (not just auto-repeat)
-        QTimer::singleShot(5, this, [this, button]() {
-            if (!button->isDown()) {
-                // Exit seek mode and restore chroma
-                chromaSeekMode = false;
-                tbcSource.setChromaDecoder(originalChromaState);
-                updateVideoPushButton();
-                updateImage(); // Fast refresh without reloading - frame data already loaded
-            }
-        });
+    // An auto-repeat also emits released(), but with the button still down; a
+    // real release has cleared it by then
+    if (chromaSeekMode && !button->isDown()) {
+        chromaSeekMode = false;
+        tbcSource.setChromaDecoder(originalChromaState);
+        updateVideoPushButton();
+        updateImage(); // Fast refresh without reloading - frame data already loaded
     }
 }
 
 // Show/hide dropouts button clicked
 void MainWindow::on_dropoutsPushButton_clicked()
 {
-	int width = this->width();
-
-    if (tbcSource.getHighlightDropouts()) {
-        tbcSource.setHighlightDropouts(false);
-		if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts Off"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop N"));
-		}
-    } else {
-        tbcSource.setHighlightDropouts(true);
-        if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts On"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop Y"));
-		}
-    }
+    tbcSource.setHighlightDropouts(ui->dropoutsPushButton->isChecked());
 
     // Show the current image (why isn't this option passed?)
     showImage();
@@ -7833,33 +7547,11 @@ void MainWindow::on_viewPushButton_clicked()
 // Normal/Reverse field order button clicked
 void MainWindow::on_fieldOrderPushButton_clicked()
 {
-	int width = this->width();
+    tbcSource.setFieldOrder(ui->fieldOrderPushButton->isChecked());
 
-    if (tbcSource.getFieldOrder()) {
-        tbcSource.setFieldOrder(false);
-
-        // If the TBC field order is changed, the number of available frames can change, so we need to update the GUI
-        resetGui();
-        updateGuiLoaded();
-        if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Normal order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Normal"));
-    } else {
-        tbcSource.setFieldOrder(true);
-
-        // If the TBC field order is changed, the number of available frames can change, so we need to update the GUI
-        resetGui();
-        updateGuiLoaded();
-        if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Reverse Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Reverse order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Reverse"));
-    }
+    // If the TBC field order is changed, the number of available frames can change, so we need to update the GUI
+    resetGui();
+    updateGuiLoaded();
 
     // Show the current image
     showImage();
@@ -7884,39 +7576,6 @@ void MainWindow::on_actionResizeFrameWithWindow_toggled(bool checked)
 	}
 }
 
-// Zoom in
-void MainWindow::on_zoomInPushButton_clicked()
-{
-    constexpr double factor = 1.1;
-    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
-        scaleFactor *= factor;
-    }
-
-    updateImageViewer();
-    resize_on_aspect();
-}
-
-// Zoom out
-void MainWindow::on_zoomOutPushButton_clicked()
-{
-    constexpr double factor = 0.9;
-    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
-        scaleFactor *= factor;
-    }
-
-    updateImageViewer();
-    resize_on_aspect();
-}
-
-// Original size 1:1 zoom
-void MainWindow::on_originalSizePushButton_clicked()
-{
-    scaleFactor = 1.0;
-    updateImageViewer();
-    resize_on_aspect();
-}
-
-
 
 // Mouse mode button clicked
 void MainWindow::on_mouseModePushButton_clicked()
@@ -7938,7 +7597,7 @@ void MainWindow::on_mouseModePushButton_clicked()
     updateImageViewer();
 }
 
-void MainWindow::on_vectorscopeSelectionPushButton_toggled(bool checked)
+void MainWindow::onVectorscopeSelectionToggled(bool checked)
 {
     vectorscopeSelectionDragging = false;
     if (checked) {
@@ -8002,81 +7661,20 @@ void MainWindow::vectorscopeChangedSignalHandler()
     }
 }
 
-void MainWindow::keyPressEvent(QKeyEvent *event)
+// The viewer's key shortcuts (Edit menu, Marker and Segments viewers) apply
+// only while the viewer tab is showing
+void MainWindow::updateViewerKeyShortcuts()
 {
-    if (!event) {
-        return;
+    const bool viewerShowing = ui->mainTabWidget->currentWidget() == ui->viewerTab;
+    for (const auto &entry : std::as_const(viewerKeyActions)) {
+        entry.first->setShortcuts(viewerShowing ? entry.second : QList<QKeySequence>());
     }
+}
 
-    const bool markerKeyPressed = (event->key() == Qt::Key_M)
-        && (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::ShiftModifier);
-    const bool markerViewerKeyPressed = (event->key() == Qt::Key_C)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool setInPointKeyPressed = (event->key() == Qt::Key_BracketLeft)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool setOutPointKeyPressed = (event->key() == Qt::Key_BracketRight)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool segmentsViewerKeyPressed = (event->key() == Qt::Key_S)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool segmentInKeyPressed = (event->key() == Qt::Key_BraceLeft || event->key() == Qt::Key_BracketLeft)
-        && (event->modifiers() == Qt::ShiftModifier);
-    const bool segmentOutKeyPressed = (event->key() == Qt::Key_BraceRight || event->key() == Qt::Key_BracketRight)
-        && (event->modifiers() == Qt::ShiftModifier);
-    if (!markerKeyPressed && !markerViewerKeyPressed && !setInPointKeyPressed && !setOutPointKeyPressed
-        && !segmentInKeyPressed && !segmentOutKeyPressed && !segmentsViewerKeyPressed) {
-        QMainWindow::keyPressEvent(event);
-        return;
-    }
-    if (event->isAutoRepeat()) {
-        event->accept();
-        return;
-    }
-
-    QWidget *focusWidget = QApplication::focusWidget();
-    const bool typingContext = focusWidget
-        && (qobject_cast<QLineEdit *>(focusWidget)
-            || qobject_cast<QTextEdit *>(focusWidget)
-            || qobject_cast<QPlainTextEdit *>(focusWidget)
-            || qobject_cast<QAbstractSpinBox *>(focusWidget));
-    if (typingContext || !tbcSource.getIsSourceLoaded()) {
-        QMainWindow::keyPressEvent(event);
-        return;
-    }
-
-    if (setInPointKeyPressed) {
-        setInPointAtCurrentFrame();
-        event->accept();
-        return;
-    }
-    if (setOutPointKeyPressed) {
-        setOutPointAtCurrentFrame();
-        event->accept();
-        return;
-    }
-    if (segmentsViewerKeyPressed) {
-        showSegmentsViewer();
-        event->accept();
-        return;
-    }
-    if (segmentInKeyPressed || segmentOutKeyPressed) {
-        const qint32 index = segmentIndexContainingField(currentFirstFieldZeroBased());
-        if (index >= 0) {
-            setInOutFromSegment(index, segmentInKeyPressed, segmentOutKeyPressed);
-        } else {
-            statusBar()->showMessage(tr("No recording segment at the current frame"), 3000);
-        }
-        event->accept();
-        return;
-    }
-    if (markerViewerKeyPressed) {
-        if (notesViewerDialog) {
-            updateNotesViewerState();
-            updateSegmentsViewerState();
-            notesViewerDialog->show();
-            notesViewerDialog->raise();
-            notesViewerDialog->activateWindow();
-        }
-        event->accept();
+// Add a marker comment at the current frame, or edit the one already there
+void MainWindow::addOrEditMarkerAtCurrentFrame()
+{
+    if (!tbcSource.getIsSourceLoaded()) {
         return;
     }
 
@@ -8101,7 +7699,6 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                                                         noteCommentAtFrame,
                                                         &ok);
     if (!ok) {
-        event->accept();
         return;
     }
 
@@ -8116,7 +7713,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
     if (applyUserNoteMarkersToVideoParameters(videoParameters, noteMarkers)) {
         tbcSource.setVideoParameters(videoParameters);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
         updateTimelineMarkers();
         updateNotesViewerState();
         updateSegmentsViewerState();
@@ -8125,9 +7722,8 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                                      .arg(framePoint)
                                      .arg(framePointTimecode), 3000);
     }
-
-    event->accept();
 }
+
 // Mouse press event handler
 void MainWindow::mousePressEvent(QMouseEvent *event)
 {
@@ -8140,7 +7736,7 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
     }
 
     // Get the mouse position relative to our scene
-    QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+    QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
 
     // Check that the mouse click is within bounds of the current picture
     qint32 oX = origin.x();
@@ -8206,7 +7802,7 @@ void MainWindow::mouseMoveEvent(QMouseEvent *event)
     }
 
     // Get the mouse position relative to our scene
-    QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+    QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
     if (exportBoundaryDragHandle != ExportBoundaryHandle::None
         && !(event->buttons() & Qt::LeftButton)) {
         exportBoundaryDragHandle = ExportBoundaryHandle::None;
@@ -8272,7 +7868,7 @@ void MainWindow::mouseReleaseEvent(QMouseEvent *event)
 
     if (vectorscopeSelectionDragging && event->button() == Qt::LeftButton) {
         vectorscopeSelectionDragging = false;
-        QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+        QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
         qint32 sourceX = 0;
         qint32 sourceY = 0;
         if (vectorscopeDialog && mapViewerToSourceCoordinates(origin, sourceX, sourceY)) {
@@ -8290,7 +7886,7 @@ void MainWindow::mouseReleaseEvent(QMouseEvent *event)
     }
     if (event->button() == Qt::LeftButton
         && exportBoundaryDragHandle != ExportBoundaryHandle::None) {
-        QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+        QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
         applyExportBoundaryDragAtViewerPoint(origin);
         exportBoundaryDragHandle = ExportBoundaryHandle::None;
         updateExportBoundaryHoverCursor(origin);
@@ -8343,7 +7939,7 @@ void MainWindow::videoParametersChangedSignalHandler(const TbcMetaData::VideoPar
     }
 
     // Enable the "Save Metadata" action, since the metadata has been modified
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
 
     // Update the aspect button's label
     updateAspectPushButton();
@@ -8390,7 +7986,7 @@ void MainWindow::exportRangeSelectionChangedSignalHandler(int inPoint, int outPo
     videoParameters.userEditOutSelection = metadataOut;
     tbcSource.setVideoParameters(videoParameters);
 
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
     updateTimelineMarkers();
     updateNotesViewerState();
     updateSegmentsViewerState();
@@ -8450,7 +8046,7 @@ void MainWindow::chromaDecoderConfigChangedSignalHandler()
     tbcSource.setVideoParameters(videoParameters);
 
     // Enable the \"Save Metadata\" action, since the metadata has been modified
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
 
     // Update the image viewer
     updateImage();
@@ -8467,33 +8063,25 @@ void MainWindow::chromaDecoderConfigChangedSignalHandler()
 // TbcSource class signal handlers ------------------------------------------------------------------------------------
 
 // Signal handler for busy signal from TbcSource class
-void MainWindow::on_busy(QString infoMessage)
+void MainWindow::onSourceBusy(QString infoMessage)
 {
     setPlaybackRunning(false);
-    tbcDebugStream() << "MainWindow::on_busy(): Got signal with message" << infoMessage;
+    tbcDebugStream() << "MainWindow::onSourceBusy(): Got signal with message" << infoMessage;
     sourceOperationInProgress = true;
-    // Set the busy message and centre the dialog in the parent window
-    busyDialog->setMessage(infoMessage);
-    busyDialog->move(this->geometry().center() - busyDialog->rect().center());
-
-    if (!busyDialog->isVisible()) {
-        // Disable the main window during loading
-        this->setEnabled(false);
-        busyDialog->setEnabled(true);
-
-        busyDialog->show();
+    // The Show event filter centres it over the main window
+    busyProgress->setLabelText(infoMessage);
+    if (!busyProgress->isVisible()) {
+        busyProgress->show();
     }
 }
 
 // Signal handler for finishedLoading signal from TbcSource class
-void MainWindow::on_finishedLoading(bool success)
+void MainWindow::onSourceLoaded(bool success)
 {
-    tbcDebugStream() << "MainWindow::on_finishedLoading(): Called";
+    tbcDebugStream() << "MainWindow::onSourceLoaded(): Called";
     setPlaybackRunning(false);
     sourceOperationInProgress = false;
-
-    // Hide the busy dialogue
-    busyDialog->hide();
+    busyProgress->hide();
 
     // Ensure source loaded ok
     if (success) {
@@ -8534,8 +8122,10 @@ void MainWindow::on_finishedLoading(bool success)
             exportDialog->setSource(&tbcSource);
         }
 
-        // Set the main window title
-        this->setWindowTitle(tr("tbc-analyse - ") + tbcSource.getCurrentSourceFilename());
+        // The window's file (macOS proxy icon) and title; [*] shows the
+        // modified marker while there are unsaved metadata edits
+        setWindowFilePath(QFileInfo(lastFilename).absoluteFilePath());
+        setWindowTitle(tr("%1[*] - tbc-analyse").arg(tbcSource.getCurrentSourceFilename()));
 
         // Update the configuration for the source directory
         QFileInfo inFileInfo(tbcSource.getCurrentSourceFilename());
@@ -8550,27 +8140,29 @@ void MainWindow::on_finishedLoading(bool success)
         restoreUiStateAfterReload = false;
 
         // Show the error to the user
-        QMessageBox messageBox;
-        messageBox.warning(this, "Error", tbcSource.getLastIOError());
+        QMessageBox::warning(this, tr("Error"), tbcSource.getLastIOError());
     }
 
-    // Enable the main window
-    this->setEnabled(true);
     processPendingSourceOpenRequest();
 }
 
 // Signal handler for finishedSaving signal from TbcSource class
-void MainWindow::on_finishedSaving(bool success)
+void MainWindow::onSourceSaved(bool success)
 {
-    tbcDebugStream() << "MainWindow::on_finishedSaving(): Called";
+    tbcDebugStream() << "MainWindow::onSourceSaved(): Called";
     sourceOperationInProgress = false;
-
-    // Hide the busy dialogue
-    busyDialog->hide();
+    busyProgress->hide();
 
     if (success) {
-        // Disable the "Save Metadata" action until the metadata is modified again
-        ui->actionSave_Metadata->setEnabled(false);
+        setWindowModified(false);
+
+        // A save chosen at maybeSave()'s prompt: carry on with what was asked
+        // for (close, open, reprocess) instead of reloading this source.
+        if (afterSaveAction) {
+            QTimer::singleShot(0, this, std::exchange(afterSaveAction, {}));
+            updateMetadataStatusPanel();
+            return;
+        }
 
         // Reload the source with the newly-saved metadata so the GUI reflects
         // the edited values (e.g. TV system change, chroma decoder switch).
@@ -8586,156 +8178,20 @@ void MainWindow::on_finishedSaving(bool success)
             }
         }
     } else {
+        // Whatever was waiting on the save doesn't happen; the edits stay.
+        afterSaveAction = {};
         // Show the error to the user
-        QMessageBox messageBox;
-        messageBox.warning(this, tr("Error"), tbcSource.getLastIOError());
+        QMessageBox::warning(this, tr("Error"), tbcSource.getLastIOError());
     }
 
     updateMetadataStatusPanel();
 
-    // Enable the main window
-    this->setEnabled(true);
     processPendingSourceOpenRequest();
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    int width = this->width();
-    const auto setButtonMaxWidth = [](QPushButton *button, int maxWidth) {
-        if (button) {
-            button->setMaximumWidth(maxWidth);
-        }
-    };
-
-    if (width > 1000) {
-        setButtonMaxWidth(ui->videoPushButton, 80);
-        setButtonMaxWidth(ui->aspectPushButton, 70);
-        setButtonMaxWidth(ui->dropoutsPushButton, 115);
-        setButtonMaxWidth(ui->sourcesPushButton, 110);
-        setButtonMaxWidth(ui->viewPushButton, 100);
-        setButtonMaxWidth(ui->fieldOrderPushButton, 145);
-        if (ui->horizontalSpacer) {
-            ui->horizontalSpacer->changeSize(12, 30, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-        if (ui->horizontalSpacer_2) {
-            ui->horizontalSpacer_2->changeSize(12, 20, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-    } else if (width >= 930) {
-        setButtonMaxWidth(ui->videoPushButton, 72);
-        setButtonMaxWidth(ui->aspectPushButton, 64);
-        setButtonMaxWidth(ui->dropoutsPushButton, 102);
-        setButtonMaxWidth(ui->sourcesPushButton, 98);
-        setButtonMaxWidth(ui->viewPushButton, 92);
-        setButtonMaxWidth(ui->fieldOrderPushButton, 118);
-        if (ui->horizontalSpacer) {
-            ui->horizontalSpacer->changeSize(8, 30, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-        if (ui->horizontalSpacer_2) {
-            ui->horizontalSpacer_2->changeSize(8, 20, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-    } else {
-        setButtonMaxWidth(ui->videoPushButton, 58);
-        setButtonMaxWidth(ui->aspectPushButton, 52);
-        setButtonMaxWidth(ui->dropoutsPushButton, 74);
-        setButtonMaxWidth(ui->sourcesPushButton, 70);
-        setButtonMaxWidth(ui->viewPushButton, 66);
-        setButtonMaxWidth(ui->fieldOrderPushButton, 88);
-        if (ui->horizontalSpacer) {
-            ui->horizontalSpacer->changeSize(4, 30, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-        if (ui->horizontalSpacer_2) {
-            ui->horizontalSpacer_2->changeSize(4, 20, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-    }
-    if (ui->horizontalLayout_3) {
-        ui->horizontalLayout_3->invalidate();
-    }
-
-	//field order rename depending on size
-	if (!tbcSource.getFieldOrder())
-	{
-		if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Normal order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Normal"));
-	}
-	else
-	{
-		if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Reverse Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Reverse order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Reverse"));
-	}
-
-	//source label depending on size
-	updateSourcesPushButton();
-
-	//dropout label
-	if (!tbcSource.getHighlightDropouts())
-	{
-		if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts Off"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop N"));
-		}
-
-	}
-	else
-	{
-		if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts On"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop Y"));
-		}
-	}
-
-	//view label
-	if (this->width() >= 930)
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			if (tbcSource.getStretchField()) {
-				ui->viewPushButton->setText(tr("Field 2:1"));
-			} else {
-				ui->viewPushButton->setText(tr("Field 1:1"));
-			}
-		} else {
-			if (tbcSource.getSplitViewEnabled()) {
-				ui->viewPushButton->setText(tr("Split View"));
-			} else {
-				ui->viewPushButton->setText(tr("Frame View"));
-			}
-		}
-	}
-	else
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			if (tbcSource.getStretchField()) {
-				ui->viewPushButton->setText(tr("Field 2:1"));
-			} else {
-				ui->viewPushButton->setText(tr("Field 1:1"));
-			}
-		} else {
-			if (tbcSource.getSplitViewEnabled()) {
-				ui->viewPushButton->setText(tr("Split"));
-			} else {
-				ui->viewPushButton->setText(tr("Frame"));
-			}
-		}
-	}
-
-	//aspect ratio label
-	updateAspectPushButton();
 
 	// Resize frame with window if resizeFrameWithWindow is enabled
 	if (resizeFrameWithWindow && tbcSource.getIsSourceLoaded()) {

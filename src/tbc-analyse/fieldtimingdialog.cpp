@@ -3,10 +3,10 @@
 #include "fieldtimingwidget.h"
 
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -17,18 +17,7 @@ FieldTimingDialog::FieldTimingDialog(QWidget *parent)
     setupUi();
     setWindowTitle(tr("Field Timing Scope"));
     setWindowFlags(Qt::Window);
-    setModal(false);
-    setAttribute(Qt::WA_DeleteOnClose, false);
     resize(900, 500);
-
-    QSettings settings;
-    restoreGeometry(settings.value(QStringLiteral("FieldTimingDialog/geometry")).toByteArray());
-}
-
-FieldTimingDialog::~FieldTimingDialog()
-{
-    QSettings settings;
-    settings.setValue(QStringLiteral("FieldTimingDialog/geometry"), saveGeometry());
 }
 
 void FieldTimingDialog::setupUi()
@@ -72,7 +61,7 @@ void FieldTimingDialog::setupUi()
     channelCombo_->addItem(tr("Chroma (C)"), static_cast<int>(FieldTimingWidget::ChannelMode::COnly));
     channelCombo_->setCurrentIndex(0);
     channelCombo_->setVisible(false);
-    connect(channelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+    connect(channelCombo_, &QComboBox::currentIndexChanged, this, [this](int index) {
         const auto mode = static_cast<FieldTimingWidget::ChannelMode>(channelCombo_->itemData(index).toInt());
         timingWidget_->setChannelMode(mode);
     });
@@ -123,10 +112,10 @@ void FieldTimingDialog::setupUi()
 
     controlsLayout->addSpacing(12);
 
-    auto *closeButton = new QPushButton(tr("Close"), this);
-    closeButton->setAutoDefault(false);
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
-    controlsLayout->addWidget(closeButton);
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    buttonBox->button(QDialogButtonBox::Close)->setAutoDefault(false);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    controlsLayout->addWidget(buttonBox);
 
     mainLayout->addLayout(controlsLayout);
 }
