@@ -586,6 +586,9 @@ class ContractCoverageTests(unittest.TestCase):
         for snippet in (
             "doCheck = !withCuda",
             "enableParallelChecking = false;",
+            # The teletext test runs Python from the source tree, which is
+            # installed after the check: no __pycache__ may land in the output.
+            "export PYTHONDONTWRITEBYTECODE=1",
             "patchShebangs scripts",
             "patchShebangs bin",
             "ctest --output-on-failure",

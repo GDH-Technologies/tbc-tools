@@ -582,6 +582,10 @@ FLAKE_CHECK_REQUIRED_SNIPPETS = (
     # nixpkgs' cmake hook otherwise exports CTEST_PARALLEL_LEVEL, and the
     # decode tests share testout/ and corrupt each other in parallel.
     "enableParallelChecking = false;",
+    # The teletext test runs Python from the source tree, which installPhase
+    # copies after the check: bytecode caches would ship in the package (and
+    # the macOS bundle verifier rejects them).
+    "export PYTHONDONTWRITEBYTECODE=1",
     "patchShebangs scripts",
     "patchShebangs bin",
     "ctest --output-on-failure",

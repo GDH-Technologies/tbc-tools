@@ -322,10 +322,14 @@
             # directory. On macOS QStandardPaths asks Foundation, which takes
             # the build user's account home (/var/empty, read-only for
             # _nixbld) rather than $HOME -- testconfiguration's writes then
-            # vanish -- unless CFFIXED_USER_HOME overrides it.
+            # vanish -- unless CFFIXED_USER_HOME overrides it. The teletext
+            # test runs Python straight from the source tree, which
+            # installPhase copies after this phase, so no bytecode may be
+            # written or __pycache__ ships in the package.
             preCheck = ''
               export HOME=$TMPDIR
               export CFFIXED_USER_HOME=$TMPDIR
+              export PYTHONDONTWRITEBYTECODE=1
               patchShebangs bin
             '';
             # Serial (see enableParallelChecking above).
