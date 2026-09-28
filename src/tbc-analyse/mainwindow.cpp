@@ -2426,7 +2426,7 @@ void MainWindow::updateGuiUnloaded()
 
     // Set the window title
     setWindowFilePath(QString());
-    setWindowTitle(tr("tbc-analyse"));
+    setWindowTitle(tr("tbc-analyse[*]"));
 
     // Set the status bar text
     sourceVideoStatus.setText(tr("No source video file loaded"));

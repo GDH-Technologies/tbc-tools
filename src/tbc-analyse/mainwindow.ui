@@ -23,7 +23,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>tbc-analyse</string>
+   <string>tbc-analyse[*]</string>
   </property>
   <property name="windowIcon">
    <iconset resource="tbc-analyse-resources.qrc">
