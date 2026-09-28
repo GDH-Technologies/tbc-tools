@@ -1302,6 +1302,16 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
             ui->menuFile->addAction(exportSourceRfSegmentAction);
         }
     }
+    openRfInFlacChopGuiAction = new QAction(tr("Open frame RF segment in FLAC-Chop..."), this);
+    connect(openRfInFlacChopGuiAction, &QAction::triggered,
+            this, &MainWindow::on_actionOpen_frame_RF_segment_in_FlacChop_triggered);
+    if (ui->menuFile) {
+        if (ui->actionExit) {
+            ui->menuFile->insertAction(ui->actionExit, openRfInFlacChopGuiAction);
+        } else {
+            ui->menuFile->addAction(openRfInFlacChopGuiAction);
+        }
+    }
     setAcceptDrops(true);
     if (centralWidget()) {
         centralWidget()->setAcceptDrops(true);
@@ -6480,6 +6490,13 @@ void MainWindow::on_actionExport_source_RF_segment_for_frame_triggered()
     runRfSegmentExport(true);
 }
 
+// Menu option: open the frame's RF range in the FLAC-Chop GUI with IN/OUT
+// markers pre-set, for interactive fine-tuning before chopping.
+void MainWindow::on_actionOpen_frame_RF_segment_in_FlacChop_triggered()
+{
+    runRfSegmentExport(true, true);
+}
+
 // Probe the source RF capture via the FLAC-Chop CLI to obtain the real RF
 // sample rate and stream length (ms padding cannot be converted without them).
 // Runs synchronously with a timeout; probing only reads FLAC headers/tags.
@@ -6532,7 +6549,7 @@ MainWindow::RfExportProbeResult MainWindow::probeRfSource(const QString &flacCho
 // cannot be resolved; when not (i.e. triggered from the save-all-PNGs check
 // box), the persisted settings are used and failures are only reported via the
 // status bar.
-void MainWindow::runRfSegmentExport(bool interactive)
+void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
 {
     if (!tbcSource.getIsSourceLoaded()) {
         if (interactive) {
@@ -6617,8 +6634,13 @@ void MainWindow::runRfSegmentExport(bool interactive)
         return;
     }
 
-    // Locate the source RF capture: the MISRC-GUI unified naming convention
-    // places the FLAC capture next to the TBC with the same basename.
+    // Locate the source RF capture: prefer the exact TBC basename, then
+    // progressively shorter '_'/'.'-token prefixes of it in the same folder.
+    // MISRC-GUI auto-naming keeps the decode suffix on the TBC
+    // (capture_luma_12-bit_20msps_vhsv.tbc decodes from
+    // capture_luma_12-bit_20msps.flac) and may add channel/bit-rate tags the
+    // TBC name dropped, or use the rfA_/rfB_ fallback form when no channel
+    // tag was configured.
     QString sourceFilename = tbcSource.getCurrentSourceFilename();
     if (sourceFilename.isEmpty()) {
         sourceFilename = lastFilename;
@@ -6626,11 +6648,71 @@ void MainWindow::runRfSegmentExport(bool interactive)
     QString rfSourcePath;
     if (!sourceFilename.isEmpty()) {
         const QFileInfo sourceInfo(sourceFilename);
-        for (const QString &rfSuffix : {QStringLiteral("flac"), QStringLiteral("ldf")}) {
-            const QString candidate = sourceInfo.dir().filePath(
-                sourceInfo.completeBaseName() + QLatin1Char('.') + rfSuffix);
-            if (QFileInfo::exists(candidate)) {
-                rfSourcePath = candidate;
+        const QDir sourceDir = sourceInfo.dir();
+        const QString baseLower = sourceInfo.completeBaseName().toLower();
+        QStringList prefixes;
+        QString prefixBase = sourceInfo.completeBaseName();
+        while (!prefixBase.isEmpty()) {
+            prefixes.append(prefixBase);
+            const qsizetype tokenCut = qMax(prefixBase.lastIndexOf(QLatin1Char('_')),
+                                            prefixBase.lastIndexOf(QLatin1Char('.')));
+            if (tokenCut <= 0) {
+                break;
+            }
+            prefixBase.truncate(tokenCut);
+        }
+        for (const QString &prefix : prefixes) {
+            const QString prefixLower = prefix.toLower();
+            QStringList nameCandidates;
+            for (const QString &rfSuffix : {QStringLiteral("flac"), QStringLiteral("ldf")}) {
+                nameCandidates.append(prefix + QLatin1Char('.') + rfSuffix);
+            }
+            const QFileInfoList dirEntries = sourceDir.entryInfoList(QDir::Files, QDir::Name);
+            for (const QFileInfo &entry : dirEntries) {
+                const QString entryLower = entry.fileName().toLower();
+                if (!entryLower.endsWith(QLatin1String(".flac"))
+                    && !entryLower.endsWith(QLatin1String(".ldf"))) {
+                    continue;
+                }
+                const bool plainForm = entryLower.startsWith(prefixLower + QLatin1Char('_'));
+                const bool rfChannelForm = entryLower.startsWith(QLatin1String("rfa_") + prefixLower)
+                                           || entryLower.startsWith(QLatin1String("rfb_") + prefixLower);
+                if (plainForm || rfChannelForm) {
+                    nameCandidates.append(entry.fileName());
+                }
+            }
+            // Rank: existing candidates only; when the TBC name carries a
+            // channel tag (luma/chroma) prefer candidates sharing it, then the
+            // fewest extra tokens (shortest name), then alphabetical.
+            QString bestCandidate;
+            for (int pass = 0; pass < 2 && bestCandidate.isEmpty(); pass++) {
+                for (const QString &candidateName : nameCandidates) {
+                    const QString candidatePath = sourceDir.filePath(candidateName);
+                    if (!QFileInfo::exists(candidatePath)) {
+                        continue;
+                    }
+                    if (pass == 0) {
+                        bool sharesChannelTag = false;
+                        for (const QString &channelToken : {QStringLiteral("luma"), QStringLiteral("chroma")}) {
+                            if (baseLower.contains(channelToken)
+                                && candidateName.toLower().contains(channelToken)) {
+                                sharesChannelTag = true;
+                                break;
+                            }
+                        }
+                        if (!sharesChannelTag) {
+                            continue;
+                        }
+                    }
+                    if (bestCandidate.isEmpty()
+                        || candidateName.size() < bestCandidate.size()
+                        || (candidateName.size() == bestCandidate.size() && candidateName < bestCandidate)) {
+                        bestCandidate = candidateName;
+                    }
+                }
+            }
+            if (!bestCandidate.isEmpty()) {
+                rfSourcePath = sourceDir.filePath(bestCandidate);
                 break;
             }
         }
@@ -6781,10 +6863,12 @@ void MainWindow::runRfSegmentExport(bool interactive)
     }
 
     // Padding (ms) around the frame boundaries; interactive mode prompts and
-    // remembers, the save-all-PNGs path uses the persisted values.
+    // remembers, the save-all-PNGs path uses the persisted values. The
+    // FLAC-Chop GUI hand-off uses the persisted values silently (the user
+    // fine-tunes the range in the GUI instead).
     qint32 padBeforeMs = configuration.getRfExportPadBeforeMs();
     qint32 padAfterMs = configuration.getRfExportPadAfterMs();
-    if (interactive) {
+    if (interactive && !launchGuiOnly) {
         QDialog padDialog(this);
         padDialog.setWindowTitle(tr("Export source RF segment for frame %1").arg(frameNumber));
         auto *padDialogLayout = new QVBoxLayout(&padDialog);
@@ -6910,6 +6994,26 @@ void MainWindow::runRfSegmentExport(bool interactive)
             QMessageBox::warning(this, tr("Export source RF segment"), message);
         } else {
             statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+
+    // Hand-off mode: launch the FLAC-Chop GUI with the frame's RF range
+    // pre-loaded as IN/OUT marker positions (real RF samples with --units
+    // samples), so the range can be fine-tuned and chopped interactively.
+    if (launchGuiOnly) {
+        const QStringList guiArguments = {QStringLiteral("--gui"), rfSourcePath,
+                                          QStringLiteral("--in"), QString::number(exportStart),
+                                          QStringLiteral("--out"), QString::number(exportEnd),
+                                          QStringLiteral("--units"), QStringLiteral("samples")};
+        if (QProcess::startDetached(flacChopPath, guiArguments)) {
+            statusBar()->showMessage(tr("Opened RF segment for frame %1 in FLAC-Chop (IN %2, OUT %3 samples).")
+                                         .arg(frameNumber)
+                                         .arg(exportStart)
+                                         .arg(exportEnd), 5000);
+        } else {
+            QMessageBox::warning(this, tr("Export source RF segment"),
+                                 tr("Could not start the FLAC-Chop GUI using:\n%1").arg(flacChopPath));
         }
         return;
     }

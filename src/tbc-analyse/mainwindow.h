@@ -107,6 +107,7 @@ private slots:
     void on_actionSave_frame_as_PNG_triggered();
     void on_actionSave_all_modes_as_PNGs_triggered();
     void on_actionExport_source_RF_segment_for_frame_triggered();
+    void on_actionOpen_frame_RF_segment_in_FlacChop_triggered();
     void on_actionCopy_current_display_to_clipboard_triggered();
     void on_actionZoom_In_triggered();
     void on_actionZoom_Out_triggered();
@@ -409,13 +410,14 @@ private:
         QString errorString;
     };
     RfExportProbeResult probeRfSource(const QString &flacChopPath, const QString &rfSourcePath);
-    void runRfSegmentExport(bool interactive);
+    void runRfSegmentExport(bool interactive, bool launchGuiOnly = false);
     void queueAnalysisRefreshPreservingUserState(const QString &processedInputFile);
     UiStateSnapshot captureUiStateSnapshot() const;
     void applyUiStateSnapshot(const UiStateSnapshot &snapshot);
     QActionGroup *themesActionGroup = nullptr;
     QAction *saveAllModesPngAction = nullptr;
     QAction *exportSourceRfSegmentAction = nullptr;
+    QAction *openRfInFlacChopGuiAction = nullptr;
     QAction *copyCurrentDisplayAction = nullptr;
     QAction *notesViewerAction = nullptr;
     QPushButton *vectorscopeSelectionPushButton = nullptr;
