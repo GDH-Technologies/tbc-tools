@@ -47,26 +47,19 @@ VideoParametersDialog::VideoParametersDialog(QWidget *parent) :
     ui->setupUi(this);
     setWindowFlags(Qt::Window);
 
-    const QList<QObject *> wheelTargets = {
-        ui->activeVideoStartSpinBox,
-        ui->activeVideoWidthSpinBox,
+    // The sliders move one value per wheel notch, like the spin boxes beside
+    // them (a QSlider's own wheel step is wheelScrollLines() values)
+    const QList<QSlider *> wheelSliders = {
         ui->activeVideoStartHorizontalSlider,
         ui->activeVideoWidthHorizontalSlider,
-        ui->firstActiveFieldLineSpinBox,
-        ui->lastActiveFieldLineSpinBox,
-        ui->firstActiveFrameLineSpinBox,
-        ui->lastActiveFrameLineSpinBox,
         ui->firstActiveFieldLineHorizontalSlider,
         ui->lastActiveFieldLineHorizontalSlider,
         ui->firstActiveFrameLineHorizontalSlider,
         ui->lastActiveFrameLineHorizontalSlider,
-        ui->exportBoundaryThicknessSpinBox,
         ui->exportBoundaryThicknessHorizontalSlider
     };
-    for (QObject *target : wheelTargets) {
-        if (target) {
-            target->installEventFilter(this);
-        }
+    for (QSlider *slider : wheelSliders) {
+        slider->installEventFilter(this);
     }
 }
 
@@ -101,18 +94,12 @@ VideoParametersDialog::~VideoParametersDialog()
 bool VideoParametersDialog::eventFilter(QObject *object, QEvent *event)
 {
     if (event->type() == QEvent::Wheel) {
-        auto *wheelEvent = static_cast<QWheelEvent *>(event);
-        const int delta = wheelEvent->angleDelta().y();
-        if (delta == 0) {
-            return true;
-        }
-        const int step = (delta > 0) ? 1 : -1;
         if (auto *slider = qobject_cast<QSlider *>(object)) {
-            slider->setValue(slider->value() + step);
-            return true;
-        }
-        if (auto *spinBox = qobject_cast<QSpinBox *>(object)) {
-            spinBox->setValue(spinBox->value() + step);
+            // Whole notches only: a touchpad's small deltas add up to one step
+            wheelAngleRemainder += static_cast<QWheelEvent *>(event)->angleDelta().y();
+            const int steps = wheelAngleRemainder / 120;
+            wheelAngleRemainder -= steps * 120;
+            slider->setValue(slider->value() + steps);
             return true;
         }
     }

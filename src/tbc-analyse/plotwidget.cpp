@@ -655,8 +655,9 @@ bool PlotWidget::eventFilter(QObject *obj, QEvent *event)
                 return true;
             }
 
-            // < 1 zooms in, > 1 zooms out.
-            const double scaleFactor = (deltaY > 0) ? 0.85 : 1.18;
+            // < 1 zooms in, > 1 zooms out; 0.85 per notch, in proportion for
+            // a touchpad's smaller deltas
+            const double scaleFactor = std::pow(0.85, deltaY / 120.0);
             zoomAt(scenePos, scaleFactor);
             return true;
         }

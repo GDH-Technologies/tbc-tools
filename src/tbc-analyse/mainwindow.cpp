@@ -2125,14 +2125,13 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 return QMainWindow::eventFilter(watched, event);
             }
             const auto *wheelEvent = static_cast<QWheelEvent *>(event);
-            const int rawDelta = (wheelEvent->angleDelta().y() != 0)
-                                     ? wheelEvent->angleDelta().y()
-                                     : wheelEvent->pixelDelta().y();
-            if (rawDelta == 0) {
-                return QMainWindow::eventFilter(watched, event);
+            // One step per whole notch: a touchpad's small deltas add up
+            exportBoundaryWheelRemainder += wheelEvent->angleDelta().y();
+            const int notches = exportBoundaryWheelRemainder / 120;
+            exportBoundaryWheelRemainder -= notches * 120;
+            for (int step = 0; step < qAbs(notches); ++step) {
+                applyExportBoundaryWheelStep(notches > 0 ? -1 : 1);
             }
-            const qint32 step = (rawDelta > 0) ? -1 : 1;
-            applyExportBoundaryWheelStep(step);
             updateExportBoundaryHoverCursor(QPoint(-1, -1));
             event->accept();
             return true;

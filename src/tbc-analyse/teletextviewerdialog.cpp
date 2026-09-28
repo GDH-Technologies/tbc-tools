@@ -1670,20 +1670,23 @@ bool TeletextViewerDialog::eventFilter(QObject *watched, QEvent *event)
                                       || (pageViewer && watched == pageViewer->viewport());
         if (navigationTarget) {
             auto *wheelEvent = static_cast<QWheelEvent *>(event);
-            const int wheelDeltaY = wheelEvent->angleDelta().y();
-            if (wheelDeltaY != 0) {
-                const int direction = wheelDeltaY > 0 ? -1 : 1;
-                const int stepCount = qMax(1, qAbs(wheelDeltaY) / 120);
-                bool pageChanged = false;
-                for (int step = 0; step < stepCount; ++step) {
-                    if (cyclePageSelection(direction)) {
-                        pageChanged = true;
-                    }
+            // One page per whole notch: a touchpad's small deltas add up
+            pageWheelRemainder += wheelEvent->angleDelta().y();
+            const int notches = pageWheelRemainder / 120;
+            pageWheelRemainder -= notches * 120;
+            if (notches == 0) {
+                return wheelEvent->angleDelta().y() != 0;
+            }
+            const int direction = notches > 0 ? -1 : 1;
+            bool pageChanged = false;
+            for (int step = 0; step < qAbs(notches); ++step) {
+                if (cyclePageSelection(direction)) {
+                    pageChanged = true;
                 }
-                if (pageChanged) {
-                    wheelEvent->accept();
-                    return true;
-                }
+            }
+            if (pageChanged) {
+                wheelEvent->accept();
+                return true;
             }
         }
     }

@@ -269,6 +269,7 @@ private:
     QPoint vectorscopeSelectionAnchor;
     ExportBoundaryHandle exportBoundaryDragHandle = ExportBoundaryHandle::None;
     ExportBoundaryHandle exportBoundarySelectedHandle = ExportBoundaryHandle::None;
+    int exportBoundaryWheelRemainder = 0; // angleDelta not yet a whole notch
     double scaleFactor;
     QString lastFilename;
     bool metadataJsonLoaded = false;
