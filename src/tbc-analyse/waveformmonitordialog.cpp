@@ -148,10 +148,10 @@ void WaveformMonitorDialog::setupUI() {
   });
 
   connect(channel_combo_,
-          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &QComboBox::currentIndexChanged, this,
           [this](int) { updateWidgetForCurrentChannel(); });
 
-  connect(range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+  connect(range_combo_, &QComboBox::currentIndexChanged,
           this, [this](int) { updateWidgetForCurrentChannel(); });
 
   connect(phosphor_check_, &QCheckBox::toggled, this,

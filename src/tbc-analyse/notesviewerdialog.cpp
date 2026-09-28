@@ -130,8 +130,8 @@ NotesViewerDialog::NotesViewerDialog(QWidget *parent)
         updateGoButtons();
     };
 
-    connect(inFrameSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, [updateRangeUi](int) { updateRangeUi(); });
-    connect(outFrameSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, [updateRangeUi](int) { updateRangeUi(); });
+    connect(inFrameSpin_, &QSpinBox::valueChanged, this, [updateRangeUi](int) { updateRangeUi(); });
+    connect(outFrameSpin_, &QSpinBox::valueChanged, this, [updateRangeUi](int) { updateRangeUi(); });
 
     connect(goInButton_, &QPushButton::clicked, this, [this]() {
         const qint32 frame = inFrameSpin_->value();

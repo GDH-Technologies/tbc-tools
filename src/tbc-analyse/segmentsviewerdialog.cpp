@@ -161,7 +161,7 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     connect(splitButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::splitAtCurrentFrame);
     connect(mergeButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::mergeWithNext);
     connect(deleteButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::deleteSelected);
-    connect(presetCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SegmentsViewerDialog::applyPreset);
+    connect(presetCombo_, &QComboBox::currentIndexChanged, this, &SegmentsViewerDialog::applyPreset);
     connect(rederiveButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::rederive);
     connect(applyButton_, &QPushButton::clicked, this, [this]() {
         emit segmentsUpdated(segments_);

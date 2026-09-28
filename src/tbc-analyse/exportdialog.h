@@ -145,8 +145,6 @@ private:
                                 QStringList *notes, QString *errorMessage) const;
     bool segmentExportSelected() const;
     void updateSegmentExportControls();
-    bool prepareTrimmedAudioTracks(int zeroBasedStartFrame, int rangeLengthFrames,
-                                   QStringList *audioTracks, QString *errorMessage);
     QStringList buildArguments(QString *errorMessage, const QString &inputTbcJsonOverride = QString(),
                                bool overwriteExisting = false,
                                const QString &configFileOverride = QString(),

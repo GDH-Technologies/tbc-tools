@@ -717,7 +717,7 @@ void VectorscopeDialog::initialiseAdvancedControls()
     renderModeButtonGroup->addButton(renderModePointsRadioButton);
     renderModeButtonGroup->addButton(renderModeDensityRadioButton);
     connect(renderModeButtonGroup,
-            QOverload<QAbstractButton *>::of(&QButtonGroup::buttonClicked),
+            &QButtonGroup::buttonClicked,
             this,
             &VectorscopeDialog::on_renderModeButtonGroup_buttonClicked);
 
@@ -736,7 +736,7 @@ void VectorscopeDialog::initialiseAdvancedControls()
     areaModeButtonGroup->addButton(areaModeFullRadioButton);
     areaModeButtonGroup->addButton(areaModeCustomRadioButton);
     connect(areaModeButtonGroup,
-            QOverload<QAbstractButton *>::of(&QButtonGroup::buttonClicked),
+            &QButtonGroup::buttonClicked,
             this,
             &VectorscopeDialog::on_areaModeButtonGroup_buttonClicked);
     QLabel *customAreaHintLabel = new QLabel(tr("Custom is set from the main-view selection tool."), areaGroup);

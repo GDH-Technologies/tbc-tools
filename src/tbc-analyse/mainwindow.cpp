@@ -1987,9 +1987,6 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->actionVectorscope->setEnabled(enabled);
     ui->actionField_timing_scope->setEnabled(enabled);
     ui->actionVBI->setEnabled(enabled);
-    ui->actionNTSC->setEnabled(enabled);
-    ui->actionVideo_metadata->setEnabled(enabled);
-    ui->actionVITS_Metrics->setEnabled(enabled);
     ui->actionZoom_In->setEnabled(enabled);
     ui->actionZoom_Out->setEnabled(enabled);
     ui->actionZoom_1x->setEnabled(enabled);
@@ -2109,13 +2106,7 @@ bool MainWindow::mapViewerToSourceCoordinates(const QPoint &viewerPoint, qint32 
         return false;
     }
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const QPixmap viewerPixmap = ui->imageViewerLabel->pixmap();
-#elif QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    const QPixmap viewerPixmap = ui->imageViewerLabel->pixmap(Qt::ReturnByValue);
-#else
-    const QPixmap viewerPixmap = *(ui->imageViewerLabel->pixmap());
-#endif
     // viewerPoint and QLabel::width()/height() are logical (device-independent)
     // pixels, but QPixmap::width()/height() are device pixels. On a HiDPI or
     // fractionally-scaled display the two differ, so the pixmap's logical size
@@ -2677,11 +2668,7 @@ void MainWindow::startAsyncFrameRender()
     asyncFrameRenderFrameNumber = currentFrameNumber;
     asyncFrameRenderFieldNumber = currentFieldNumber;
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    QFuture<QImage> renderFuture = QtConcurrent::run(&tbcSource, &TbcSource::getImage);
-#else
     QFuture<QImage> renderFuture = QtConcurrent::run(&TbcSource::getImage, &tbcSource);
-#endif
     asyncFrameRenderWatcher.setFuture(renderFuture);
 
     if (statusBar()) {
@@ -2892,11 +2879,7 @@ QImage MainWindow::renderedCurrentFrameImage()
     } else if (!asyncFrameImage.isNull() && isCurrent()) {
         return asyncFrameImage;
     }
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    return waitWithProgress(this, QtConcurrent::run(&tbcSource, &TbcSource::getImage), label);
-#else
     return waitWithProgress(this, QtConcurrent::run(&TbcSource::getImage, &tbcSource), label);
-#endif
 }
 
 QImage MainWindow::renderedCurrentImageForExport()
@@ -7589,13 +7572,7 @@ void MainWindow::on_aspectPushButton_clicked()
 
 void MainWindow::resize_on_aspect()
 {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     QPixmap pixmap = ui->imageViewerLabel->pixmap();
-#elif QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    QPixmap pixmap = ui->imageViewerLabel->pixmap(Qt::ReturnByValue);
-#else
-    QPixmap pixmap = *(ui->imageViewerLabel->pixmap());
-#endif
     if (pixmap.isNull() || !ui || !ui->scrollArea) {
         return;
     }

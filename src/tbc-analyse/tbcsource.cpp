@@ -723,11 +723,7 @@ void TbcSource::loadSource(QString sourceFilename, QString metadataFilename)
     tbcDebugStream() << "TbcSource::loadSource(): Setting up background loader thread";
     disconnect(&watcher, &QFutureWatcher<bool>::finished, nullptr, nullptr);
     connect(&watcher, &QFutureWatcher<bool>::finished, this, &TbcSource::finishBackgroundLoad);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    future = QtConcurrent::run(this, &TbcSource::startBackgroundLoad, sourceFilename);
-#else
     future = QtConcurrent::run(&TbcSource::startBackgroundLoad, this, sourceFilename);
-#endif
     watcher.setFuture(future);
 }
 
@@ -776,11 +772,7 @@ void TbcSource::loadMetadata(QString metadataFilename, QString displayFilename)
     tbcDebugStream() << "TbcSource::loadMetadata(): Setting up background loader thread";
     disconnect(&watcher, &QFutureWatcher<bool>::finished, nullptr, nullptr);
     connect(&watcher, &QFutureWatcher<bool>::finished, this, &TbcSource::finishBackgroundLoad);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    future = QtConcurrent::run(this, &TbcSource::startBackgroundLoadMetadata, metadataFilename, displayFilename);
-#else
     future = QtConcurrent::run(&TbcSource::startBackgroundLoadMetadata, this, metadataFilename, displayFilename);
-#endif
     watcher.setFuture(future);
 }
 
@@ -800,11 +792,7 @@ void TbcSource::saveSourceMetadata()
     tbcDebugStream() << "TbcSource::saveSourceMetadata(): Starting background save thread";
     disconnect(&watcher, &QFutureWatcher<bool>::finished, nullptr, nullptr);
     connect(&watcher, &QFutureWatcher<bool>::finished, this, &TbcSource::finishBackgroundSave);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    future = QtConcurrent::run(this, &TbcSource::startBackgroundSave, currentMetadataFilename);
-#else
     future = QtConcurrent::run(&TbcSource::startBackgroundSave, this, currentMetadataFilename);
-#endif
     watcher.setFuture(future);
 }
 

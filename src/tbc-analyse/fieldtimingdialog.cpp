@@ -72,7 +72,7 @@ void FieldTimingDialog::setupUi()
     channelCombo_->addItem(tr("Chroma (C)"), static_cast<int>(FieldTimingWidget::ChannelMode::COnly));
     channelCombo_->setCurrentIndex(0);
     channelCombo_->setVisible(false);
-    connect(channelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+    connect(channelCombo_, &QComboBox::currentIndexChanged, this, [this](int index) {
         const auto mode = static_cast<FieldTimingWidget::ChannelMode>(channelCombo_->itemData(index).toInt());
         timingWidget_->setChannelMode(mode);
     });

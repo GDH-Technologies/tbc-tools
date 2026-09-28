@@ -84,25 +84,25 @@ YuvRangeDialog::YuvRangeDialog(QWidget *parent)
     controlsLayout->setColumnStretch(8, 1);
     mainLayout->addLayout(controlsLayout);
 
-    connect(lumaMinSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
+    connect(lumaMinSpinBox_, &QSpinBox::valueChanged, this, [this](int value) {
         if (lumaMaxSpinBox_ && value > lumaMaxSpinBox_->value()) {
             setSpinBoxValueWithoutSignals(lumaMaxSpinBox_, value);
         }
         emitSettingsChanged();
     });
-    connect(lumaMaxSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
+    connect(lumaMaxSpinBox_, &QSpinBox::valueChanged, this, [this](int value) {
         if (lumaMinSpinBox_ && value < lumaMinSpinBox_->value()) {
             setSpinBoxValueWithoutSignals(lumaMinSpinBox_, value);
         }
         emitSettingsChanged();
     });
-    connect(chromaMinSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
+    connect(chromaMinSpinBox_, &QSpinBox::valueChanged, this, [this](int value) {
         if (chromaMaxSpinBox_ && value > chromaMaxSpinBox_->value()) {
             setSpinBoxValueWithoutSignals(chromaMaxSpinBox_, value);
         }
         emitSettingsChanged();
     });
-    connect(chromaMaxSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
+    connect(chromaMaxSpinBox_, &QSpinBox::valueChanged, this, [this](int value) {
         if (chromaMinSpinBox_ && value < chromaMinSpinBox_->value()) {
             setSpinBoxValueWithoutSignals(chromaMinSpinBox_, value);
         }

@@ -1557,7 +1557,7 @@ TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
             this, &TeletextViewerDialog::browseForTeletextStream);
     connect(refreshListButton, &QPushButton::clicked,
             this, &TeletextViewerDialog::refreshPageList);
-    connect(pageComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(pageComboBox, &QComboBox::currentIndexChanged,
             this, &TeletextViewerDialog::loadSelectedPage);
     connect(refreshPageButton, &QPushButton::clicked,
             this, &TeletextViewerDialog::loadSelectedPage);
@@ -1569,7 +1569,7 @@ TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
             this, &TeletextViewerDialog::setAutoRefreshEnabled);
     connect(refreshTimer, &QTimer::timeout,
             this, &TeletextViewerDialog::handlePeriodicRefresh);
-    connect(rendererComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(rendererComboBox, &QComboBox::currentIndexChanged,
             this, [this](int index) { setNativeRendererEnabled(index == 1); });
     connect(flashAnimationCheckBox, &QCheckBox::toggled,
             this, &TeletextViewerDialog::setFlashAnimationEnabled);
