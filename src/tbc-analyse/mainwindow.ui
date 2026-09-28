@@ -379,7 +379,7 @@
             </spacer>
            </item>
            <item>
-            <widget class="QPushButton" name="zoomInPushButton">
+            <widget class="QToolButton" name="zoomInPushButton">
              <property name="minimumSize">
               <size>
                <width>30</width>
@@ -405,7 +405,7 @@
             </widget>
            </item>
            <item>
-            <widget class="QPushButton" name="zoomOutPushButton">
+            <widget class="QToolButton" name="zoomOutPushButton">
              <property name="minimumSize">
               <size>
                <width>30</width>
@@ -431,7 +431,7 @@
             </widget>
            </item>
            <item>
-            <widget class="QPushButton" name="originalSizePushButton">
+            <widget class="QToolButton" name="originalSizePushButton">
              <property name="minimumSize">
               <size>
                <width>30</width>
@@ -606,10 +606,13 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Toggle show/hide dropout highlighting&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <string>Highlight dropouts in the picture (when checked)</string>
              </property>
              <property name="text">
-              <string>Show Dropouts</string>
+              <string>Dropouts</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
              </property>
             </widget>
            </item>
@@ -708,10 +711,13 @@
               </size>
              </property>
              <property name="toolTip">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Toggle normal/reverse field order&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <string>Reverse the field order (when checked)</string>
              </property>
              <property name="text">
-              <string>Reverse Field Order</string>
+              <string>Reverse Order</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
              </property>
             </widget>
            </item>

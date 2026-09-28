@@ -156,9 +156,6 @@ private slots:
     void on_sourcesPushButton_clicked();
     void on_viewPushButton_clicked();
     void on_fieldOrderPushButton_clicked();
-    void on_zoomInPushButton_clicked();
-    void on_zoomOutPushButton_clicked();
-    void on_originalSizePushButton_clicked();
     void on_mouseModePushButton_clicked();
     void onVectorscopeSelectionToggled(bool checked);
     //void on_autoResizeButton_clicked();

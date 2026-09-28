@@ -37,7 +37,6 @@
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOptionSlider>
-#include <QSvgRenderer>
 #include <QStringList>
 #include <QTextStream>
 #include <QDateTime>
@@ -263,43 +262,6 @@ EfmAutoloadCandidates discoverEfmAutoloadCandidates(const QString &directoryPath
 
     candidates.ac3Input = bestAc3Candidate;
     return candidates;
-}
-
-void ensureSvgButtonIcon(QAbstractButton *button, const QString &resourcePath)
-{
-    if (!button) {
-        return;
-    }
-
-    const QSize iconSize = button->iconSize().isValid() ? button->iconSize() : QSize(24, 24);
-    QIcon icon(resourcePath);
-    if (icon.isNull() || icon.availableSizes().isEmpty()) {
-        QSvgRenderer renderer(resourcePath);
-        if (renderer.isValid()) {
-            // Rasterise at the device pixel ratio, not the logical icon size, or
-            // this path produces a blurry icon on a HiDPI display. (It is not a
-            // rare fallback: QIcon reports no availableSizes() for an SVG, so
-            // every toolbar button comes through here.)
-            //
-            // The render bounds must be given explicitly and in LOGICAL units.
-            // QSvgRenderer::render(painter) with no bounds fills the painter's
-            // viewport, which is the pixmap's device rect - and the painter is
-            // already scaled by the device pixel ratio, so the drawing came out
-            // ratio-times too large and cropped at anything above 100%.
-            const qreal devicePixelRatio = button->devicePixelRatioF();
-            QPixmap pixmap(iconSize * devicePixelRatio);
-            pixmap.setDevicePixelRatio(devicePixelRatio);
-            pixmap.fill(Qt::transparent);
-            QPainter painter(&pixmap);
-            renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(iconSize)));
-            icon = QIcon(pixmap);
-        }
-    }
-
-    if (!icon.isNull()) {
-        button->setIcon(icon);
-        button->setIconSize(iconSize);
-    }
 }
 
 
@@ -1302,8 +1264,6 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     ui->actionReload_TBC->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ViewRefresh));
     ui->actionSave_Metadata->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::DocumentSave));
     ui->actionExit->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ApplicationExit));
-    ui->actionZoom_In->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ZoomIn));
-    ui->actionZoom_Out->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ZoomOut));
     ui->actionAbout_ld_analyse->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::HelpAbout));
 
     copyCurrentDisplayAction = new QAction(tr("&Copy Current Display"), this);
@@ -1363,8 +1323,8 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         valueFont.setPointSize(qMax(12, valueFont.pointSize() + 3));
         ui->posTimecodeLineEdit->setFont(valueFont);
         ui->posTimecodeLineEdit->setTextMargins(3, 0, 1, 0);
-        ui->posTimecodeLineEdit->setMinimumHeight(30);
-        ui->posTimecodeLineEdit->setMaximumHeight(30);
+        // Height from the enlarged font (Fixed vertical policy = sizeHint),
+        // not a fixed 30 px that clips it under a larger system font
         const QFontMetrics valueMetrics(valueFont);
         const int valueMinWidth = valueMetrics.horizontalAdvance(QStringLiteral("00:00:00:00")) + 8;
         ui->posTimecodeLineEdit->setMinimumWidth(valueMinWidth);
@@ -1388,15 +1348,20 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         }
     }
     ui->posHorizontalSlider->setContextMenuPolicy(Qt::CustomContextMenu);
-    ensureSvgButtonIcon(ui->startPushButton, QStringLiteral(":/icons/Graphics/start-frame.svg"));
-    ensureSvgButtonIcon(ui->previousPushButton, QStringLiteral(":/icons/Graphics/prev-frame.svg"));
-    ensureSvgButtonIcon(ui->playPushButton, QStringLiteral(":/icons/Graphics/start-playback.svg"));
-    ensureSvgButtonIcon(ui->nextPushButton, QStringLiteral(":/icons/Graphics/next-frame.svg"));
-    ensureSvgButtonIcon(ui->endPushButton, QStringLiteral(":/icons/Graphics/end-frame.svg"));
-    ensureSvgButtonIcon(ui->zoomInPushButton, QStringLiteral(":/icons/Graphics/zoom-in.svg"));
-    ensureSvgButtonIcon(ui->zoomOutPushButton, QStringLiteral(":/icons/Graphics/zoom-out.svg"));
-    ensureSvgButtonIcon(ui->originalSizePushButton, QStringLiteral(":/icons/Graphics/zoom-original.svg"));
-    ensureSvgButtonIcon(ui->mouseModePushButton, QStringLiteral(":/icons/Graphics/oscilloscope-target.svg"));
+    ui->startPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/start-frame.svg")));
+    ui->previousPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/prev-frame.svg")));
+    ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/start-playback.svg")));
+    ui->nextPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/next-frame.svg")));
+    ui->endPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/end-frame.svg")));
+    // The zoom buttons mirror the View menu's zoom actions (enabled state,
+    // tooltip, icon), so the actions carry the media bar's icons
+    ui->actionZoom_In->setIcon(QIcon(QStringLiteral(":/icons/Graphics/zoom-in.svg")));
+    ui->actionZoom_Out->setIcon(QIcon(QStringLiteral(":/icons/Graphics/zoom-out.svg")));
+    ui->actionZoom_1x->setIcon(QIcon(QStringLiteral(":/icons/Graphics/zoom-original.svg")));
+    ui->zoomInPushButton->setDefaultAction(ui->actionZoom_In);
+    ui->zoomOutPushButton->setDefaultAction(ui->actionZoom_Out);
+    ui->originalSizePushButton->setDefaultAction(ui->actionZoom_1x);
+    ui->mouseModePushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/oscilloscope-target.svg")));
     vectorscopeSelectionPushButton = new QPushButton(ui->mediaControl_frame);
     vectorscopeSelectionPushButton->setObjectName(QStringLiteral("vectorscopeSelectionPushButton"));
     vectorscopeSelectionPushButton->setMinimumSize(QSize(30, 30));
@@ -1404,7 +1369,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     vectorscopeSelectionPushButton->setCheckable(true);
     vectorscopeSelectionPushButton->setChecked(false);
     vectorscopeSelectionPushButton->setToolTip(tr("Enable vectorscope custom-area selection on the main viewer"));
-    ensureSvgButtonIcon(vectorscopeSelectionPushButton, QStringLiteral(":/icons/Graphics/highlight-selection.svg"));
+    vectorscopeSelectionPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/highlight-selection.svg")));
     if (ui->horizontalLayout_3 && ui->mouseModePushButton) {
         const int mouseModeButtonIndex = ui->horizontalLayout_3->indexOf(ui->mouseModePushButton);
         if (mouseModeButtonIndex >= 0) {
@@ -2092,10 +2057,7 @@ void MainWindow::setGuiEnabled(bool enabled)
     // "Save Metadata" is available while there are unsaved edits
     ui->actionSave_Metadata->setEnabled(enabled && isWindowModified());
 
-    // Set zoom button states
-    ui->zoomInPushButton->setEnabled(enabled);
-    ui->zoomOutPushButton->setEnabled(enabled);
-    ui->originalSizePushButton->setEnabled(enabled);
+    // (The zoom buttons follow their actions above)
     if (vectorscopeSelectionPushButton) {
         vectorscopeSelectionPushButton->setEnabled(enabled);
     }
@@ -2386,7 +2348,7 @@ void MainWindow::resetGui()
         ui->posTimecodeLineEdit->setVisible(true);
     }
     ui->posHorizontalSlider->setValue(1);
-   (this->width() >= 930) ? ui->dropoutsPushButton->setText(tr("Dropouts Off")) : ui->dropoutsPushButton->setText(tr("Drop N"));
+    ui->dropoutsPushButton->setChecked(tbcSource.getHighlightDropouts());
 
     setViewValues();
 
@@ -2403,12 +2365,7 @@ void MainWindow::resetGui()
     displayAspectRatio = true;
     updateAspectPushButton();
     updateSourcesPushButton();
-    if (this->width() > 1000)
-		ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-	else if (this->width() >= 930)
-		ui->fieldOrderPushButton->setText(tr("Normal order"));
-	else
-		ui->fieldOrderPushButton->setText(tr("Normal"));
+    ui->fieldOrderPushButton->setChecked(tbcSource.getFieldOrder());
 
     // Zoom button options
     ui->zoomInPushButton->setAutoRepeat(true);
@@ -2515,16 +2472,11 @@ void MainWindow::updateGuiUnloaded()
 
     // Set option button states
     updateVideoPushButton();
-    (this->width() >= 930) ? ui->dropoutsPushButton->setText(tr("Dropouts Off")) : ui->dropoutsPushButton->setText(tr("Drop N"));
+    ui->dropoutsPushButton->setChecked(false);
     displayAspectRatio = false;
     updateAspectPushButton();
     updateSourcesPushButton();
-    if (this->width() > 1000)
-		ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-	else if (this->width() >= 930)
-		ui->fieldOrderPushButton->setText(tr("Normal order"));
-	else
-		ui->fieldOrderPushButton->setText(tr("Normal"));
+    ui->fieldOrderPushButton->setChecked(false);
 
     // Hide the displayed image
     hideImage();
@@ -2589,7 +2541,7 @@ void MainWindow::updateAspectPushButton()
     if (!displayAspectRatio) {
         ui->aspectPushButton->setText(tr("SAR 1:1"));
     } else if (tbcSource.getIsWidescreen()) {
-        (this->width() >= 1020) ? ui->aspectPushButton->setText(tr("DAR 16:9")) : ui->aspectPushButton->setText(tr("16:9"));
+        ui->aspectPushButton->setText(tr("DAR 16:9"));
     } else {
         ui->aspectPushButton->setText(tr("DAR 4:3"));
     }
@@ -2608,39 +2560,22 @@ void MainWindow::updateSourcesPushButton()
 		return;
 	}
 	
-	if (this->width() >= 930)
-	{
-		switch (tbcSource.getSourceMode()) {
-		case TbcSource::ONE_SOURCE:
-			// This case should not be reached due to early return above
-			break;
-		case TbcSource::LUMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("Y Source"));
-			break;
-		case TbcSource::CHROMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("C Source"));
-			break;
-		case TbcSource::BOTH_SOURCES:
-			ui->sourcesPushButton->setText(tr("Y/C Sources"));
-			break;
-		}
-	}
-	else
-	{
-		switch (tbcSource.getSourceMode()) {
-		case TbcSource::ONE_SOURCE:
-			// This case should not be reached due to early return above
-			break;
-		case TbcSource::LUMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("Y"));
-			break;
-		case TbcSource::CHROMA_SOURCE:
-			ui->sourcesPushButton->setText(tr("C"));
-			break;
-		case TbcSource::BOTH_SOURCES:
-			ui->sourcesPushButton->setText(tr("Y/C"));
-			break;
-		}
+	switch (tbcSource.getSourceMode()) {
+	case TbcSource::ONE_SOURCE:
+		// This case should not be reached due to early return above
+		break;
+	case TbcSource::LUMA_SOURCE:
+		ui->sourcesPushButton->setText(tr("Y"));
+		ui->sourcesPushButton->setToolTip(tr("Showing the Y (luma) source; click to switch sources"));
+		break;
+	case TbcSource::CHROMA_SOURCE:
+		ui->sourcesPushButton->setText(tr("C"));
+		ui->sourcesPushButton->setToolTip(tr("Showing the C (chroma) source; click to switch sources"));
+		break;
+	case TbcSource::BOTH_SOURCES:
+		ui->sourcesPushButton->setText(tr("Y/C"));
+		ui->sourcesPushButton->setToolTip(tr("Showing both Y/C sources; click to switch sources"));
+		break;
 	}
 	chromaDecoderConfigDialog->updateSourceMode(tbcSource.getSourceMode());
 }
@@ -3982,13 +3917,13 @@ void MainWindow::setPlaybackRunning(bool running)
 
     if (playbackRunning) {
         playbackTickCarryMs = 0.0;
-        ensureSvgButtonIcon(ui->playPushButton, QStringLiteral(":/icons/Graphics/stop-playback.svg"));
+        ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/stop-playback.svg")));
         ui->playPushButton->setToolTip(tr("Stop playback"));
         scheduleNextPlaybackTick();
         return;
     }
 
-    ensureSvgButtonIcon(ui->playPushButton, QStringLiteral(":/icons/Graphics/start-playback.svg"));
+    ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/start-playback.svg")));
     ui->playPushButton->setToolTip(playbackStartToolTip());
 }
 
@@ -4073,52 +4008,17 @@ void MainWindow::setViewValues()
     qint32 currentNumber, maximum;
     QString buttonLabel, spinLabel;
 
-	if (this->width() >= 930)
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			currentNumber = currentFieldNumber;
-			maximum = tbcSource.getNumberOfFields();
-			spinLabel = QString("Field #:");
-			if (tbcSource.getStretchField()) {
-				buttonLabel = QString("Field 2:1");
-			} else {
-				buttonLabel = QString("Field 1:1");
-			}
-		} else {
-			currentNumber = currentFrameNumber;
-			maximum = tbcSource.getNumberOfFrames();
-			spinLabel = QString("Frame #:");
-
-			if (tbcSource.getSplitViewEnabled()) {
-				buttonLabel = QString("Split View");
-			} else {
-				buttonLabel = QString("Frame View");
-			}
-		}
-	}
-	else
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			currentNumber = currentFieldNumber;
-			maximum = tbcSource.getNumberOfFields();
-			spinLabel = QString("Field #:");
-			if (tbcSource.getStretchField()) {
-				buttonLabel = QString("Field 2:1");
-			} else {
-				buttonLabel = QString("Field 1:1");
-			}
-		} else {
-			currentNumber = currentFrameNumber;
-			maximum = tbcSource.getNumberOfFrames();
-			spinLabel = QString("Frame #:");
-
-			if (tbcSource.getSplitViewEnabled()) {
-				buttonLabel = QString("Split");
-			} else {
-				buttonLabel = QString("Frame");
-			}
-		}
-	}
+    if (tbcSource.getFieldViewEnabled()) {
+        currentNumber = currentFieldNumber;
+        maximum = tbcSource.getNumberOfFields();
+        spinLabel = tr("Field #:");
+        buttonLabel = tbcSource.getStretchField() ? tr("Field 2:1") : tr("Field 1:1");
+    } else {
+        currentNumber = currentFrameNumber;
+        maximum = tbcSource.getNumberOfFrames();
+        spinLabel = tr("Frame #:");
+        buttonLabel = tbcSource.getSplitViewEnabled() ? tr("Split") : tr("Frame");
+    }
 
     ui->posNumberSpinBox->setMaximum(maximum);
     updatePositionEditorValue(currentNumber);
@@ -7032,25 +6932,36 @@ void MainWindow::saveAllModesAsPngs()
                              .arg(failedFiles.size()));
 }
 
-// Zoom in menu option
+// Zoom in (menu, shortcut and the media bar's zoom-in button)
 void MainWindow::on_actionZoom_In_triggered()
 {
-    on_zoomInPushButton_clicked();
-	MainWindow::resize_on_aspect();
+    constexpr double factor = 1.1;
+    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
+        scaleFactor *= factor;
+    }
+
+    updateImageViewer();
+    resize_on_aspect();
 }
 
-// Zoom out menu option
+// Zoom out (menu, shortcut and the media bar's zoom-out button)
 void MainWindow::on_actionZoom_Out_triggered()
 {
-    on_zoomOutPushButton_clicked();
-	MainWindow::resize_on_aspect();
+    constexpr double factor = 0.9;
+    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
+        scaleFactor *= factor;
+    }
+
+    updateImageViewer();
+    resize_on_aspect();
 }
 
-// Original size 1:1 zoom menu option
+// Original size 1:1 zoom (menu, shortcut and the media bar's 1:1 button)
 void MainWindow::on_actionZoom_1x_triggered()
 {
-    on_originalSizePushButton_clicked();
-	MainWindow::resize_on_aspect();
+    scaleFactor = 1.0;
+    updateImageViewer();
+    resize_on_aspect();
 }
 
 // Build the View -> UI Scale submenu. The zoom actions above size the picture;
@@ -7803,29 +7714,7 @@ void MainWindow::exitChromaSeekMode(QPushButton* button)
 // Show/hide dropouts button clicked
 void MainWindow::on_dropoutsPushButton_clicked()
 {
-	int width = this->width();
-
-    if (tbcSource.getHighlightDropouts()) {
-        tbcSource.setHighlightDropouts(false);
-		if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts Off"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop N"));
-		}
-    } else {
-        tbcSource.setHighlightDropouts(true);
-        if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts On"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop Y"));
-		}
-    }
+    tbcSource.setHighlightDropouts(ui->dropoutsPushButton->isChecked());
 
     // Show the current image (why isn't this option passed?)
     showImage();
@@ -7916,33 +7805,11 @@ void MainWindow::on_viewPushButton_clicked()
 // Normal/Reverse field order button clicked
 void MainWindow::on_fieldOrderPushButton_clicked()
 {
-	int width = this->width();
+    tbcSource.setFieldOrder(ui->fieldOrderPushButton->isChecked());
 
-    if (tbcSource.getFieldOrder()) {
-        tbcSource.setFieldOrder(false);
-
-        // If the TBC field order is changed, the number of available frames can change, so we need to update the GUI
-        resetGui();
-        updateGuiLoaded();
-        if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Normal order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Normal"));
-    } else {
-        tbcSource.setFieldOrder(true);
-
-        // If the TBC field order is changed, the number of available frames can change, so we need to update the GUI
-        resetGui();
-        updateGuiLoaded();
-        if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Reverse Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Reverse order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Reverse"));
-    }
+    // If the TBC field order is changed, the number of available frames can change, so we need to update the GUI
+    resetGui();
+    updateGuiLoaded();
 
     // Show the current image
     showImage();
@@ -7966,39 +7833,6 @@ void MainWindow::on_actionResizeFrameWithWindow_toggled(bool checked)
 		resizeTimer->start();
 	}
 }
-
-// Zoom in
-void MainWindow::on_zoomInPushButton_clicked()
-{
-    constexpr double factor = 1.1;
-    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
-        scaleFactor *= factor;
-    }
-
-    updateImageViewer();
-    resize_on_aspect();
-}
-
-// Zoom out
-void MainWindow::on_zoomOutPushButton_clicked()
-{
-    constexpr double factor = 0.9;
-    if (((scaleFactor * factor) > 0.333) && ((scaleFactor * factor) < 3.0)) {
-        scaleFactor *= factor;
-    }
-
-    updateImageViewer();
-    resize_on_aspect();
-}
-
-// Original size 1:1 zoom
-void MainWindow::on_originalSizePushButton_clicked()
-{
-    scaleFactor = 1.0;
-    updateImageViewer();
-    resize_on_aspect();
-}
-
 
 
 // Mouse mode button clicked
@@ -8618,141 +8452,6 @@ void MainWindow::onSourceSaved(bool success)
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    int width = this->width();
-    const auto setButtonMaxWidth = [](QPushButton *button, int maxWidth) {
-        if (button) {
-            button->setMaximumWidth(maxWidth);
-        }
-    };
-
-    if (width > 1000) {
-        setButtonMaxWidth(ui->videoPushButton, 80);
-        setButtonMaxWidth(ui->aspectPushButton, 70);
-        setButtonMaxWidth(ui->dropoutsPushButton, 115);
-        setButtonMaxWidth(ui->sourcesPushButton, 110);
-        setButtonMaxWidth(ui->viewPushButton, 100);
-        setButtonMaxWidth(ui->fieldOrderPushButton, 145);
-        if (ui->horizontalSpacer) {
-            ui->horizontalSpacer->changeSize(12, 30, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-        if (ui->horizontalSpacer_2) {
-            ui->horizontalSpacer_2->changeSize(12, 20, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-    } else if (width >= 930) {
-        setButtonMaxWidth(ui->videoPushButton, 72);
-        setButtonMaxWidth(ui->aspectPushButton, 64);
-        setButtonMaxWidth(ui->dropoutsPushButton, 102);
-        setButtonMaxWidth(ui->sourcesPushButton, 98);
-        setButtonMaxWidth(ui->viewPushButton, 92);
-        setButtonMaxWidth(ui->fieldOrderPushButton, 118);
-        if (ui->horizontalSpacer) {
-            ui->horizontalSpacer->changeSize(8, 30, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-        if (ui->horizontalSpacer_2) {
-            ui->horizontalSpacer_2->changeSize(8, 20, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-    } else {
-        setButtonMaxWidth(ui->videoPushButton, 58);
-        setButtonMaxWidth(ui->aspectPushButton, 52);
-        setButtonMaxWidth(ui->dropoutsPushButton, 74);
-        setButtonMaxWidth(ui->sourcesPushButton, 70);
-        setButtonMaxWidth(ui->viewPushButton, 66);
-        setButtonMaxWidth(ui->fieldOrderPushButton, 88);
-        if (ui->horizontalSpacer) {
-            ui->horizontalSpacer->changeSize(4, 30, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-        if (ui->horizontalSpacer_2) {
-            ui->horizontalSpacer_2->changeSize(4, 20, QSizePolicy::Maximum, QSizePolicy::Minimum);
-        }
-    }
-    if (ui->horizontalLayout_3) {
-        ui->horizontalLayout_3->invalidate();
-    }
-
-	//field order rename depending on size
-	if (!tbcSource.getFieldOrder())
-	{
-		if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Normal Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Normal order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Normal"));
-	}
-	else
-	{
-		if (width > 1000)
-			ui->fieldOrderPushButton->setText(tr("Reverse Field-order"));
-		else if (width >= 930)
-			ui->fieldOrderPushButton->setText(tr("Reverse order"));
-		else
-			ui->fieldOrderPushButton->setText(tr("Reverse"));
-	}
-
-	//source label depending on size
-	updateSourcesPushButton();
-
-	//dropout label
-	if (!tbcSource.getHighlightDropouts())
-	{
-		if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts Off"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop N"));
-		}
-
-	}
-	else
-	{
-		if (width >= 930)
-		{
-			ui->dropoutsPushButton->setText(tr("Dropouts On"));
-		}
-		else
-		{
-			ui->dropoutsPushButton->setText(tr("Drop Y"));
-		}
-	}
-
-	//view label
-	if (this->width() >= 930)
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			if (tbcSource.getStretchField()) {
-				ui->viewPushButton->setText(tr("Field 2:1"));
-			} else {
-				ui->viewPushButton->setText(tr("Field 1:1"));
-			}
-		} else {
-			if (tbcSource.getSplitViewEnabled()) {
-				ui->viewPushButton->setText(tr("Split View"));
-			} else {
-				ui->viewPushButton->setText(tr("Frame View"));
-			}
-		}
-	}
-	else
-	{
-		if (tbcSource.getFieldViewEnabled()) {
-			if (tbcSource.getStretchField()) {
-				ui->viewPushButton->setText(tr("Field 2:1"));
-			} else {
-				ui->viewPushButton->setText(tr("Field 1:1"));
-			}
-		} else {
-			if (tbcSource.getSplitViewEnabled()) {
-				ui->viewPushButton->setText(tr("Split"));
-			} else {
-				ui->viewPushButton->setText(tr("Frame"));
-			}
-		}
-	}
-
-	//aspect ratio label
-	updateAspectPushButton();
 
 	// Resize frame with window if resizeFrameWithWindow is enabled
 	if (resizeFrameWithWindow && tbcSource.getIsSourceLoaded()) {
