@@ -32,6 +32,42 @@ static const char *DIRECTORY_PURPOSES[] = {
 static const double UI_SCALE_MINIMUM = 0.5;
 static const double UI_SCALE_MAXIMUM = 3.0;
 
+// Frame snapshot options in the current group. Both "Save frame as PNG" and
+// "Extract slideshow stills" keep a set.
+static void writeSnapshotOptions(QSettings *configuration, const FrameSnapshot::Options &options)
+{
+    configuration->setValue("framing", FrameSnapshot::framingName(options.framing));
+    configuration->setValue("marginLeft", options.marginLeft);
+    configuration->setValue("marginTop", options.marginTop);
+    configuration->setValue("marginRight", options.marginRight);
+    configuration->setValue("marginBottom", options.marginBottom);
+    configuration->setValue("customRect", options.customRect);
+    configuration->setValue("aspectMode", FrameSnapshot::aspectModeName(options.aspectMode));
+    configuration->setValue("stillMode", FrameSnapshot::stillModeName(options.stillMode));
+    configuration->setValue("searchRadius", options.searchRadius);
+    configuration->setValue("upscaleFactor", options.upscaleFactor);
+    configuration->setValue("upscaleMethod", options.upscaleMethod);
+}
+
+// Additive keys: a missing key takes its value from defaults
+static FrameSnapshot::Options readSnapshotOptions(QSettings *configuration, const FrameSnapshot::Options &defaults)
+{
+    FrameSnapshot::Options options;
+    options.framing = FrameSnapshot::framingFromName(configuration->value("framing").toString(), defaults.framing);
+    options.marginLeft = std::max(0, configuration->value("marginLeft", defaults.marginLeft).toInt());
+    options.marginTop = std::max(0, configuration->value("marginTop", defaults.marginTop).toInt());
+    options.marginRight = std::max(0, configuration->value("marginRight", defaults.marginRight).toInt());
+    options.marginBottom = std::max(0, configuration->value("marginBottom", defaults.marginBottom).toInt());
+    options.customRect = configuration->value("customRect", defaults.customRect).toRect();
+    options.aspectMode = FrameSnapshot::aspectModeFromName(configuration->value("aspectMode").toString(), defaults.aspectMode);
+    options.stillMode = FrameSnapshot::stillModeFromName(configuration->value("stillMode").toString(), defaults.stillMode);
+    options.searchRadius = std::clamp(configuration->value("searchRadius", defaults.searchRadius).toInt(), 1, 600);
+    options.upscaleFactor = std::clamp(configuration->value("upscaleFactor", defaults.upscaleFactor).toInt(), 1, 4);
+    // Not checked against this build's methods; FrameSnapshot::process falls back
+    options.upscaleMethod = configuration->value("upscaleMethod", defaults.upscaleMethod).toString();
+    return options;
+}
+
 Configuration::Configuration(QObject *parent) : QObject(parent)
 {
     // Open the application's configuration file
@@ -145,18 +181,15 @@ void Configuration::writeConfiguration(void)
 
     // "Save frame as PNG" options
     configuration->beginGroup("frameSnapshot");
-    configuration->setValue("framing", FrameSnapshot::framingName(settings.frameSnapshot.framing));
-    configuration->setValue("marginLeft", settings.frameSnapshot.marginLeft);
-    configuration->setValue("marginTop", settings.frameSnapshot.marginTop);
-    configuration->setValue("marginRight", settings.frameSnapshot.marginRight);
-    configuration->setValue("marginBottom", settings.frameSnapshot.marginBottom);
-    configuration->setValue("customRect", settings.frameSnapshot.customRect);
-    configuration->setValue("aspectMode", FrameSnapshot::aspectModeName(settings.frameSnapshot.aspectMode));
-    configuration->setValue("stillMode", FrameSnapshot::stillModeName(settings.frameSnapshot.stillMode));
+    writeSnapshotOptions(configuration, settings.frameSnapshot);
     configuration->remove("bestFrameSearch"); // replaced by stillMode
-    configuration->setValue("searchRadius", settings.frameSnapshot.searchRadius);
-    configuration->setValue("upscaleFactor", settings.frameSnapshot.upscaleFactor);
-    configuration->setValue("upscaleMethod", settings.frameSnapshot.upscaleMethod);
+    configuration->endGroup();
+
+    // "Extract slideshow stills" options
+    configuration->beginGroup("slideshowExtract");
+    writeSnapshotOptions(configuration, settings.slideshowExtract.snapshot);
+    configuration->setValue("minHoldSeconds", settings.slideshowExtract.minHoldSeconds);
+    configuration->setValue("outputDirectory", settings.slideshowExtract.outputDirectory);
     configuration->endGroup();
 
     // Sync the settings with disk
@@ -268,28 +301,21 @@ void Configuration::readConfiguration(void)
     configuration->endGroup();
 
     // "Save frame as PNG" options (additive keys - older config files fall back to defaults)
-    const FrameSnapshot::Options snapshotDefaults;
     configuration->beginGroup("frameSnapshot");
-    settings.frameSnapshot.framing = FrameSnapshot::framingFromName(
-        configuration->value("framing").toString(), snapshotDefaults.framing);
-    settings.frameSnapshot.marginLeft = std::max(0, configuration->value("marginLeft", 0).toInt());
-    settings.frameSnapshot.marginTop = std::max(0, configuration->value("marginTop", 0).toInt());
-    settings.frameSnapshot.marginRight = std::max(0, configuration->value("marginRight", 0).toInt());
-    settings.frameSnapshot.marginBottom = std::max(0, configuration->value("marginBottom", snapshotDefaults.marginBottom).toInt());
-    settings.frameSnapshot.customRect = configuration->value("customRect", QRect()).toRect();
-    settings.frameSnapshot.aspectMode = FrameSnapshot::aspectModeFromName(
-        configuration->value("aspectMode").toString(), snapshotDefaults.aspectMode);
     // stillMode replaced a bestFrameSearch on/off flag
-    const FrameSnapshot::StillMode legacyStillMode = configuration->value("bestFrameSearch", false).toBool()
-                                                         ? FrameSnapshot::StillMode::Cleanest : snapshotDefaults.stillMode;
-    settings.frameSnapshot.stillMode = FrameSnapshot::stillModeFromName(
-        configuration->value("stillMode").toString(), legacyStillMode);
-    settings.frameSnapshot.searchRadius = std::clamp(
-        configuration->value("searchRadius", snapshotDefaults.searchRadius).toInt(), 1, 600);
-    settings.frameSnapshot.upscaleFactor = std::clamp(
-        configuration->value("upscaleFactor", snapshotDefaults.upscaleFactor).toInt(), 1, 4);
-    // Not checked against this build's methods; FrameSnapshot::process falls back
-    settings.frameSnapshot.upscaleMethod = configuration->value("upscaleMethod", snapshotDefaults.upscaleMethod).toString();
+    FrameSnapshot::Options snapshotDefaults;
+    if (configuration->value("bestFrameSearch", false).toBool()) snapshotDefaults.stillMode = FrameSnapshot::StillMode::Cleanest;
+    settings.frameSnapshot = readSnapshotOptions(configuration, snapshotDefaults);
+    configuration->endGroup();
+
+    // "Extract slideshow stills" options. Until first saved they follow the
+    // "Save frame as PNG" options, averaging each photo.
+    FrameSnapshot::Options slideshowDefaults = settings.frameSnapshot;
+    slideshowDefaults.stillMode = FrameSnapshot::StillMode::Average;
+    configuration->beginGroup("slideshowExtract");
+    settings.slideshowExtract.snapshot = readSnapshotOptions(configuration, slideshowDefaults);
+    settings.slideshowExtract.minHoldSeconds = std::clamp(configuration->value("minHoldSeconds", 1.0).toDouble(), 0.1, 60.0);
+    settings.slideshowExtract.outputDirectory = configuration->value("outputDirectory", QString()).toString();
     configuration->endGroup();
 }
 
@@ -354,8 +380,9 @@ void Configuration::setDefault(void)
     settings.vbiProcessing.teletextTapeFormat = QStringLiteral("vhs");
     settings.vbiProcessing.teletextMinDuplicates = 1;
 
-    // "Save frame as PNG" options
+    // "Save frame as PNG" and "Extract slideshow stills" options
     settings.frameSnapshot = FrameSnapshot::Options();
+    settings.slideshowExtract = SlideshowExtractOptions();
 
     // Write the configuration
     writeConfiguration();
@@ -791,4 +818,15 @@ void Configuration::setFrameSnapshotOptions(const FrameSnapshot::Options &option
 FrameSnapshot::Options Configuration::getFrameSnapshotOptions(void)
 {
     return settings.frameSnapshot;
+}
+
+// "Extract slideshow stills" options
+void Configuration::setSlideshowExtractOptions(const SlideshowExtractOptions &options)
+{
+    settings.slideshowExtract = options;
+}
+
+SlideshowExtractOptions Configuration::getSlideshowExtractOptions(void)
+{
+    return settings.slideshowExtract;
 }

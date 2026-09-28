@@ -47,6 +47,8 @@ set(tbc-analyse_SOURCES
     configuration.cpp
     framesnapshot.cpp framesnapshot.h
     savepngdialog.cpp savepngdialog.h
+    slideshowextract.cpp slideshowextract.h
+    slideshowdialog.cpp slideshowdialog.h
     dropoutanalysisdialog.cpp dropoutanalysisdialog.ui
     visibledropoutanalysisdialog.cpp visibledropoutanalysisdialog.ui
     whitesnranalysisdialog.cpp whitesnranalysisdialog.ui

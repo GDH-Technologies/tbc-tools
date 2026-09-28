@@ -18,7 +18,9 @@
 #include <QVector>
 #include <atomic>
 #include <functional>
+#include <vector>
 
+#include "sourcevideo.h"
 #include "tbcmetadata.h"
 
 // "Save frame as PNG" pipeline, shared by MainWindow and the headless
@@ -112,10 +114,55 @@ QImage upscale(const QImage &image, qint32 factor, const QString &method, QStrin
 QImage process(const QImage &frameImage, const Options &options,
                const TbcMetaData::VideoParameters &videoParameters, QString *errorMessage);
 
+// Luma straight from the .tbc -----------------------------------------------
+
+// A frame belongs to a held still while its thumbnail differs from the still's
+// reference frame by less than this (fraction of black to white). Measured on
+// a VHS slideshow: cuts sit at 0.24-0.36, frames of one photo at <= 0.018.
+constexpr double RUN_BREAK_DIFFERENCE = 0.06;
+// A still survives an interruption of up to this many frames (a burst of
+// head-clog or tracking glitches) when the picture comes back after it. A
+// slideshow tape with a damaged stretch glitched every ~20 frames.
+constexpr qint32 MAX_INTERRUPTION_FRAMES = 10;
+
+// Reads a framed area of fields straight from the .tbc as luma, 0 (black) to
+// 1 (white): the field lines of cropRect (frame coordinates), width() samples
+// by height() lines per field. Not thread-safe; use one per thread.
+class LumaReader
+{
+public:
+    bool open(const QString &tbcFilename, const TbcMetaData::VideoParameters &videoParameters,
+              const QRect &cropRect, QString *errorMessage);
+    qint32 width() const { return areaWidth; }
+    qint32 height() const { return areaHeight; }
+    qint32 firstFieldLine() const { return line0; } // 0-based
+    qint32 fieldPixels() const { return areaWidth * areaHeight; }
+
+    // Writes fieldPixels() values; false (and zeros) for a field the file lacks
+    bool readField(qint32 fieldNumber, float *target);
+    // Block means of a field's framed area, block x block samples each
+    // (width() / block across, height() / block down)
+    std::vector<double> thumbnail(const float *field, qint32 block = 8) const;
+
+private:
+    SourceVideo sourceVideo;
+    qint32 fieldWidth = 0;
+    qint32 availableFields = 0;
+    qint32 x0 = 0;
+    qint32 line0 = 0;
+    qint32 areaWidth = 0;
+    qint32 areaHeight = 0;
+    float black = 0.0f;
+    float range = 1.0f;
+};
+
+// Mean absolute difference of two thumbnails of the same area
+double thumbnailDifference(const std::vector<double> &a, const std::vector<double> &b);
+
 // Still-picture search -----------------------------------------------------
 //
 // Walks out from the anchor frame while the picture stays the same (a held
-// slideshow photo), builds the per-pixel median of those frames' luma, and
+// slideshow photo, through interruptions it comes back from), builds the per-pixel median of those frames' luma, and
 // rejects frames with visible dropouts or far from that median (tears,
 // dropouts the metadata missed). The frame closest to the median is the
 // cleanest; the survivors are what "average" mixes.
@@ -143,7 +190,8 @@ struct FrameScore {
     double distance = 0.0;   // RMS luma difference from the run's median after any realignment, 0..1
     double rawDistance = 0.0; // the same before realignment: the frame as "cleanest" saves it
     double dropouts = 0.0;   // visible dropout samples from the metadata
-    bool inRun = false;      // same still as the anchor
+    bool inRun = false;      // same still as the anchor (and not a duplicate)
+    bool duplicate = false;  // the TBC repeats the previous frame exactly
     bool eligible = false;   // passed the dropout and distance checks
     // Eligible frames only: median and largest band shift (samples), largest
     // field shift (lines), and whether averaging resamples the frame

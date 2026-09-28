@@ -36,6 +36,19 @@ constexpr const char *Plugin = "pluginDirectory";
 #include "tbc/vbiprocessingoptions.h"
 #include "framesnapshot.h"
 
+// "Extract slideshow stills": its own snapshot options (until first saved,
+// those of "Save frame as PNG" with each photo averaged), the shortest hold
+// that counts as a photo, and the last output folder
+struct SlideshowExtractOptions {
+    FrameSnapshot::Options snapshot = [] {
+        FrameSnapshot::Options options;
+        options.stillMode = FrameSnapshot::StillMode::Average;
+        return options;
+    }();
+    double minHoldSeconds = 1.0;
+    QString outputDirectory; // empty: "<tape>_stills" next to the .tbc
+};
+
 class Configuration : public QObject
 {
     Q_OBJECT
@@ -144,6 +157,10 @@ public:
     void setFrameSnapshotOptions(const FrameSnapshot::Options &options);
     FrameSnapshot::Options getFrameSnapshotOptions(void);
 
+    // Get and set methods - "Extract slideshow stills" options
+    void setSlideshowExtractOptions(const SlideshowExtractOptions &options);
+    SlideshowExtractOptions getSlideshowExtractOptions(void);
+
 signals:
 
 public slots:
@@ -219,6 +236,7 @@ private:
         CudaPlugin cudaPlugin;
         VbiProcessingOptions vbiProcessing;
         FrameSnapshot::Options frameSnapshot;
+        SlideshowExtractOptions slideshowExtract;
     } settings;
 
     void setDefault(void);

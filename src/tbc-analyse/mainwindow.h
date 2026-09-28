@@ -27,6 +27,7 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QKeyEvent>
+#include <QPointer>
 #include <QRect>
 #include <QTimer>
 #include <QVector>
@@ -46,6 +47,7 @@
 #include "vbidialog.h"
 #include "vbiprocessingdialog.h"
 #include "savepngdialog.h"
+#include "slideshowdialog.h"
 #include "dropoutanalysisdialog.h"
 #include "visibledropoutanalysisdialog.h"
 #include "blacksnranalysisdialog.h"
@@ -110,6 +112,7 @@ private slots:
     void on_actionWhite_SNR_analysis_triggered();
     void on_actionSave_frame_as_PNG_triggered();
     void on_actionSave_frame_as_PNG_with_options_triggered();
+    void on_actionExtract_slideshow_stills_triggered();
     void saveAllModesAsPngs();
     void copyCurrentDisplayToClipboard();
     void on_actionZoom_In_triggered();
@@ -246,6 +249,7 @@ private:
     MetadataExportDialog *metadataExportDialog = nullptr;
     NotesViewerDialog *notesViewerDialog = nullptr;
     SegmentsViewerDialog *segmentsViewerDialog = nullptr;
+    QPointer<SlideshowDialog> slideshowDialog; // deletes itself on close
     TeletextViewerDialog *teletextViewerDialog = nullptr;
 
     // Class globals
@@ -351,6 +355,9 @@ private:
     // Save the current frame as a PNG with the given options (framing, aspect,
     // best-frame search, upscale). Asks only for the file name.
     void saveFrameAsPng(const FrameSnapshot::Options &options);
+    // Render and save the ticked holds of a slideshow scan, with a manifest
+    void saveSlideshowStills(const SlideshowExtract::CaptureInput &input,
+                             const QVector<SlideshowExtract::Hold> &holds, const QString &directory);
     // Copy the current video frame (renderedCurrentImageForExport) to the
     // clipboard. Shared by the main-window Ctrl+C action and the graph-window
     // copyFrameRequested() signal handlers.

@@ -17,6 +17,7 @@
 #include <QTemporaryDir>
 
 #include "framesnapshot.h"
+#include "slideshowextract.h"
 
 // Release builds define NDEBUG, so a bare assert() would check nothing.
 #define CHECK(condition)                                                    \
@@ -260,8 +261,9 @@ void testStillSearch()
     for (const FrameSnapshot::FrameScore &score : result.scores) {
         CHECK(score.inRun == (score.frame <= 9));
     }
-    // The walk stops at the first frame of picture B
-    CHECK(result.scores.last().frame == 10);
+    // Picture B never gives way to picture A again: the walk reads on through
+    // it (it could be an interruption) to the end of its radius, all out of the run
+    CHECK(result.scores.last().frame == 11);
     // The torn frame is rejected; the quietest untorn frame is the cleanest
     CHECK(!result.eligibleFrames.contains(6));
     CHECK(result.bestFrame == 4);
@@ -418,6 +420,267 @@ void testAverageFrames()
     CHECK(FrameSnapshot::averageFrames({1}, [&](qint32) { return solid(1); }, &cancel).isNull());
 }
 
+// Frames the TBC repeats exactly count once; without that, the copies become
+// the median and every real frame is rejected as far from it
+void testStillDuplicates()
+{
+    const qint32 fieldWidth = 96;
+    const qint32 fieldHeight = 48;
+    const qint32 frames = 12;
+    const double black = 16384.0;
+    const double white = 54016.0;
+
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    const QString tbcPath = directory.filePath(QStringLiteral("repeats.tbc"));
+    QFile file(tbcPath);
+    CHECK(file.open(QIODevice::WriteOnly));
+    for (qint32 frame = 1; frame <= frames; frame++) {
+        // Frames 5 to 9 repeat frame 4
+        const qint32 source = (frame >= 5 && frame <= 9) ? 4 : frame;
+        for (qint32 field = 0; field < 2; field++) {
+            std::mt19937 generator(source * 2 + field + 5);
+            std::normal_distribution<double> noise(0.0, 0.02);
+            QVector<quint16> samples(fieldWidth * fieldHeight);
+            for (qint32 line = 0; line < fieldHeight; line++) {
+                for (qint32 x = 0; x < fieldWidth; x++) {
+                    const double base = ((x / 8) % 2 ? 0.7 : 0.3) + 0.1 * std::sin((line * 2 + field) * 0.3);
+                    samples[line * fieldWidth + x] = quint16(qBound(0.0, black + (base + noise(generator)) * (white - black), 65535.0));
+                }
+            }
+            file.write(reinterpret_cast<const char *>(samples.constData()), samples.size() * 2);
+        }
+    }
+    file.close();
+
+    FrameSnapshot::SearchInput input;
+    input.tbcFilename = tbcPath;
+    input.videoParameters.system = NTSC;
+    input.videoParameters.fieldWidth = fieldWidth;
+    input.videoParameters.fieldHeight = fieldHeight;
+    input.videoParameters.black16bIre = qint32(black);
+    input.videoParameters.white16bIre = qint32(white);
+    input.anchorFrame = 6;
+    input.radius = 8;
+    input.cropRect = QRect(0, 0, fieldWidth, fieldHeight * 2 - 1);
+    for (qint32 frame = 1; frame <= frames; frame++) {
+        input.fieldNumbers.append({frame * 2 - 1, frame * 2});
+        input.visibleDropouts.append(0.0);
+    }
+
+    const FrameSnapshot::SearchResult result = FrameSnapshot::findStillFrames(input);
+    CHECK(result.errorMessage.isEmpty());
+    for (const FrameSnapshot::FrameScore &score : result.scores) {
+        CHECK(score.duplicate == (score.frame >= 5 && score.frame <= 9));
+    }
+    CHECK(result.eligibleFrames.size() >= 6);
+    for (const qint32 frame : result.eligibleFrames) CHECK(frame < 5 || frame > 9);
+}
+
+void testLumaReader()
+{
+    const qint32 fieldWidth = 64;
+    const qint32 fieldHeight = 40;
+    const qint32 fields = 4;
+    const double black = 16384.0;
+    const double white = 54016.0;
+    // Luma 0..0.49 that depends on the field, the line and the sample
+    auto value = [](qint32 field, qint32 line, qint32 x) { return ((x + line + field * 7) % 50) / 100.0; };
+
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    const QString tbcPath = directory.filePath(QStringLiteral("ramp.tbc"));
+    QFile file(tbcPath);
+    CHECK(file.open(QIODevice::WriteOnly));
+    for (qint32 field = 0; field < fields; field++) {
+        QVector<quint16> samples(fieldWidth * fieldHeight);
+        for (qint32 line = 0; line < fieldHeight; line++) {
+            for (qint32 x = 0; x < fieldWidth; x++) {
+                samples[line * fieldWidth + x] = quint16(qRound(black + value(field, line, x) * (white - black)));
+            }
+        }
+        file.write(reinterpret_cast<const char *>(samples.constData()), samples.size() * 2);
+    }
+    file.close();
+
+    TbcMetaData::VideoParameters parameters;
+    parameters.system = NTSC;
+    parameters.fieldWidth = fieldWidth;
+    parameters.fieldHeight = fieldHeight;
+    parameters.black16bIre = qint32(black);
+    parameters.white16bIre = qint32(white);
+
+    // Frame rows 10..49 are field lines 5..24; samples 8..39
+    FrameSnapshot::LumaReader reader;
+    CHECK(reader.open(tbcPath, parameters, QRect(8, 10, 32, 40), nullptr));
+    CHECK(reader.width() == 32);
+    CHECK(reader.firstFieldLine() == 5);
+    CHECK(reader.height() == 20);
+    std::vector<float> area(reader.fieldPixels());
+    CHECK(reader.readField(3, area.data()));
+    for (qint32 y = 0; y < reader.height(); y++) {
+        for (qint32 x = 0; x < reader.width(); x++) {
+            CHECK(near(area[y * reader.width() + x], value(2, y + 5, x + 8), 1e-4));
+        }
+    }
+    const std::vector<double> blocks = reader.thumbnail(area.data());
+    CHECK(blocks.size() == 4 * 2);
+    double firstBlock = 0.0;
+    for (qint32 y = 0; y < 8; y++) {
+        for (qint32 x = 0; x < 8; x++) firstBlock += area[y * reader.width() + x];
+    }
+    CHECK(near(blocks[0], firstBlock / 64.0, 1e-9));
+
+    // A field past the end of the file reads as zeros, not a crash
+    CHECK(!reader.readField(fields + 1, area.data()));
+    CHECK(area[0] == 0.0f);
+
+    CHECK(!reader.open(tbcPath, parameters, QRect(0, 0, 4, 4), nullptr));
+
+    // The scan's samples chain their differences from the previous frame
+    SlideshowExtract::ScanInput input;
+    input.tbcFilename = tbcPath;
+    input.videoParameters = parameters;
+    input.cropRect = QRect(0, 0, fieldWidth, fieldHeight * 2 - 1);
+    input.fieldNumbers = {{1, 2}, {3, 4}};
+    const SlideshowExtract::ScanResult scan = SlideshowExtract::scan(input);
+    CHECK(scan.errorMessage.isEmpty());
+    CHECK(scan.samples.size() == 2);
+    CHECK(scan.samples[0].difference == 1.0);
+    CHECK(near(scan.samples[1].difference,
+               SlideshowExtract::thumbnailDifference(scan.samples[1].thumbnail, scan.samples[0].thumbnail), 1e-12));
+
+    const QVector<QImage> previews = SlideshowExtract::framePreviews(input, {2, 9}, 32);
+    CHECK(previews.size() == 2);
+    CHECK(previews[0].width() == 32);
+    CHECK(previews[1].isNull());
+}
+
+// Synthetic scan samples: 8x8-block thumbnails, as the scan would store them
+QVector<quint8> pattern(quint32 seed)
+{
+    std::mt19937 generator(seed);
+    std::uniform_int_distribution<int> level(30, 230);
+    QVector<quint8> thumbnail(64);
+    for (quint8 &block : thumbnail) block = quint8(level(generator));
+    return thumbnail;
+}
+
+QVector<quint8> blend(const QVector<quint8> &a, const QVector<quint8> &b, double t)
+{
+    QVector<quint8> mixed(a.size());
+    for (qint32 i = 0; i < a.size(); i++) mixed[i] = quint8(qRound(a[i] * (1.0 - t) + b[i] * t));
+    return mixed;
+}
+
+void testFindHolds()
+{
+    using SlideshowExtract::FrameSample;
+    using SlideshowExtract::Hold;
+    using SlideshowExtract::HoldKind;
+
+    std::mt19937 generator(7);
+    std::uniform_int_distribution<int> noise(-2, 2);
+    QVector<FrameSample> samples;
+    auto add = [&](const QVector<quint8> &thumbnail) {
+        FrameSample sample;
+        sample.thumbnail = thumbnail;
+        for (quint8 &block : sample.thumbnail) block = quint8(qBound(0, block + noise(generator), 255));
+        if (!samples.isEmpty()) {
+            sample.difference = SlideshowExtract::thumbnailDifference(sample.thumbnail, samples.last().thumbnail);
+        }
+        samples.append(sample);
+    };
+
+    const QVector<quint8> a = pattern(1), b = pattern(2), c = pattern(3), e = pattern(5), f = pattern(6),
+                          g = pattern(7);
+    // A text card: dark with a few bright blocks
+    QVector<quint8> card(64, 20);
+    for (qint32 i = 20; i < 28; i++) card[i] = 200;
+    // A slow pan: a sine pattern sliding sideways
+    auto pan = [](qint32 t) {
+        QVector<quint8> thumbnail(64);
+        for (qint32 i = 0; i < 64; i++) {
+            thumbnail[i] = quint8(qRound(128.0 + 90.0 * std::sin(0.9 * (i % 8) + 0.5 * (i / 8) + 0.0067 * t)));
+        }
+        return thumbnail;
+    };
+
+    for (qint32 i = 0; i < 60; i++) add(a);                        // 0-59 photo A
+    for (qint32 i = 0; i < 60; i++) add(b);                        // 60-119 cut to B
+    for (qint32 i = 1; i <= 30; i++) add(blend(b, c, i / 31.0));   // 120-149 dissolve to C
+    for (qint32 i = 0; i < 60; i++) add(c);                        // 150-209 photo C
+    for (qint32 i = 0; i < 30; i++) add(QVector<quint8>(64, 3));   // 210-239 black
+    for (qint32 i = 0; i < 60; i++) add(card);                     // 240-299 title card
+    for (qint32 t = 0; t < 150; t++) add(pan(t));                  // 300-449 pan
+    for (qint32 i = 0; i < 20; i++) add(e);                        // 450-469 too short
+    for (qint32 i = 0; i < 30; i++) add(f);                        // 470-499 exactly the minimum
+    for (qint32 i = 0; i < 29; i++) add(g);                        // 500-528 one short
+
+    const qint32 first = 1001; // frame number of sample 0
+    const QVector<Hold> holds = SlideshowExtract::findHolds(samples, first, 30);
+    CHECK(holds.size() == 6);
+
+    CHECK(holds[0].first == first && holds[0].last == first + 59);
+    CHECK(holds[0].kind == HoldKind::Photo && holds[0].hardStart);
+
+    // B runs into the start of the dissolve, but no further than its first frames
+    CHECK(holds[1].first == first + 60 && holds[1].hardStart);
+    CHECK(holds[1].last >= first + 119 && holds[1].last <= first + 127);
+    CHECK(holds[1].kind == HoldKind::Photo);
+
+    // C picks up the end of the dissolve; the middle of it is no hold
+    CHECK(holds[2].last == first + 209 && holds[2].first >= first + 135 && holds[2].first <= first + 150);
+    CHECK(holds[2].kind == HoldKind::Photo && !holds[2].hardStart);
+
+    // Black is dropped; the card is kept
+    CHECK(holds[3].first == first + 240 && holds[3].last == first + 299);
+    CHECK(holds[3].kind == HoldKind::Photo);
+
+    // The pan is listed once, as moving
+    CHECK(holds[4].kind == HoldKind::Moving);
+    CHECK(holds[4].first == first + 300 && holds[4].last >= first + 400 && holds[4].last <= first + 449);
+
+    // 30 frames is a hold, 20 and 29 are not
+    CHECK(holds[5].first == first + 470 && holds[5].last == first + 499);
+    CHECK(holds[5].kind == HoldKind::Photo);
+    for (const Hold &hold : SlideshowExtract::findHolds(samples, first, 31)) CHECK(hold.first != first + 470);
+
+    CHECK(SlideshowExtract::findHolds({}, first, 30).isEmpty());
+
+    // Glitch bursts the picture comes back from stay inside the hold; a longer
+    // break than MAX_INTERRUPTION_FRAMES ends it
+    samples.clear();
+    const QVector<quint8> glitch = pattern(9);
+    for (qint32 i = 0; i < 100; i++) add((i >= 30 && i < 35) || (i >= 60 && i < 70) ? glitch : a); // 0-99
+    for (qint32 i = 0; i < 11; i++) add(glitch);                                               // 100-110
+    for (qint32 i = 0; i < 40; i++) add(a);                                                    // 111-150
+    // A picture that is torn more often than not is unsteady, not a photo
+    for (qint32 i = 0; i < 60; i++) add(i % 10 < 4 ? b : glitch);                           // 151-210
+    const QVector<Hold> glitched = SlideshowExtract::findHolds(samples, 1, 30);
+    CHECK(glitched.size() == 3);
+    CHECK(glitched[0].first == 1 && glitched[0].last == 100);
+    CHECK(glitched[0].kind == HoldKind::Photo && near(glitched[0].steadiness, 0.85, 1e-9));
+    CHECK(glitched[1].first == 112 && glitched[1].last == 151);
+    CHECK(glitched[2].first == 152 && glitched[2].kind == HoldKind::Unsteady);
+
+    // A glitch in the middle of a hold is not its anchor
+    samples.clear();
+    for (qint32 i = 0; i < 60; i++) add(i >= 27 && i < 34 ? glitch : a);
+    const QVector<Hold> middleGlitch = SlideshowExtract::findHolds(samples, 1, 30);
+    CHECK(middleGlitch.size() == 1);
+    CHECK(middleGlitch[0].anchor < 28 || middleGlitch[0].anchor > 34);
+    SlideshowExtract::Capture capture;
+    capture.frame = 1234;
+    capture.framesAveraged = 40;
+    Options options;
+    options.upscaleFactor = 2;
+    CHECK(SlideshowExtract::stillFileName(QStringLiteral("tape"), 7, capture, options)
+          == QStringLiteral("tape_still_007_f1234_avg40_up2x_lanczos4.png"));
+    CHECK(SlideshowExtract::frameTimecode(1, NTSC) == QStringLiteral("00:00:00:00"));
+    CHECK(SlideshowExtract::frameTimecode(25 * 61 + 3, PAL) == QStringLiteral("00:01:01:02"));
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -433,6 +696,9 @@ int main(int argc, char *argv[])
     testStillAlignment();
     testAlignFrame();
     testAverageFrames();
+    testStillDuplicates();
+    testLumaReader();
+    testFindHolds();
 
     std::cerr << "All frame snapshot tests passed\n";
     return 0;
