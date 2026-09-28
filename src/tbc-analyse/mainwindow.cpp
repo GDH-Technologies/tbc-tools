@@ -1954,9 +1954,15 @@ bool MainWindow::event(QEvent *event)
 
 // Update GUI methods for when TBC source files are loaded and unloaded -----------------------------------------------
 
-// Enable or disable all the GUI controls
+// Enable or disable the GUI controls for whether a source is loaded
+// ("enabled"). This is the one place their enabled state is decided: an
+// action that can't work in the current state is disabled here, not refused
+// after it is chosen. Metadata-only sources have no pictures, so everything
+// that needs video data also needs !metadataOnly.
 void MainWindow::setGuiEnabled(bool enabled)
 {
+    const bool video = enabled && !tbcSource.getIsMetadataOnly();
+
     // Enable the field/frame controls
     ui->posNumberSpinBox->setEnabled(enabled);
     if (ui->posTimecodeLineEdit) {
@@ -1970,12 +1976,23 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->posHorizontalSlider->setEnabled(enabled);
     ui->mediaControl_frame->setEnabled(enabled);
 
-    // Enable menu options
-    ui->actionLine_scope->setEnabled(enabled);
-    ui->actionRGB_scope->setEnabled(enabled);
-    ui->actionYUV_range_scope->setEnabled(enabled);
-    ui->actionVectorscope->setEnabled(enabled);
-    ui->actionField_timing_scope->setEnabled(enabled);
+    // Enable menu options: those that need pictures
+    ui->actionLine_scope->setEnabled(video);
+    ui->actionRGB_scope->setEnabled(video);
+    ui->actionYUV_range_scope->setEnabled(video);
+    ui->actionVectorscope->setEnabled(video);
+    ui->actionWaveform_monitor->setEnabled(video);
+    ui->actionField_timing_scope->setEnabled(video);
+    ui->actionSave_frame_as_PNG->setEnabled(video);
+    ui->actionSave_frame_as_PNG_with_options->setEnabled(video);
+    if (saveAllModesPngAction) {
+        saveAllModesPngAction->setEnabled(video);
+    }
+    if (copyCurrentDisplayAction) {
+        copyCurrentDisplayAction->setEnabled(video);
+    }
+
+    // ... and those that need a source or its metadata
     ui->actionVBI->setEnabled(enabled);
     ui->actionZoom_In->setEnabled(enabled);
     ui->actionZoom_Out->setEnabled(enabled);
@@ -1986,21 +2003,18 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->actionVisible_Dropout_analysis->setEnabled(enabled);
     ui->actionSNR_analysis->setEnabled(enabled); // Black SNR
     ui->actionWhite_SNR_analysis->setEnabled(enabled);
-    ui->actionSave_frame_as_PNG->setEnabled(enabled);
-    ui->actionSave_frame_as_PNG_with_options->setEnabled(enabled);
-    if (saveAllModesPngAction) {
-        saveAllModesPngAction->setEnabled(enabled);
-    }
-    if (copyCurrentDisplayAction) {
-        copyCurrentDisplayAction->setEnabled(enabled);
-    }
     ui->actionClosed_Captions->setEnabled(enabled);
+    ui->actionFix_JSON_SNR->setEnabled(enabled);
+    ui->actionMetadata_Editor->setEnabled(enabled);
     ui->actionVideo_parameters->setEnabled(enabled);
     ui->actionChroma_decoder_configuration->setEnabled(enabled);
     ui->actionReload_TBC->setEnabled(enabled);
     ui->actionOpen_TBC_file->setEnabled(true);
     if (notesViewerAction) {
         notesViewerAction->setEnabled(enabled);
+    }
+    if (segmentsViewerAction) {
+        segmentsViewerAction->setEnabled(enabled);
     }
 
     // "Save Metadata" is available while there are unsaved edits
@@ -2353,17 +2367,6 @@ void MainWindow::updateGuiLoaded()
     // Enable the GUI controls
     setGuiEnabled(true);
     setPlaybackRunning(false);
-    const bool metadataOnly = tbcSource.getIsMetadataOnly();
-
-    if (metadataOnly) {
-        ui->actionSave_frame_as_PNG->setEnabled(false);
-        ui->actionSave_frame_as_PNG_with_options->setEnabled(false);
-        ui->actionLine_scope->setEnabled(false);
-        ui->actionRGB_scope->setEnabled(false);
-        ui->actionYUV_range_scope->setEnabled(false);
-        ui->actionVectorscope->setEnabled(false);
-        ui->actionField_timing_scope->setEnabled(false);
-    }
 
     // Update the status bar readout
     updateBottomStatusReadout();
