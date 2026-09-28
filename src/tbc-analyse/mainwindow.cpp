@@ -1412,7 +1412,24 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     visibleDropoutAnalysisDialog = new VisibleDropOutAnalysisDialog(this);
     blackSnrAnalysisDialog = new BlackSnrAnalysisDialog(this);
     whiteSnrAnalysisDialog = new WhiteSnrAnalysisDialog(this);
-    busyDialog = new BusyDialog(this);
+    // Busy indicator while TbcSource loads or saves on its worker thread.
+    // Application-modal because the scopes and dialogs read tbcSource too; no
+    // cancel. Escape or the title-bar close only hide a QProgressDialog, so
+    // while the operation runs it is shown again.
+    busyProgress = new QProgressDialog(this);
+    busyProgress->setWindowTitle(tr("tbc-analyse"));
+    busyProgress->setCancelButton(nullptr);
+    busyProgress->setRange(0, 0);
+    busyProgress->setWindowModality(Qt::ApplicationModal);
+    busyProgress->reset(); // stops the auto-show timer a new QProgressDialog starts
+    busyProgress->setAutoReset(false);
+    busyProgress->setAutoClose(false);
+    busyProgress->hide();
+    connect(busyProgress, &QDialog::finished, this, [this]() {
+        if (sourceOperationInProgress) {
+            busyProgress->show();
+        }
+    });
     closedCaptionDialog = new ClosedCaptionsDialog(this);
     videoParametersDialog = new VideoParametersDialog(this);
     chromaDecoderConfigDialog = new ChromaDecoderConfigDialog(this);
@@ -1435,6 +1452,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     connect(metadataEditorDialog, &MetadataEditorDialog::refreshRequested,
             this, [this]() {
         if (!tbcSource.getIsSourceLoaded()) return;
+        sourceOperationInProgress = true;
         tbcSource.saveSourceMetadata();
     });
     // SECAM per-field first-line-identity edits from the Metadata Editor.
@@ -2227,10 +2245,7 @@ void MainWindow::requestSourceOpen(const QString &inputFileName)
     }
 
     lastFilename = normalizedInputFileName;
-    const bool busy = sourceOperationInProgress
-                      || (busyDialog && busyDialog->isVisible())
-                      || !isEnabled();
-    if (busy) {
+    if (sourceOperationInProgress) {
         pendingSourceOpenFilename = normalizedInputFileName;
         return;
     }
@@ -2244,10 +2259,7 @@ void MainWindow::processPendingSourceOpenRequest()
         return;
     }
 
-    const bool busy = sourceOperationInProgress
-                      || (busyDialog && busyDialog->isVisible())
-                      || !isEnabled();
-    if (busy) {
+    if (sourceOperationInProgress) {
         return;
     }
 
@@ -2361,9 +2373,6 @@ void MainWindow::updateGuiLoaded()
                                                 tbcSource.getSourceMode(),
                                                 false); // set to false to init the chroma decoder selection
     chromaDecoderConfigDialog->setVideoLevels(tbcSource.getVideoParameters());
-
-    // Ensure the busy dialogue is hidden
-    busyDialog->hide();
 
     // Disable "Save Metadata", now we've loaded the metadata into the GUI
     ui->actionSave_Metadata->setEnabled(false);
@@ -3506,6 +3515,7 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
 
             // Keep reload behaviour aligned with the file the user selected.
             lastFilename = resolvedInput;
+            sourceOperationInProgress = true;
             tbcSource.loadSource(resolvedSourceFilename, resolvedInput);
             return;
         }
@@ -3523,11 +3533,13 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
         }
 
         lastFilename = metadataDisplayName;
+        sourceOperationInProgress = true;
         tbcSource.loadMetadata(resolvedInput, metadataDisplayName);
         return;
     }
 
     lastFilename = inputFileName;
+    sourceOperationInProgress = true;
     tbcSource.loadSource(inputFileName);
 
     // Note: loading continues in the background...
@@ -4989,12 +5001,6 @@ void MainWindow::on_actionExit_triggered()
 void MainWindow::on_actionOpen_TBC_file_triggered()
 {
     tbcDebugStream() << "MainWindow::on_actionOpen_TBC_file_triggered(): Called";
-    if (busyDialog && busyDialog->isVisible()) {
-        busyDialog->hide();
-    }
-    if (!isEnabled()) {
-        setEnabled(true);
-    }
     QString startPath = configuration.getSourceDirectory();
     QFileInfo startPathInfo(startPath);
     if (startPath.isEmpty() || !startPathInfo.exists()) {
@@ -5702,6 +5708,7 @@ void MainWindow::on_actionLDS_Converter_triggered()
 // Start saving the modified metadata
 void MainWindow::on_actionSave_Metadata_triggered()
 {
+    sourceOperationInProgress = true;
     tbcSource.saveSourceMetadata();
 
     // Saving continues in the background...
@@ -8409,16 +8416,10 @@ void MainWindow::onSourceBusy(QString infoMessage)
     setPlaybackRunning(false);
     tbcDebugStream() << "MainWindow::onSourceBusy(): Got signal with message" << infoMessage;
     sourceOperationInProgress = true;
-    // Set the busy message and centre the dialog in the parent window
-    busyDialog->setMessage(infoMessage);
-    busyDialog->move(this->geometry().center() - busyDialog->rect().center());
-
-    if (!busyDialog->isVisible()) {
-        // Disable the main window during loading
-        this->setEnabled(false);
-        busyDialog->setEnabled(true);
-
-        busyDialog->show();
+    // The Show event filter centres it over the main window
+    busyProgress->setLabelText(infoMessage);
+    if (!busyProgress->isVisible()) {
+        busyProgress->show();
     }
 }
 
@@ -8428,9 +8429,7 @@ void MainWindow::onSourceLoaded(bool success)
     tbcDebugStream() << "MainWindow::onSourceLoaded(): Called";
     setPlaybackRunning(false);
     sourceOperationInProgress = false;
-
-    // Hide the busy dialogue
-    busyDialog->hide();
+    busyProgress->hide();
 
     // Ensure source loaded ok
     if (success) {
@@ -8491,8 +8490,6 @@ void MainWindow::onSourceLoaded(bool success)
         messageBox.warning(this, "Error", tbcSource.getLastIOError());
     }
 
-    // Enable the main window
-    this->setEnabled(true);
     processPendingSourceOpenRequest();
 }
 
@@ -8501,9 +8498,7 @@ void MainWindow::onSourceSaved(bool success)
 {
     tbcDebugStream() << "MainWindow::onSourceSaved(): Called";
     sourceOperationInProgress = false;
-
-    // Hide the busy dialogue
-    busyDialog->hide();
+    busyProgress->hide();
 
     if (success) {
         // Disable the "Save Metadata" action until the metadata is modified again
@@ -8530,8 +8525,6 @@ void MainWindow::onSourceSaved(bool success)
 
     updateMetadataStatusPanel();
 
-    // Enable the main window
-    this->setEnabled(true);
     processPendingSourceOpenRequest();
 }
 

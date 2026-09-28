@@ -2536,7 +2536,7 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
 {
     // Open the TBC metadata file
     tbcDebugStream() << "TbcSource::startBackgroundLoad(): Processing metadata...";
-    emit busy("Processing metadata...");
+    emit busy(tr("Processing metadata..."));
 
     const QFileInfo sourceInfo(sourceFilename);
     const QString sourceFileName = sourceInfo.fileName();
@@ -2705,7 +2705,7 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
 
     // Open the new source video
     tbcDebugStream() << "TbcSource::startBackgroundLoad(): Loading TBC file...";
-    emit busy("Loading TBC file...");
+    emit busy(tr("Loading TBC file..."));
     if (!sourceVideo.open(sourceFilename, videoParameters.fieldWidth * videoParameters.fieldHeight)) {
         // Open failed
         qWarning() << "Open TBC file failed for filename" << sourceFilename;
@@ -2722,7 +2722,7 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
         && QFileInfo::exists(chromaSourceFilename)) {
         // Yes! Open it.
         tbcDebugStream() << "TbcSource::startBackgroundLoad(): Loading chroma TBC file...";
-        emit busy("Loading chroma TBC file...");
+        emit busy(tr("Loading chroma TBC file..."));
         if (!chromaSourceVideo.open(chromaSourceFilename, videoParameters.fieldWidth * videoParameters.fieldHeight)) {
             // Open failed
             qWarning() << "Open chroma TBC file failed for filename" << chromaSourceFilename;
@@ -2758,7 +2758,7 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
     }
 
     // Analyse the metadata
-    emit busy("Generating graph data and chapter map...");
+    emit busy(tr("Generating graph data and chapter map..."));
     generateData();
     deriveSegmentsAtLoad();
 
@@ -2770,7 +2770,7 @@ bool TbcSource::startBackgroundLoadMetadata(QString metadataFilename, QString di
 
     // Open the metadata file
     tbcDebugStream() << "TbcSource::startBackgroundLoadMetadata(): Processing metadata...";
-    emit busy("Processing metadata...");
+    emit busy(tr("Processing metadata..."));
 
     // A .tbc.json beside a .tbc.db opens the database: the JSON is its projection
     metadataFilename = TbcMetaData::resolveMetadataPath(metadataFilename);
@@ -2796,7 +2796,7 @@ bool TbcSource::startBackgroundLoadMetadata(QString metadataFilename, QString di
     configureChromaDecoder();
 
     // Analyse the metadata
-    emit busy("Generating graph data and chapter map...");
+    emit busy(tr("Generating graph data and chapter map..."));
     generateData();
     deriveSegmentsAtLoad();
 
@@ -2812,7 +2812,7 @@ void TbcSource::finishBackgroundLoad()
 bool TbcSource::startBackgroundSave(QString metadataFilename)
 {
     tbcDebugStream() << "TbcSource::startBackgroundSave(): Saving to" << metadataFilename;
-    emit busy("Saving metadata...");
+    emit busy(tr("Saving metadata..."));
 
     // SQLite first: the .tbc.db is the canonical store and the .tbc.json its
     // projection. A source that only has a JSON gets its database here (the

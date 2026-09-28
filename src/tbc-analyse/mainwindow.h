@@ -32,6 +32,7 @@
 #include <QVector>
 #include <QActionGroup>
 #include <QImage>
+#include <QProgressDialog>
 #include <QFutureWatcher>
 
 #include "oscilloscopedialog.h"
@@ -48,7 +49,6 @@
 #include "visibledropoutanalysisdialog.h"
 #include "blacksnranalysisdialog.h"
 #include "whitesnranalysisdialog.h"
-#include "busydialog.h"
 #include "closedcaptionsdialog.h"
 #include "videoparametersdialog.h"
 #include "chromadecoderconfigdialog.h"
@@ -237,7 +237,7 @@ private:
     VisibleDropOutAnalysisDialog* visibleDropoutAnalysisDialog;
     BlackSnrAnalysisDialog* blackSnrAnalysisDialog;
     WhiteSnrAnalysisDialog* whiteSnrAnalysisDialog;
-    BusyDialog* busyDialog;
+    QProgressDialog *busyProgress = nullptr;
     ClosedCaptionsDialog *closedCaptionDialog;
     VideoParametersDialog *videoParametersDialog;
     ChromaDecoderConfigDialog *chromaDecoderConfigDialog;

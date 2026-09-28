@@ -3,7 +3,6 @@ add_compile_definitions(_USE_MATH_DEFINES)
 
 set(tbc-analyse_SOURCES
     blacksnranalysisdialog.cpp blacksnranalysisdialog.ui
-    busydialog.cpp busydialog.ui
     ../audio-align/audioalignmentdialog.cpp ../audio-align/audioalignmentdialog.h ../audio-align/audioalignmentdialog.ui
     ../audio-align/audioalignmentutil.cpp ../audio-align/audioalignmentutil.h
     closedcaptionsdialog.cpp closedcaptionsdialog.ui
