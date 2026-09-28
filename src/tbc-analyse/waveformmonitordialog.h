@@ -34,7 +34,9 @@ class WaveformMonitorDialog : public QDialog {
 
  public:
   explicit WaveformMonitorDialog(QWidget *parent = nullptr);
-  ~WaveformMonitorDialog();
+  // Phosphor (persistence) rendering, saved by MainWindow in Configuration
+  void setPhosphorMode(bool on);
+  bool phosphorMode() const;
 
   // Feed new frame data to the waveform monitor.
   // composite_samples / y_samples / c_samples are the per-field 16-bit TBC

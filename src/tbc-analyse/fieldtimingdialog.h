@@ -20,7 +20,6 @@ class FieldTimingDialog : public QDialog
 
 public:
     explicit FieldTimingDialog(QWidget *parent = nullptr);
-    ~FieldTimingDialog() override;
 
     void setFieldData(const QString &sourceLabel,
                       qint32 firstFieldNumber,

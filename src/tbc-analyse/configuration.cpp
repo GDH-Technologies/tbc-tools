@@ -98,12 +98,14 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("closedCaptionDialogGeometry", settings.windows.closedCaptionDialogGeometry);
     configuration->setValue("videoParametersDialogGeometry", settings.windows.videoParametersDialogGeometry);
     configuration->setValue("chromaDecoderConfigDialogGeometry", settings.windows.chromaDecoderConfigDialogGeometry);
+    configuration->setValue("fieldTimingDialogGeometry", settings.windows.fieldTimingDialogGeometry);
     configuration->endGroup();
 
     // View options
     configuration->beginGroup("viewOptions");
     configuration->setValue("toggleChromaDuringSeek", settings.viewOptions.toggleChromaDuringSeek);
     configuration->setValue("skipBySegments", settings.viewOptions.skipBySegments);
+    configuration->setValue("waveformPhosphorMode", settings.viewOptions.waveformPhosphorMode);
     configuration->setValue("theme", settings.viewOptions.theme);
     configuration->setValue("generateProxyEnabled", settings.viewOptions.generateProxyEnabled);
     configuration->setValue("exportProfileConfigEnabled", settings.viewOptions.exportProfileConfigEnabled);
@@ -196,12 +198,14 @@ void Configuration::readConfiguration(void)
     settings.windows.closedCaptionDialogGeometry = configuration->value("closedCaptionDialogGeometry").toByteArray();
     settings.windows.videoParametersDialogGeometry = configuration->value("videoParametersDialogGeometry").toByteArray();
     settings.windows.chromaDecoderConfigDialogGeometry = configuration->value("chromaDecoderConfigDialogGeometry").toByteArray();
+    settings.windows.fieldTimingDialogGeometry = configuration->value("fieldTimingDialogGeometry").toByteArray();
     configuration->endGroup();
 
     // View options
     configuration->beginGroup("viewOptions");
     settings.viewOptions.toggleChromaDuringSeek = configuration->value("toggleChromaDuringSeek", false).toBool();
     settings.viewOptions.skipBySegments = configuration->value("skipBySegments", true).toBool();
+    settings.viewOptions.waveformPhosphorMode = configuration->value("waveformPhosphorMode", false).toBool();
     settings.viewOptions.theme = configuration->value("theme", QStringLiteral("dark")).toString();
     if (settings.viewOptions.theme != QLatin1String("light")) {
         settings.viewOptions.theme = QStringLiteral("dark");
@@ -313,10 +317,12 @@ void Configuration::setDefault(void)
     settings.windows.closedCaptionDialogGeometry = QByteArray();
     settings.windows.videoParametersDialogGeometry = QByteArray();
     settings.windows.chromaDecoderConfigDialogGeometry = QByteArray();
+    settings.windows.fieldTimingDialogGeometry = QByteArray();
 
     // View options
     settings.viewOptions.toggleChromaDuringSeek = false;
     settings.viewOptions.skipBySegments = true;
+    settings.viewOptions.waveformPhosphorMode = false;
     settings.viewOptions.theme = QStringLiteral("dark");
     settings.viewOptions.generateProxyEnabled = false;
     settings.viewOptions.exportProfileConfigEnabled = false;
@@ -533,6 +539,16 @@ QByteArray Configuration::getChromaDecoderConfigDialogGeometry(void)
     return settings.windows.chromaDecoderConfigDialogGeometry;
 }
 
+void Configuration::setFieldTimingDialogGeometry(QByteArray fieldTimingDialogGeometry)
+{
+    settings.windows.fieldTimingDialogGeometry = fieldTimingDialogGeometry;
+}
+
+QByteArray Configuration::getFieldTimingDialogGeometry(void)
+{
+    return settings.windows.fieldTimingDialogGeometry;
+}
+
 // View options
 void Configuration::setToggleChromaDuringSeek(bool toggleChromaDuringSeek)
 {
@@ -552,6 +568,16 @@ void Configuration::setSkipBySegments(bool skipBySegments)
 bool Configuration::getSkipBySegments(void)
 {
     return settings.viewOptions.skipBySegments;
+}
+
+void Configuration::setWaveformPhosphorMode(bool waveformPhosphorMode)
+{
+    settings.viewOptions.waveformPhosphorMode = waveformPhosphorMode;
+}
+
+bool Configuration::getWaveformPhosphorMode(void)
+{
+    return settings.viewOptions.waveformPhosphorMode;
 }
 
 void Configuration::setTheme(QString theme)

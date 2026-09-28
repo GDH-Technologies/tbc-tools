@@ -1731,6 +1731,8 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     closedCaptionDialog->restoreGeometry(configuration.getClosedCaptionDialogGeometry());
     videoParametersDialog->restoreGeometry(configuration.getVideoParametersDialogGeometry());
     chromaDecoderConfigDialog->restoreGeometry(configuration.getChromaDecoderConfigDialogGeometry());
+    fieldTimingDialog->restoreGeometry(configuration.getFieldTimingDialogGeometry());
+    waveformMonitorDialog->setPhosphorMode(configuration.getWaveformPhosphorMode());
 
     // Load view options from configuration
     resizeFrameWithWindow = configuration.getResizeFrameWithWindow();
@@ -1865,6 +1867,8 @@ MainWindow::~MainWindow()
     configuration.setClosedCaptionDialogGeometry(closedCaptionDialog->saveGeometry());
     configuration.setVideoParametersDialogGeometry(videoParametersDialog->saveGeometry());
     configuration.setChromaDecoderConfigDialogGeometry(chromaDecoderConfigDialog->saveGeometry());
+    configuration.setFieldTimingDialogGeometry(fieldTimingDialog->saveGeometry());
+    configuration.setWaveformPhosphorMode(waveformMonitorDialog->phosphorMode());
     configuration.writeConfiguration();
 
     // Close the source video if open

@@ -6,7 +6,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -18,15 +17,6 @@ FieldTimingDialog::FieldTimingDialog(QWidget *parent)
     setWindowTitle(tr("Field Timing Scope"));
     setWindowFlags(Qt::Window);
     resize(900, 500);
-
-    QSettings settings;
-    restoreGeometry(settings.value(QStringLiteral("FieldTimingDialog/geometry")).toByteArray());
-}
-
-FieldTimingDialog::~FieldTimingDialog()
-{
-    QSettings settings;
-    settings.setValue(QStringLiteral("FieldTimingDialog/geometry"), saveGeometry());
 }
 
 void FieldTimingDialog::setupUi()
