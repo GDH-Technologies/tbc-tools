@@ -54,7 +54,7 @@ QString commit()
 
 QString versionLine()
 {
-    return QStringLiteral("tbc-tools - Branch: %1 / Commit: %2").arg(branch(), commit());
+    return QStringLiteral("tbc-tools %1 - Branch: %2 / Commit: %3").arg(version(), branch(), commit());
 }
 
 } // namespace TbcBuildInfo

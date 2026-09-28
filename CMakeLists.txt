@@ -665,6 +665,15 @@ if(BUILD_TESTING)
     set(SCRIPTS_DIR ${CMAKE_SOURCE_DIR}/scripts)
     set(TESTDATA_DIR ${CMAKE_SOURCE_DIR}/testdata)
 
+    # --version must name the version this build resolved. It used to print
+    # only branch and commit, so no host could be checked after a release, and
+    # win0's then showed the "nix" / "0.0.0" placeholders.
+    string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" _APP_VERSION_REGEX "${APP_VERSION}")
+    add_test(NAME version-line COMMAND tbc-chroma-decoder --version)
+    set_tests_properties(version-line PROPERTIES
+        PASS_REGULAR_EXPRESSION "tbc-tools ${_APP_VERSION_REGEX} - Branch: [^ ]+ / Commit: [^ ]+")
+    unset(_APP_VERSION_REGEX)
+
     add_test(
         NAME chroma-ntsc-rgb
         COMMAND ${SCRIPTS_DIR}/test-chroma
