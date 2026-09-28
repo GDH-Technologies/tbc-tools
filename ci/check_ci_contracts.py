@@ -16,6 +16,7 @@ WIN_CUDA_RUNTIME_SCRIPT = ROOT / "scripts/windows-cuda-runtime.sh"
 CUDA_PLUGIN_PUBLISH_WORKFLOW = ROOT / ".github/workflows/publish_cuda_plugin.yml"
 SELF_HOSTED_LINUX_WORKFLOW = ROOT / ".github/workflows/self-hosted-linux.yml"
 SELF_HOSTED_MACOS_WORKFLOW = ROOT / ".github/workflows/self-hosted-macos.yml"
+MACOS_BUNDLE_DEPENDENCIES_SCRIPT = ROOT / "ci/macos_bundle_dependencies.sh"
 SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml"
 SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
 FLEET_DEPLOY_HOST_SCRIPT = ROOT / "ci/deploy_fleet_host.sh"
@@ -279,6 +280,9 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # air0 runs macOS 26, the version the hosted job pins away from. Printing
     # sw_vers first keeps a future Qt uic regression at the top of the log.
     "sw_vers",
+    # The bundle rewrite lives in a script the guardrails can parse-check
+    # (bash 3.2 safe: macOS /bin/bash).
+    "bash ci/macos_bundle_dependencies.sh dist/tbc-tools.app",
 )
 # The dev-shell CMake build compiled everything a second time just to run
 # ctest; it must not come back into the macOS workflow.
@@ -838,6 +842,7 @@ def main() -> int:
         CUDA_PLUGIN_PACKAGE_SCRIPT,
         SELF_HOSTED_LINUX_WORKFLOW,
         SELF_HOSTED_MACOS_WORKFLOW,
+        MACOS_BUNDLE_DEPENDENCIES_SCRIPT,
         SELF_HOSTED_WINDOWS_WORKFLOW,
         SELF_HOSTED_DEPLOY_WORKFLOW,
         ACTIONLINT_CONFIG,

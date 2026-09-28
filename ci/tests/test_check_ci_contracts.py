@@ -567,6 +567,16 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS,
         )
 
+    def test_macos_bundle_dependencies_script_is_wired_and_linted(self) -> None:
+        self.assertEqual(
+            check_ci_contracts.MACOS_BUNDLE_DEPENDENCIES_SCRIPT,
+            check_ci_contracts.ROOT / "ci/macos_bundle_dependencies.sh",
+        )
+        self.assertIn(
+            "bash ci/macos_bundle_dependencies.sh dist/tbc-tools.app",
+            check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
+        )
+
     def test_flake_contract_requires_ctest_inside_the_darwin_build(self) -> None:
         # ctest runs inside `nix build .#`, so the binaries it exercises are the
         # ones that get deployed. A sync that drops these lines would silently
