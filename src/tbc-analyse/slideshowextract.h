@@ -100,6 +100,7 @@ QString holdKindName(HoldKind kind);
 struct Hold {
     qint32 first = 0; // frame numbers
     qint32 last = 0;
+    qint32 anchor = 0; // the frame most like the hold's median picture, nearest the middle: not in a glitch
     HoldKind kind = HoldKind::Photo;
     double drift = 0.0;     // first-quarter vs last-quarter median thumbnails, 0..1
     double deviation = 0.0; // spatial standard deviation of the median thumbnail, 0..1
@@ -108,7 +109,7 @@ struct Hold {
     qint32 interruptions = 0;    // times the picture broke off and came back
     bool hardStart = true;  // entered by a cut (or the start of the range) rather than a gradual change
     qint32 length() const { return last - first + 1; }
-    qint32 middle() const { return first + (last - first) / 2; }
+
 };
 
 // Holds of at least minHoldFrames that are not blank, in frame order.
@@ -124,7 +125,7 @@ bool writeScanReport(const QString &filename, const QVector<FrameSample> &sample
 struct CaptureInput {
     ScanInput scan;                  // covering at least the hold
     QVector<double> visibleDropouts; // per frame, indexed like scan.fieldNumbers
-    FrameSnapshot::Options options;  // stillMode: Average, Cleanest or Off (the middle frame)
+    FrameSnapshot::Options options;  // stillMode: Average, Cleanest or Off (the anchor frame)
 };
 
 struct Capture {
@@ -145,7 +146,7 @@ struct Still {
     qint32 index = 0; // 1-based, as in the file name
     QString fileName;
     Hold hold;
-    qint32 captureFrame = 0;   // the frame saved, or the hold's middle when averaged
+    qint32 captureFrame = 0;   // the frame saved, or the most typical frame of an average
     qint32 framesAveraged = 1; // 1 = a single frame
     QString startTimecode;
     double durationSeconds = 0.0;

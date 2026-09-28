@@ -146,7 +146,7 @@ SlideshowDialog::SlideshowDialog(const SlideshowExtractOptions &settings, const 
     radiusSpin->setPrefix(tr("±"));
     radiusSpin->setSuffix(tr(" frames"));
     radiusSpin->setValue(settings.snapshot.searchRadius);
-    radiusSpin->setToolTip(tr("Frames used either side of the middle of each photo's hold."));
+    radiusSpin->setToolTip(tr("Frames used either side of each photo's most typical frame."));
     captureLayout->addRow(tr("Save:"), captureCombo);
     captureLayout->addRow(tr("Use up to:"), radiusSpin);
 
@@ -213,7 +213,7 @@ SlideshowDialog::SlideshowDialog(const SlideshowExtractOptions &settings, const 
     connect(holdList, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) { showHold(item); });
     connect(holdList, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item) {
         const qint32 index = item->data(StillColumn, Qt::UserRole).toInt();
-        if (index >= 0 && index < holds.size()) emit jumpRequested(holds[index].middle());
+        if (index >= 0 && index < holds.size()) emit jumpRequested(holds[index].anchor);
     });
 
     refreshRange();
@@ -294,9 +294,9 @@ void SlideshowDialog::startScan()
         outcome.scan = SlideshowExtract::scan(input, cancel.get(), progress.get());
         if (!outcome.scan.errorMessage.isEmpty() || outcome.scan.cancelled) return outcome;
         outcome.holds = SlideshowExtract::findHolds(outcome.scan.samples, input.firstFrame, minHoldFrames);
-        QVector<qint32> middles;
-        for (const SlideshowExtract::Hold &hold : outcome.holds) middles.append(hold.middle());
-        outcome.previews = SlideshowExtract::framePreviews(input, middles, PREVIEW_WIDTH, cancel.get());
+        QVector<qint32> anchors;
+        for (const SlideshowExtract::Hold &hold : outcome.holds) anchors.append(hold.anchor);
+        outcome.previews = SlideshowExtract::framePreviews(input, anchors, PREVIEW_WIDTH, cancel.get());
         outcome.scan.samples.clear(); // not needed past here; can be large
         return outcome;
     }));

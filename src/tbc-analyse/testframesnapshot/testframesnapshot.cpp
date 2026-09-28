@@ -663,6 +663,13 @@ void testFindHolds()
     CHECK(glitched[0].kind == HoldKind::Photo && near(glitched[0].steadiness, 0.85, 1e-9));
     CHECK(glitched[1].first == 112 && glitched[1].last == 151);
     CHECK(glitched[2].first == 152 && glitched[2].kind == HoldKind::Unsteady);
+
+    // A glitch in the middle of a hold is not its anchor
+    samples.clear();
+    for (qint32 i = 0; i < 60; i++) add(i >= 27 && i < 34 ? glitch : a);
+    const QVector<Hold> middleGlitch = SlideshowExtract::findHolds(samples, 1, 30);
+    CHECK(middleGlitch.size() == 1);
+    CHECK(middleGlitch[0].anchor < 28 || middleGlitch[0].anchor > 34);
     SlideshowExtract::Capture capture;
     capture.frame = 1234;
     capture.framesAveraged = 40;

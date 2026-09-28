@@ -53,6 +53,27 @@ double deviationOf(const QVector<quint8> &thumbnail)
     return std::sqrt(std::max(0.0, sumSquares / thumbnail.size() - mean * mean)) / 255.0;
 }
 
+// The sample of from..to nearest the middle that is at least as close to the
+// median thumbnail as the hold's typical frame. The still search starts
+// there: in a clean hold that is at or beside the middle, so the search has
+// room both ways; a glitch in the middle is passed over for the nearest clean frame.
+qint32 typicalFrame(const QVector<FrameSample> &samples, qint32 from, qint32 to, const QVector<quint8> &median)
+{
+    std::vector<double> differences(to - from + 1);
+    for (qint32 i = from; i <= to; i++) differences[i - from] = thumbnailDifference(samples[i].thumbnail, median);
+    std::vector<double> sorted = differences;
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+    const double typical = sorted[sorted.size() / 2];
+
+    const qint32 middle = from + (to - from) / 2;
+    for (qint32 distance = 0; from <= middle - distance || middle + distance <= to; distance++) {
+        for (const qint32 i : {middle - distance, middle + distance}) {
+            if (i >= from && i <= to && differences[i - from] <= typical) return i;
+        }
+    }
+    return middle;
+}
+
 // First quarter against last quarter, each by its median so a torn frame does
 // not count as movement
 double driftOf(const QVector<FrameSample> &samples, qint32 from, qint32 to)
@@ -185,8 +206,10 @@ QVector<Hold> findHolds(const QVector<FrameSample> &samples, qint32 firstFrame, 
         hold.first = firstFrame + start;
         hold.last = firstFrame + end;
         hold.hardStart = start == 0 || samples[start].difference >= FrameSnapshot::RUN_BREAK_DIFFERENCE;
-        hold.deviation = deviationOf(medianThumbnail(samples, start, end));
+        const QVector<quint8> median = medianThumbnail(samples, start, end);
+        hold.deviation = deviationOf(median);
         if (hold.deviation < BLANK_DEVIATION) return;
+        hold.anchor = firstFrame + typicalFrame(samples, start, end, median);
         hold.drift = driftOf(samples, start, end);
         qint32 steady = 0;
         qint32 run = 0;
@@ -214,7 +237,9 @@ QVector<Hold> findHolds(const QVector<FrameSample> &samples, qint32 firstFrame, 
                 const qint32 previousStart = previous.first - firstFrame;
                 previous.last = hold.last;
                 previous.drift = driftOf(samples, previousStart, end);
-                previous.deviation = deviationOf(medianThumbnail(samples, previousStart, end));
+                const QVector<quint8> merged = medianThumbnail(samples, previousStart, end);
+                previous.deviation = deviationOf(merged);
+                previous.anchor = firstFrame + typicalFrame(samples, previousStart, end, merged);
                 return;
             }
         }
@@ -318,13 +343,13 @@ Capture captureHold(const CaptureInput &input, const Hold &hold, const std::func
         return capture;
     }
 
-    capture.frame = hold.middle();
+    capture.frame = hold.anchor;
     QImage frameImage;
     if (options.stillMode != FrameSnapshot::StillMode::Off) {
         FrameSnapshot::SearchInput search;
         search.tbcFilename = input.scan.tbcFilename;
         search.videoParameters = input.scan.videoParameters;
-        search.anchorFrame = hold.middle();
+        search.anchorFrame = hold.anchor;
         search.radius = options.searchRadius;
         search.cropRect = input.scan.cropRect;
         search.firstFrame = hold.first;
