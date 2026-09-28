@@ -1995,6 +1995,7 @@ void MainWindow::setGuiEnabled(bool enabled)
     ui->actionField_timing_scope->setEnabled(video);
     ui->actionSave_frame_as_PNG->setEnabled(video);
     ui->actionSave_frame_as_PNG_with_options->setEnabled(video);
+    ui->actionExtract_slideshow_stills->setEnabled(video);
     if (saveAllModesPngAction) {
         saveAllModesPngAction->setEnabled(video);
     }
@@ -3443,7 +3444,8 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
         updateGuiUnloaded();
     }
 
-    // Close current source video (if loaded)
+    // Close current source video (if loaded). A slideshow scan belongs to it.
+    if (slideshowDialog) slideshowDialog->close();
     if (tbcSource.getIsSourceLoaded()) {
         tbcSource.unloadSource();
     }
@@ -6128,6 +6130,164 @@ void MainWindow::saveFrameAsPng(const FrameSnapshot::Options &options)
     configuration.setPngDirectory(pngFileInfo.absolutePath());
     tbcDebugStream() << "MainWindow::saveFrameAsPng(): Setting PNG directory to:" << pngFileInfo.absolutePath();
     configuration.writeConfiguration();
+}
+
+// Scan a stretch of a slideshow tape for held photos, review them and save each
+void MainWindow::on_actionExtract_slideshow_stills_triggered()
+{
+    if (!tbcSource.getIsSourceLoaded()) {
+        QMessageBox::warning(this, tr("Warning"), tr("No source file loaded."));
+        return;
+    }
+    if (tbcSource.getIsMetadataOnly()) {
+        QMessageBox::warning(this, tr("Warning"), tr("Metadata-only mode cannot export PNG images."));
+        return;
+    }
+    setPlaybackRunning(false);
+    if (slideshowDialog) {
+        showOrRaise(slideshowDialog);
+        return;
+    }
+
+    const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
+    const QString sourceFilename = tbcSource.getCurrentSourceFilename();
+    SlideshowDialog::Source source;
+    source.videoParameters = videoParameters;
+    source.frameSize = QSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
+    source.frameCount = tbcSource.getNumberOfFrames();
+    source.currentFrame = currentFrameNumber;
+    source.inPoint = videoParameters.userEditInSelection;
+    source.outPoint = videoParameters.userEditOutSelection;
+    source.currentFrameImage = renderedCurrentFrameImage();
+    source.defaultDirectory = QDir(QFileInfo(sourceFilename).absolutePath())
+                                  .filePath(SlideshowExtract::fileStem(sourceFilename) + QStringLiteral("_stills"));
+
+    auto buildInput = [this](qint32 first, qint32 last) {
+        SlideshowExtract::CaptureInput input;
+        input.scan.tbcFilename = tbcSource.getCurrentSourceFilename();
+        input.scan.videoParameters = tbcSource.getVideoParameters();
+        input.scan.firstFrame = first;
+        const QVector<double> visibleDropouts = tbcSource.getVisibleDropOutGraphData();
+        for (qint32 frame = first; frame <= last; frame++) {
+            input.scan.fieldNumbers.append(tbcSource.getFieldNumbersForFrame(frame));
+            input.visibleDropouts.append(frame - 1 < visibleDropouts.size() ? visibleDropouts[frame - 1] : 0.0);
+        }
+        return input;
+    };
+
+    slideshowDialog = new SlideshowDialog(configuration.getSlideshowExtractOptions(), source, buildInput, this);
+    slideshowDialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(slideshowDialog, &SlideshowDialog::jumpRequested, this, [this](qint32 frame) {
+        setCurrentFrame(frame);
+        updatePositionEditorValue(currentFrameNumber);
+        ui->posHorizontalSlider->setValue(currentFrameNumber);
+    });
+    connect(slideshowDialog, &SlideshowDialog::settingsChanged, this, [this](const SlideshowExtractOptions &settings) {
+        configuration.setSlideshowExtractOptions(settings);
+        configuration.writeConfiguration();
+    });
+    connect(slideshowDialog, &SlideshowDialog::saveRequested, this, &MainWindow::saveSlideshowStills);
+    showOrRaise(slideshowDialog);
+}
+
+void MainWindow::saveSlideshowStills(const SlideshowExtract::CaptureInput &input,
+                                     const QVector<SlideshowExtract::Hold> &holds, const QString &directory)
+{
+    QWidget *parent = slideshowDialog ? static_cast<QWidget *>(slideshowDialog) : this;
+    // Frames render as the viewer shows them; framing and aspect need whole frames
+    if (tbcSource.getViewMode() != TbcSource::ViewMode::FRAME_VIEW) {
+        QMessageBox::warning(parent, tr("Warning"), tr("Stills are saved from the Frame view. Switch the viewer to "
+                                                       "Frame view, then save again."));
+        return;
+    }
+    const QDir outputDirectory(directory);
+    if (!outputDirectory.mkpath(QStringLiteral("."))) {
+        QMessageBox::warning(parent, tr("Warning"), tr("Could not create the folder %1.").arg(directory));
+        return;
+    }
+    const QString stem = SlideshowExtract::fileStem(input.scan.tbcFilename);
+    const QString manifestName = outputDirectory.filePath(stem + QStringLiteral("_stills.csv"));
+    const qint32 existing = outputDirectory.entryList({stem + QStringLiteral("_still_*.png")}, QDir::Files).size();
+    if (existing > 0 || QFileInfo::exists(manifestName)) {
+        const QMessageBox::StandardButton answer = QMessageBox::question(
+            parent, tr("Replace stills?"),
+            tr("%1 already holds stills from this tape. Saving replaces its list of stills and any file with "
+               "the same name; other files stay.").arg(QDir::toNativeSeparators(directory)),
+            QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Save);
+        if (answer != QMessageBox::Save) return;
+    }
+    setPlaybackRunning(false);
+
+    // The worker renders through tbcSource, as the frame averaging does: no
+    // async render meanwhile, showImage() waits, and dropout highlighting
+    // (which would be painted into the frames) is off
+    cancelInFlightAsyncFrameRender();
+    const bool highlightDropouts = tbcSource.getHighlightDropouts();
+    tbcSource.setHighlightDropouts(false);
+    tbcSourceBusy = true;
+
+    struct SaveOutcome {
+        QVector<SlideshowExtract::Still> stills;
+        QString errorMessage;
+    };
+    std::atomic<bool> cancel(false);
+    std::atomic<qint32> saved(0);
+    const VideoSystem system = input.scan.videoParameters.system;
+    const SaveOutcome outcome = waitWithProgress(
+        this,
+        QtConcurrent::run([this, input, holds, outputDirectory, stem, system, &cancel, &saved]() {
+            SaveOutcome outcome;
+            auto render = [this](qint32 frame) {
+                tbcSource.load(frame, frame * 2 - 1);
+                return tbcSource.getImage();
+            };
+            for (const SlideshowExtract::Hold &hold : holds) {
+                if (cancel.load()) break;
+                const SlideshowExtract::Capture capture = SlideshowExtract::captureHold(input, hold, render, &cancel);
+                if (cancel.load()) break;
+                if (capture.image.isNull()) {
+                    outcome.errorMessage = capture.errorMessage;
+                    break;
+                }
+                SlideshowExtract::Still still;
+                still.index = outcome.stills.size() + 1;
+                still.fileName = SlideshowExtract::stillFileName(stem, still.index, capture, input.options);
+                still.hold = hold;
+                still.captureFrame = capture.frame;
+                still.framesAveraged = capture.framesAveraged;
+                still.startTimecode = SlideshowExtract::frameTimecode(hold.first, system);
+                still.durationSeconds = hold.length() / SlideshowExtract::frameRate(system);
+                if (!capture.image.save(outputDirectory.filePath(still.fileName))) {
+                    outcome.errorMessage = QStringLiteral("Could not write %1").arg(outputDirectory.filePath(still.fileName));
+                    break;
+                }
+                outcome.stills.append(still);
+                saved.fetch_add(1);
+            }
+            return outcome;
+        }),
+        holds.size() == 1 ? tr("Saving 1 still...") : tr("Saving %1 stills...").arg(holds.size()), &cancel, &saved,
+        holds.size());
+
+    tbcSourceBusy = false;
+    tbcSource.setHighlightDropouts(highlightDropouts);
+    // tbcSource now holds the last frame rendered; put the viewer's back
+    showImagePending = false;
+    tbcSource.load(currentFrameNumber, currentFieldNumber);
+    showImage();
+
+    // The manifest lists whatever was saved, even when stopped part way
+    QString manifestError;
+    if (!outcome.stills.isEmpty() && !SlideshowExtract::writeManifest(manifestName, outcome.stills, &manifestError)) {
+        QMessageBox::warning(parent, tr("Warning"), manifestError);
+    }
+    if (!outcome.errorMessage.isEmpty()) {
+        QMessageBox::warning(parent, tr("Warning"), outcome.errorMessage);
+    }
+    const QString summary = tr("Saved %1 of %2 stills to %3")
+                                .arg(outcome.stills.size()).arg(holds.size()).arg(QDir::toNativeSeparators(directory));
+    if (slideshowDialog) slideshowDialog->setStatus(summary);
+    statusBar()->showMessage(summary, 10000);
 }
 
 void MainWindow::copyCurrentFrameToClipboard()
