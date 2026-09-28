@@ -56,14 +56,17 @@ void stopProcess(QProcess &process)
     }
 }
 
-// Split complete lines (ended by \n or \r) off the front of buffer
+// Split complete lines (ended by \n or \r) off the front of buffer. Empty
+// lines are dropped, so a Windows \r\n ends one line, not two.
 QStringList takeLines(QByteArray &buffer)
 {
     QStringList lines;
     qsizetype start = 0;
     for (qsizetype i = 0; i < buffer.size(); ++i) {
         if (buffer.at(i) == '\n' || buffer.at(i) == '\r') {
-            lines.append(QString::fromLocal8Bit(buffer.mid(start, i - start)));
+            if (i > start) {
+                lines.append(QString::fromLocal8Bit(buffer.mid(start, i - start)));
+            }
             start = i + 1;
         }
     }

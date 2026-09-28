@@ -48,8 +48,9 @@ namespace {
 int runChild(const char *mode)
 {
     if (std::strcmp(mode, "lines") == 0) {
-        // \n and \r both end a line; the last one is unterminated
-        std::fputs("PCT 10\nsecond\rPCT 60\nlast", stdout);
+        // \n, \r and a Windows \r\n each end one line; the last is
+        // unterminated. (On Windows text-mode stdout makes every \n a \r\n.)
+        std::fputs("PCT 10\r\nsecond\rPCT 60\nlast", stdout);
         return 0;
     }
     if (std::strcmp(mode, "cwd") == 0) {
