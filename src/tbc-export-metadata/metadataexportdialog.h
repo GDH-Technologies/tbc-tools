@@ -12,6 +12,8 @@
 #define METADATAEXPORTDIALOG_H
 
 #include <QDialog>
+#include <QPointer>
+#include <QProcess>
 
 namespace Ui {
 class MetadataExportDialog;
@@ -67,14 +69,16 @@ private:
     QString inputBaseName(const QString &inputPath) const;
     bool isJsonPath(const QString &path) const;
     bool isSupportedInputPath(const QString &path) const;
-    bool exportToolSupportsOption(const QString &optionName) const;
+    enum class OptionSupport { All, FromHelp, Pending };
     void updateOptionCompatibilityState();
+    void applyOptionSupport(OptionSupport support, const QString &helpOutput = QString());
     void updateFfmetadataControlsEnabled();
 
     Ui::MetadataExportDialog *ui;
     QString sourceDirectory;
     QString exportExecutablePath;
     bool ffmetadataSegmentsSupported = true;
+    QPointer<QProcess> optionProbe;  // the export tool's --help, while it runs
 };
 
 #endif // METADATAEXPORTDIALOG_H
