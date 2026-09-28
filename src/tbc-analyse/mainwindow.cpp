@@ -7443,17 +7443,13 @@ void MainWindow::enterChromaSeekMode(QPushButton* button)
 // Helper method to exit chroma seek mode
 void MainWindow::exitChromaSeekMode(QPushButton* button)
 {
-    if (chromaSeekMode) {
-        // Use a shorter timer to check if button is truly released (not just auto-repeat)
-        QTimer::singleShot(5, this, [this, button]() {
-            if (!button->isDown()) {
-                // Exit seek mode and restore chroma
-                chromaSeekMode = false;
-                tbcSource.setChromaDecoder(originalChromaState);
-                updateVideoPushButton();
-                updateImage(); // Fast refresh without reloading - frame data already loaded
-            }
-        });
+    // An auto-repeat also emits released(), but with the button still down; a
+    // real release has cleared it by then
+    if (chromaSeekMode && !button->isDown()) {
+        chromaSeekMode = false;
+        tbcSource.setChromaDecoder(originalChromaState);
+        updateVideoPushButton();
+        updateImage(); // Fast refresh without reloading - frame data already loaded
     }
 }
 
