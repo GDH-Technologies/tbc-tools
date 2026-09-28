@@ -172,12 +172,28 @@ jobs:
         # `nix develop` calls in run_local_ci_parity.sh evaluate the same shell.
         # Old generations are removed first so only this run's shell is pinned.
         # No from_deploy guard: the next step runs in deploys too.
+        #
+        # The profile roots the shell's outputs but not the flake's input
+        # sources (the unpacked nixpkgs trees every evaluation reads). On
+        # 2026-09-28 (PR #43), with air0's disk 95% full, a pressure GC at
+        # 13:27:13 deleted nixpkgs' source while `nix build .#` was evaluating
+        # it ("path '.../pkgs/development/libraries/qt-6' does not exist").
+        # `nix flake archive` fetches every input; each path it reports gets
+        # an indirect root here, replaced run to run like the shell's. They
+        # are rooted before `nix develop`, whose own evaluation reads them: a
+        # rerun of #43 lost nixpkgs' mkshell to the same GC inside it.
         run: |
           set -euo pipefail
           ROOTS="$HOME/Library/Caches/tbc-tools-selfhosted/gcroots"
           mkdir -p "$ROOTS"
-          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link
+          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link "$ROOTS"/flake-input-*
+          n=0
+          for path in $(nix flake archive --json | grep -o '"path":"[^"]*"' | cut -d'"' -f4); do
+            nix-store --add-root "$ROOTS/flake-input-$n" --realise "$path" > /dev/null
+            n=$((n + 1))
+          done
           nix develop --profile "$ROOTS/devshell" -c true
+          echo "Pinned $n flake input sources and the dev shell"
 
       - name: Build and test (CMake + Ninja + ctest)
         # The hosted macOS job does not run ctest at all; the fleet should.
