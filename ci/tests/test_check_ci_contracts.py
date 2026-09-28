@@ -544,6 +544,10 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
         )
         self.assertIn(
+            "runs-on: [self-hosted, wm-test]",
+            check_ci_contracts.SELF_HOSTED_LINUX_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
             "runs-on: [self-hosted, Windows, X64, win0]",
             check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS,
         )
@@ -583,6 +587,42 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS,
         )
 
+    def test_linux_contract_compiles_once_on_the_test_runner(self) -> None:
+        # Same shape as macOS: ctest runs inside `nix build .#` on wm-test, and
+        # the package job on wm waits for it and reuses the store path. The
+        # dev-shell CMake build that compiled everything twice stays gone.
+        for snippet in (
+            "runs-on: [self-hosted, wm-test]",
+            "needs: test",
+            'nix build .# --out-link "$ROOTS/result-$GITHUB_RUN_ID"',
+            "nix build .# --dry-run",
+            "ref: ${{ inputs.checkout_ref || github.sha }}",
+            "fetch-depth: 1",
+        ):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_LINUX_REQUIRED_SNIPPETS)
+        self.assertNotIn(
+            "bash ci/run_local_ci_parity.sh --build-test-only",
+            check_ci_contracts.SELF_HOSTED_LINUX_REQUIRED_SNIPPETS,
+        )
+        for snippet in ("run_local_ci_parity.sh", "inputs.checkout_ref || github.ref"):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_LINUX_FORBIDDEN_SNIPPETS)
+
+    def test_macos_bundle_script_stays_bash_32_safe(self) -> None:
+        # It runs under macOS /bin/bash 3.2; `bash -n` in the guardrails runs
+        # bash 5, which accepts all of these.
+        for snippet in ("declare -A", "mapfile", "readarray", ",,}", "^^}"):
+            self.assertIn(snippet, check_ci_contracts.MACOS_BUNDLE_DEPENDENCIES_FORBIDDEN_SNIPPETS)
+        script = check_ci_contracts.MACOS_BUNDLE_DEPENDENCIES_SCRIPT.read_text(encoding="utf-8")
+        for snippet in check_ci_contracts.MACOS_BUNDLE_DEPENDENCIES_FORBIDDEN_SNIPPETS:
+            self.assertNotIn(snippet, script)
+
+    def test_deploy_filters_do_not_list_the_retired_parity_build(self) -> None:
+        # Neither platform build runs ci/run_local_ci_parity.sh any more.
+        self.assertIn(
+            "- 'ci/run_local_ci_parity.sh'",
+            check_ci_contracts.SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS,
+        )
+
     def test_macos_bundle_dependencies_script_is_wired_and_linted(self) -> None:
         self.assertEqual(
             check_ci_contracts.MACOS_BUNDLE_DEPENDENCIES_SCRIPT,
@@ -593,27 +633,39 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
         )
 
-    def test_flake_contract_requires_ctest_inside_the_darwin_build(self) -> None:
-        # ctest runs inside `nix build .#`, so the binaries it exercises are the
-        # ones that get deployed. A sync that drops these lines would silently
-        # ship an untested build.
+    def test_flake_contract_requires_ctest_inside_the_package_build(self) -> None:
+        # ctest runs inside `nix build .#` on Linux and Darwin, so the binaries
+        # it exercises are the ones that get deployed. A sync that drops these
+        # lines would silently ship an untested build.
         for snippet in (
-            "doCheck = !withCuda",
+            "doCheck = !withCuda;",
+            "} // pkgs.lib.optionalAttrs (!withCuda) {",
             "enableParallelChecking = false;",
             # The teletext test runs Python from the source tree, which is
             # installed after the check: no __pycache__ may land in the output.
             "export PYTHONDONTWRITEBYTECODE=1",
             "patchShebangs scripts",
             "patchShebangs bin",
-            "ctest --output-on-failure",
+            # A check that registers no tests must fail, not pass empty.
+            "ctest --output-on-failure --no-tests=error",
+            # The AAA runtime tests need mono on PATH; without it they skip.
+            "++ pkgs.lib.optionals isLinux [ p.mono ]",
         ):
             self.assertIn(snippet, check_ci_contracts.FLAKE_CHECK_REQUIRED_SNIPPETS)
+
+    def test_flake_src_leaves_out_ci(self) -> None:
+        # The build reads nothing under ci/, so CI-script edits must not change
+        # the derivation (and force a rebuild on every platform).
+        self.assertIn(
+            '".github" "ci" "docs" "development-logs" "dev-notes" "notes"',
+            check_ci_contracts.FLAKE_SRC_FILTER_REQUIRED_SNIPPETS,
+        )
 
     def test_actionlint_config_declares_every_fleet_label(self) -> None:
         # actionlint knows only the GitHub-hosted labels plus the generic
         # self-hosted ones, so an undeclared fleet label fails the guardrails
         # job for every workflow that uses it.
-        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- air0", "- air0-light", "- air0-test", "- win0"}
+        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- wm-test", "- air0", "- air0-light", "- air0-test", "- win0"}
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.ACTIONLINT_CONFIG_REQUIRED_SNIPPETS))
         )
@@ -750,6 +802,13 @@ class ContractCoverageTests(unittest.TestCase):
             "nix build nixpkgs#actionlint",
             # The PR's .gdh-version must be a valid next step.
             "python3 scripts/gdh_version.py check-pr",
+            # Behavioural, not textual: the package really runs ctest on both
+            # Nix platforms.
+            "nix eval .#packages.x86_64-linux.default.doCheck",
+            "nix eval .#packages.aarch64-darwin.default.doCheck",
+            # A PR's push and pull_request runs each finish, instead of one
+            # cancelling the other and leaving a red X on the PR.
+            "group: tbc-tools-guardrails-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}",
         }
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS))

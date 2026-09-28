@@ -22,6 +22,13 @@ name: "Self-hosted Linux build (wm)"
 #     user's shared multi-project store, where a store-wide search piped
 #     through `sort | head -n 1` is both slow and liable to select a different
 #     Qt6 than the one the binaries were actually linked against.
+#   * Two jobs, one compile. `test` runs on wm-test, wm's dedicated test runner:
+#     `nix build .#` compiles tbc-tools and runs ctest inside the build
+#     (flake.nix doCheck), so the tested binaries are the shipped ones.
+#     `package` runs on the main wm runner once `test` passes. Both run as the
+#     same user on one Nix store, so its `nix build .#` is a store hit and the
+#     runner is busy only for the AppImage. It used to compile everything a
+#     second time in the dev shell just for ctest.
 
 on:
   # Path-gated so a docs-only or tooling-only change does not occupy the single
@@ -96,10 +103,13 @@ env:
   APPIMAGETOOL_URL: "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
 
 jobs:
-  build:
-    name: Build, test and package tbc-tools (x86_64, wm)
-    runs-on: [self-hosted, Linux, X64, wm]
-    timeout-minutes: 180
+  test:
+    name: Build and test tbc-tools (x86_64, wm-test)
+    # wm's dedicated test runner: registered with --no-default-labels, so its
+    # only labels are self-hosted and wm-test and no generic Linux job can land
+    # on it.
+    runs-on: [self-hosted, wm-test]
+    timeout-minutes: 90
     # Two guards:
     #  1. A merge to main is owned by self-hosted-deploy.yml, which calls this
     #     workflow with from_deploy=true. Without this the single wm box would
@@ -108,6 +118,63 @@ jobs:
     #     repository is public, and the runner is a workstation.
     if: >-
       ${{ (github.event_name != 'push' || inputs.from_deploy)
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository) }}
+
+    steps:
+      - name: Report host and toolchain
+        run: |
+          nix --version
+          df -h "$GITHUB_WORKSPACE" /nix | cat
+
+      - uses: actions/checkout@v5
+        # Shallow, no tags, no submodules: the Nix build reads only the tree
+        # (its version comes from .gdh-version, its ezpwd from a flake input),
+        # and a depth-1 checkout evaluates to the same derivation as a full one.
+        # `package` keeps the full clone its version and packaging steps need.
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Build and test with Nix
+        # ctest runs inside this build (flake.nix: doCheck), serially, and a
+        # failing test fails the build. It is the only job a deploy runs: the
+        # deploy's `nix profile upgrade` on wm then finds this store path.
+        #
+        # wm's nix.conf has min-free/max-free auto-GC, which deletes any store
+        # path without a root -- mid-build if need be. So every flake input
+        # source that `nix flake archive` reports gets an indirect root before
+        # evaluation starts, and the result gets one via --out-link: the
+        # package job's `nix build .#`, and a deploy's install, then find it in
+        # the store instead of recompiling. The roots are named for this run,
+        # so another run cannot remove them; `package` removes them once its
+        # own result roots the output, and anything a cancelled or failed run
+        # left (or a deploy, which has no package job) is pruned after a day.
+        run: |
+          set -euo pipefail
+          ROOTS="$HOME/.cache/tbc-tools-selfhosted/gcroots"
+          mkdir -p "$ROOTS"
+          find "$ROOTS" -maxdepth 1 \( -name 'result-*' -o -name 'flake-input-*-*' \) -mtime +1 -print -delete
+          n=0
+          for path in $(nix flake archive --json | grep -o '"path":"[^"]*"' | cut -d'"' -f4); do
+            nix-store --add-root "$ROOTS/flake-input-$GITHUB_RUN_ID-$n" --realise "$path" > /dev/null
+            n=$((n + 1))
+          done
+          echo "Rooted $n flake input sources"
+          nix build .# --out-link "$ROOTS/result-$GITHUB_RUN_ID" -L
+
+  package:
+    name: Package tbc-tools (x86_64, wm)
+    needs: test
+    runs-on: [self-hosted, Linux, X64, wm]
+    timeout-minutes: 60
+    # Never in a deploy: the deploy installs the Nix build, not the AppImage.
+    # The fork guard repeats `test`'s so this job cannot run on its own.
+    if: >-
+      ${{ !inputs.from_deploy
+          && github.event_name != 'push'
           && (github.event_name != 'pull_request'
               || github.event.pull_request.head.repo.full_name == github.repository) }}
 
@@ -132,7 +199,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: true
-          ref: ${{ inputs.checkout_ref || github.ref }}
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Record the source tree
         # Artifacts are named for the tree they were built from, not the commit.
@@ -146,13 +213,9 @@ jobs:
         # linger locally and poison `git describe`. Same reasoning as
         # gdh-version-bump.yml.
         #
-        # Which build that matters to is worth being precise about: the
-        # in-tree configure below (ci/run_local_ci_parity.sh runs
-        # `cmake -S . -B build`, so .git is present) does reach CMakeLists.txt's
-        # git tier (the nearest gdh tag, or a committed .gdh-version newer than
-        # it), and that is the binary ctest exercises. The shipped AppImage does
-        # not -- it comes from `nix build .#`, whose sandbox has no .git at all
-        # -- so it takes .gdh-version from the flake. The two agree.
+        # The report below prints what the gdh resolver makes of this checkout.
+        # The shipped AppImage comes from `nix build .#`, whose sandbox has no
+        # .git at all, so it takes .gdh-version from the flake; the two agree.
         run: git fetch --tags --prune --prune-tags --force origin
 
       - name: Report toolchain and version
@@ -165,7 +228,6 @@ jobs:
           df -h "$GITHUB_WORKSPACE" /nix | cat
 
       - name: Provision packaging tools from nixpkgs
-        if: ${{ !inputs.from_deploy }}
         # wm has mono but no patchelf, no msbuild and no xbuild, and its
         # system python3 is 3.14 under PEP 668. --out-link rather than
         # --no-link is load-bearing: /etc/nix/nix.conf has min-free/max-free
@@ -195,21 +257,23 @@ jobs:
           # /usr/bin/mono, whose lib/mono tree it copies into the AppImage.
           echo "MSBUILD_BIN=$TOOLS/msbuild/bin" >> "$GITHUB_ENV"
 
-      - name: Build and test (CMake + Ninja + ctest)
-        run: bash ci/run_local_ci_parity.sh --build-test-only
-
       - name: Create release directory
-        if: ${{ !inputs.from_deploy }}
         run: mkdir -p release
 
       - name: Build with Nix
-        # Not gated: on the deploy path wm's install (`nix profile upgrade`)
-        # reuses this exact store path, so building it here costs the deploy
-        # nothing extra. Only the packaging below is skipped there.
-        run: nix build .#
+        # A store hit: `test` built this exact derivation on this box and
+        # rooted it. A miss (GC, or a different tree) would silently recompile
+        # and re-run ctest here on the main runner, so it is announced. Once the
+        # workspace `result` roots the output, this run's test roots go.
+        run: |
+          if nix build .# --dry-run 2>&1 | grep -q 'will be built'; then
+            echo "::warning::tbc-tools is not in wm's store; the package job is recompiling (and re-running ctest) instead of reusing the test job's build."
+          fi
+          nix build .# -L
+          ROOTS="$HOME/.cache/tbc-tools-selfhosted/gcroots"
+          rm -f "$ROOTS/result-$GITHUB_RUN_ID" "$ROOTS"/flake-input-"$GITHUB_RUN_ID"-*
 
       - name: Stage AppDir from the Nix build
-        if: ${{ !inputs.from_deploy }}
         run: |
           mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share
           SKIP_LIB_REGEX='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libresolv\.so\.2|ld-linux-.*\.so\..*|libnss_.*|libutil\.so\..*|libanl\.so\..*)$'
@@ -351,7 +415,6 @@ jobs:
           done
 
       - name: Build self-contained tbc-video-export (PyInstaller)
-        if: ${{ !inputs.from_deploy }}
         # Replace the CMake bash wrapper (which execs a *host* Python with host
         # site-packages) with a PyInstaller --onefile ELF that bundles the
         # interpreter and all deps. The hosted job uses the container's system
@@ -383,7 +446,6 @@ jobs:
           echo "Bundled self-contained tbc-video-export PyInstaller binary"
 
       - name: Build and package native AAA AppImage from vendored source
-        if: ${{ !inputs.from_deploy }}
         # Compile VhsDecodeAutoAudioAlign from the vendored C# source with
         # msbuild, then package it plus a bundled Mono runtime into a
         # self-contained AppImage, so the bundle needs no host Mono at runtime.
@@ -405,7 +467,6 @@ jobs:
           echo "Bundled self-contained native AAA AppImage (built from source)"
 
       - name: Fetch AppImage tooling
-        if: ${{ !inputs.from_deploy }}
         # Cached outside the workspace so checkout's `git clean -ffdx` cannot
         # delete it, then copied in -- the invocations below are AppImage
         # relative and the hosted job's form is kept unchanged.
@@ -429,7 +490,6 @@ jobs:
           fetch "${APPIMAGETOOL_FILE}" "${APPIMAGETOOL_URL}"
 
       - name: Assemble and build AppImage
-        if: ${{ !inputs.from_deploy }}
         run: |
           export APPIMAGE_EXTRACT_AND_RUN=1
           SKIP_LIB_REGEX='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1|libresolv\.so\.2|ld-linux-.*\.so\..*|libnss_.*|libutil\.so\..*|libanl\.so\..*)$'
@@ -737,22 +797,18 @@ jobs:
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "./${APPIMAGETOOL_FILE}" AppDir release/tbc-tools-x86_64.AppImage
 
       - name: Validate x86_64 AppImage bundle
-        if: ${{ !inputs.from_deploy }}
         run: |
           PYTHON_RUNTIME="$(nix build nixpkgs#python311 --no-link --print-out-paths | tail -n 1)"
           export PATH="$PYTHON_RUNTIME/bin:$PATH"
           bash ci/verify_linux_bundle.sh x86-appimage release/tbc-tools-x86_64.AppImage
 
       - name: Copy scripts
-        if: ${{ !inputs.from_deploy }}
         run: find scripts -maxdepth 1 -type f -executable -exec cp {} release/ \; || true
 
       - name: Create release archive
-        if: ${{ !inputs.from_deploy }}
         run: tar -cvJSf tbc-tools_linux_x86_64.tar.xz --transform s/release/tbc-tools/ release/
 
       - name: Upload binary artifact
-        if: ${{ !inputs.from_deploy }}
         uses: actions/upload-artifact@v7
         with:
           # Named for the full source tree, so the deploy's plan job can find a

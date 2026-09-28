@@ -13,7 +13,7 @@
 # file per entry. If a combined call is rejected, its edits are retried one at
 # a time, which is what the old step did for every edit.
 #
-# bash 3.2 safe (macOS /bin/bash): no associative arrays, no mapfile.
+# bash 3.2 safe (macOS /bin/bash): nothing from bash 4 (the contract lists what).
 set -uo pipefail
 
 APP="${1:?usage: $0 path/to/App.app}"
