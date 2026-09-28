@@ -264,7 +264,12 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     "workflow_call:",
     "permissions:\n  contents: read",
     "git fetch --tags --prune --prune-tags --force origin",
-    "bash ci/run_local_ci_parity.sh --build-test-only",
+    # One compile: the test job builds (and ctest runs inside that build, see
+    # FLAKE_CHECK_REQUIRED_SNIPPETS) on air0's dedicated test runner, and the
+    # package job waits for it and reuses the GC-rooted store path.
+    "runs-on: [self-hosted, air0-test]",
+    'nix build .# --out-link "$ROOTS/result"',
+    "needs: test",
     # ffmpeg must come from the flake's pinned nixpkgs, not the live channel --
     # same reasoning as the hosted job's MACOS_REQUIRED_SNIPPETS entry.
     "nix build .#ffmpeg^bin",
@@ -274,6 +279,11 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # air0 runs macOS 26, the version the hosted job pins away from. Printing
     # sw_vers first keeps a future Qt uic regression at the top of the log.
     "sw_vers",
+)
+# The dev-shell CMake build compiled everything a second time just to run
+# ctest; it must not come back into the macOS workflow.
+SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS = (
+    "run_local_ci_parity.sh",
 )
 SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
@@ -442,6 +452,9 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     "- wm-light",
     "- air0",
     "- air0-light",
+    # air0's dedicated test runner (--no-default-labels): tbc-tools' macOS
+    # compile + ctest, so the main air0 runner only packages.
+    "- air0-test",
     "- win0",
 )
 # The light jobs are pinned to wm-light. On the main `wm` runner, a seven-second
@@ -859,6 +872,8 @@ def main() -> int:
         check_contains(SELF_HOSTED_LINUX_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_MACOS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS:
+        check_not_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_WINDOWS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS:

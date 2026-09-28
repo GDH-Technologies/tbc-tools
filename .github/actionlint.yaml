@@ -9,6 +9,7 @@
 #               deploy detect, the Linux install, the version bump
 #   air0       -> air-0 (Apple Silicon macOS): builds
 #   air0-light -> air-0-light (same box): the macOS install
+#   air0-test  -> air0-test (same box): tbc-tools' macOS compile + ctest
 #   win0     -> WIN-NODE-0 (Windows x86_64)
 self-hosted-runner:
   labels:
@@ -16,4 +17,5 @@ self-hosted-runner:
     - wm-light
     - air0
     - air0-light
+    - air0-test
     - win0

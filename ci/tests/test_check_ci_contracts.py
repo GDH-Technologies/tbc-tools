@@ -540,8 +540,31 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
         )
         self.assertIn(
+            "runs-on: [self-hosted, air0-test]",
+            check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
             "runs-on: [self-hosted, Windows, X64, win0]",
             check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS,
+        )
+
+    def test_macos_contract_compiles_once_on_the_test_runner(self) -> None:
+        # One compile: ctest runs inside `nix build .#` on air0-test, and the
+        # package job on air0 waits for it and reuses the store path. The
+        # dev-shell CMake build must not come back into this workflow.
+        for snippet in (
+            "runs-on: [self-hosted, air0-test]",
+            "needs: test",
+            'nix build .# --out-link "$ROOTS/result"',
+        ):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS)
+        self.assertNotIn(
+            "bash ci/run_local_ci_parity.sh --build-test-only",
+            check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
+            "run_local_ci_parity.sh",
+            check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS,
         )
 
     def test_flake_contract_requires_ctest_inside_the_darwin_build(self) -> None:
@@ -560,7 +583,7 @@ class ContractCoverageTests(unittest.TestCase):
         # actionlint knows only the GitHub-hosted labels plus the generic
         # self-hosted ones, so an undeclared fleet label fails the guardrails
         # job for every workflow that uses it.
-        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- air0", "- air0-light", "- win0"}
+        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- air0", "- air0-light", "- air0-test", "- win0"}
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.ACTIONLINT_CONFIG_REQUIRED_SNIPPETS))
         )
