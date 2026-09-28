@@ -164,6 +164,15 @@ int main(int argc, char *argv[])
         return runChild(argv[2]);
     }
 
+    // Misuse QProcess warns rather than fails (reading stderr from merged
+    // channels, say), so any QProcess warning fails the test
+    qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &, const QString &message) {
+        if (type != QtDebugMsg && message.contains(QLatin1String("QProcess"))) {
+            std::cerr << "FAIL unexpected warning: " << message.toStdString() << "\n";
+            std::exit(1);
+        }
+    });
+
     // The GUI path needs a QApplication, which needs a platform plugin:
     // offscreen, set by CMake. Not on Windows: there the self-hosted runner's
     // ctest (a service session, before windeployqt stages the plugins) hung in

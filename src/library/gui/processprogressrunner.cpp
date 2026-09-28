@@ -98,7 +98,9 @@ Result run(const QString &program,
 
     if (!process.waitForStarted(-1)) {
         result.status = Result::FailedToStart;
-        result.standardError = process.readAllStandardError();
+        if (!options.onLine) {
+            result.standardError = process.readAllStandardError();
+        }
         return result;
     }
 
@@ -123,8 +125,9 @@ Result run(const QString &program,
         result.exitCode = process.exitCode();
         result.exitStatus = process.exitStatus();
         result.standardOutput = process.readAllStandardOutput();
-        result.standardError = process.readAllStandardError();
-        if (options.onLine) {
+        if (!options.onLine) {
+            result.standardError = process.readAllStandardError();
+        } else {
             lineBuffer = result.standardOutput;
             reportLines(takeLines(lineBuffer));
             if (!lineBuffer.isEmpty()) {
@@ -144,9 +147,11 @@ Result run(const QString &program,
             reportLines(takeLines(lineBuffer));
         }
     });
-    QObject::connect(&process, &QProcess::readyReadStandardError, &process, [&]() {
-        result.standardError += process.readAllStandardError();
-    });
+    if (!options.onLine) {
+        QObject::connect(&process, &QProcess::readyReadStandardError, &process, [&]() {
+            result.standardError += process.readAllStandardError();
+        });
+    }
 
     // Indeterminate until the line callback reports a percentage: without one
     // there is no honest percentage to show
@@ -221,8 +226,9 @@ Result run(const QString &program,
 
     const QByteArray trailing = process.readAllStandardOutput();
     result.standardOutput += trailing;
-    result.standardError += process.readAllStandardError();
-    if (options.onLine) {
+    if (!options.onLine) {
+        result.standardError += process.readAllStandardError();
+    } else {
         lineBuffer += trailing;
         reportLines(takeLines(lineBuffer));
         if (!lineBuffer.isEmpty()) {
