@@ -318,9 +318,14 @@
               patchShebangs scripts
             '';
             # CMake configures build/bin/tbc-video-export with an /usr/bin/env
-            # shebang, and the Qt tests write settings under $HOME.
+            # shebang, and the Qt tests write settings under the home
+            # directory. On macOS QStandardPaths asks Foundation, which takes
+            # the build user's account home (/var/empty, read-only for
+            # _nixbld) rather than $HOME -- testconfiguration's writes then
+            # vanish -- unless CFFIXED_USER_HOME overrides it.
             preCheck = ''
               export HOME=$TMPDIR
+              export CFFIXED_USER_HOME=$TMPDIR
               patchShebangs bin
             '';
             # Serial (see enableParallelChecking above).
