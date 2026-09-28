@@ -187,7 +187,6 @@ private slots:
 	// UI handler
 	void resize_on_aspect();
 protected:
-    void keyPressEvent(QKeyEvent *event) override;
     bool event(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -412,6 +411,11 @@ private:
     QAction *notesViewerAction = nullptr;
     QAction *skipBySegmentsAction = nullptr;
     QAction *segmentsViewerAction = nullptr;
+    // The viewer's key actions and their shortcuts, which apply only while
+    // the viewer tab is showing (updateViewerKeyShortcuts)
+    QList<QPair<QAction *, QList<QKeySequence>>> viewerKeyActions;
+    void updateViewerKeyShortcuts();
+    void addOrEditMarkerAtCurrentFrame();
     QPushButton *vectorscopeSelectionPushButton = nullptr;
     UiStateSnapshot pendingUiStateSnapshot;
     bool restoreUiStateAfterReload = false;

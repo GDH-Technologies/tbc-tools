@@ -1284,12 +1284,30 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
 {
     ui->setupUi(this);
 
-    if (ui->posHorizontalSlider) {
-        ui->posHorizontalSlider->setToolTip(tr("Use [ & ] keys to set in & out points at the current frame\n"
-                                               "M — add/edit a marker comment at the current frame\n"
-                                               "C — open the marker viewer"));
-    }
-    copyCurrentDisplayAction = new QAction(tr("Copy current display"), this);
+    // The platform's standard keys where one exists (Ctrl+O / Ctrl+S / Ctrl+Q
+    // and Ctrl+W / F5 or Ctrl+R / Ctrl++ and Ctrl+= / Ctrl+- on Linux and
+    // Windows; the Cmd equivalents on macOS). Exit takes Quit and Close: Quit
+    // has no binding on Windows.
+    ui->actionOpen_TBC_file->setShortcuts(QKeySequence::Open);
+    ui->actionSave_Metadata->setShortcuts(QKeySequence::Save);
+    ui->actionReload_TBC->setShortcuts(QKeySequence::Refresh);
+    ui->actionExit->setShortcuts(QKeySequence::keyBindings(QKeySequence::Quit)
+                                 + QKeySequence::keyBindings(QKeySequence::Close));
+    ui->actionZoom_In->setShortcuts(QKeySequence::keyBindings(QKeySequence::ZoomIn)
+                                    << QKeySequence(Qt::CTRL | Qt::Key_Equal));
+    ui->actionZoom_Out->setShortcuts(QKeySequence::ZoomOut);
+
+    // Icons from the desktop's icon theme; none is shown where it has none
+    ui->actionOpen_TBC_file->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::DocumentOpen));
+    ui->actionReload_TBC->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ViewRefresh));
+    ui->actionSave_Metadata->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::DocumentSave));
+    ui->actionExit->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ApplicationExit));
+    ui->actionZoom_In->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ZoomIn));
+    ui->actionZoom_Out->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::ZoomOut));
+    ui->actionAbout_ld_analyse->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::HelpAbout));
+
+    copyCurrentDisplayAction = new QAction(tr("&Copy Current Display"), this);
+    copyCurrentDisplayAction->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::EditCopy));
     copyCurrentDisplayAction->setShortcut(QKeySequence::Copy);
     copyCurrentDisplayAction->setShortcutContext(Qt::WindowShortcut);
     connect(copyCurrentDisplayAction, &QAction::triggered,
@@ -1579,6 +1597,59 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         ui->menuWindow->addAction(segmentsViewerAction);
     }
     connect(segmentsViewerAction, &QAction::triggered, this, &MainWindow::showSegmentsViewer);
+
+    // The viewer's keys, as actions: listed in the Edit menu with their
+    // shortcuts (next to Copy) and enabled with the source like everything
+    // else. Their shortcuts apply only while the viewer tab is showing, so
+    // they never take keys from the Export tab's controls; a focused text
+    // field still gets typed letters (Qt's ShortcutOverride).
+    QMenu *editMenu = new QMenu(tr("&Edit"), this);
+    menuBar()->insertMenu(ui->menuView->menuAction(), editMenu);
+    editMenu->addAction(copyCurrentDisplayAction);
+    editMenu->addSeparator();
+    const auto addViewerKeyAction = [this, editMenu](const QString &text, const QList<QKeySequence> &keys,
+                                                     const std::function<void()> &handler) {
+        QAction *action = editMenu->addAction(text);
+        action->setAutoRepeat(false);
+        connect(action, &QAction::triggered, this, handler);
+        viewerKeyActions.append({action, keys});
+    };
+    addViewerKeyAction(tr("Set &In Point Here"), {QKeySequence(Qt::Key_BracketLeft)},
+                       [this]() { setInPointAtCurrentFrame(); });
+    addViewerKeyAction(tr("Set &Out Point Here"), {QKeySequence(Qt::Key_BracketRight)},
+                       [this]() { setOutPointAtCurrentFrame(); });
+    const auto setFromSegment = [this](bool setIn, bool setOut) {
+        const qint32 index = segmentIndexContainingField(currentFirstFieldZeroBased());
+        if (index >= 0) {
+            setInOutFromSegment(index, setIn, setOut);
+        } else {
+            statusBar()->showMessage(tr("No recording segment at the current frame"), 3000);
+        }
+    };
+    addViewerKeyAction(tr("In Point from Segment &Start"),
+                       {QKeySequence(Qt::Key_BraceLeft), QKeySequence(Qt::SHIFT | Qt::Key_BracketLeft)},
+                       [setFromSegment]() { setFromSegment(true, false); });
+    addViewerKeyAction(tr("Out Point from Segment &End"),
+                       {QKeySequence(Qt::Key_BraceRight), QKeySequence(Qt::SHIFT | Qt::Key_BracketRight)},
+                       [setFromSegment]() { setFromSegment(false, true); });
+    editMenu->addSeparator();
+    addViewerKeyAction(tr("Add/Edit &Marker..."), {QKeySequence(Qt::Key_M), QKeySequence(Qt::SHIFT | Qt::Key_M)},
+                       [this]() { addOrEditMarkerAtCurrentFrame(); });
+    // The viewers' own menu items take their keys the same way
+    notesViewerAction->setAutoRepeat(false);
+    segmentsViewerAction->setAutoRepeat(false);
+    viewerKeyActions.append({notesViewerAction, {QKeySequence(Qt::Key_C)}});
+    viewerKeyActions.append({segmentsViewerAction, {QKeySequence(Qt::Key_S)}});
+    connect(ui->mainTabWidget, &QTabWidget::currentChanged, this, &MainWindow::updateViewerKeyShortcuts);
+    updateViewerKeyShortcuts();
+    ui->posHorizontalSlider->setToolTip(
+        tr("%1 / %2 set the in / out point at the current frame\n"
+           "%3 adds or edits a marker comment at the current frame\n"
+           "%4 opens the marker viewer")
+            .arg(QKeySequence(Qt::Key_BracketLeft).toString(QKeySequence::NativeText),
+                 QKeySequence(Qt::Key_BracketRight).toString(QKeySequence::NativeText),
+                 QKeySequence(Qt::Key_M).toString(QKeySequence::NativeText),
+                 QKeySequence(Qt::Key_C).toString(QKeySequence::NativeText)));
 
     // Add a status bar to show the state of the source video file
     ui->statusBar->addWidget(&sourceVideoStatus);
@@ -2013,8 +2084,9 @@ void MainWindow::setGuiEnabled(bool enabled)
     if (notesViewerAction) {
         notesViewerAction->setEnabled(enabled);
     }
-    if (segmentsViewerAction) {
-        segmentsViewerAction->setEnabled(enabled);
+    // The viewer's key actions (including the Marker and Segments viewers)
+    for (const auto &entry : std::as_const(viewerKeyActions)) {
+        entry.first->setEnabled(enabled);
     }
 
     // "Save Metadata" is available while there are unsaved edits
@@ -8013,81 +8085,20 @@ void MainWindow::vectorscopeChangedSignalHandler()
     }
 }
 
-void MainWindow::keyPressEvent(QKeyEvent *event)
+// The viewer's key shortcuts (Edit menu, Marker and Segments viewers) apply
+// only while the viewer tab is showing
+void MainWindow::updateViewerKeyShortcuts()
 {
-    if (!event) {
-        return;
+    const bool viewerShowing = ui->mainTabWidget->currentWidget() == ui->viewerTab;
+    for (const auto &entry : std::as_const(viewerKeyActions)) {
+        entry.first->setShortcuts(viewerShowing ? entry.second : QList<QKeySequence>());
     }
+}
 
-    const bool markerKeyPressed = (event->key() == Qt::Key_M)
-        && (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::ShiftModifier);
-    const bool markerViewerKeyPressed = (event->key() == Qt::Key_C)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool setInPointKeyPressed = (event->key() == Qt::Key_BracketLeft)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool setOutPointKeyPressed = (event->key() == Qt::Key_BracketRight)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool segmentsViewerKeyPressed = (event->key() == Qt::Key_S)
-        && (event->modifiers() == Qt::NoModifier);
-    const bool segmentInKeyPressed = (event->key() == Qt::Key_BraceLeft || event->key() == Qt::Key_BracketLeft)
-        && (event->modifiers() == Qt::ShiftModifier);
-    const bool segmentOutKeyPressed = (event->key() == Qt::Key_BraceRight || event->key() == Qt::Key_BracketRight)
-        && (event->modifiers() == Qt::ShiftModifier);
-    if (!markerKeyPressed && !markerViewerKeyPressed && !setInPointKeyPressed && !setOutPointKeyPressed
-        && !segmentInKeyPressed && !segmentOutKeyPressed && !segmentsViewerKeyPressed) {
-        QMainWindow::keyPressEvent(event);
-        return;
-    }
-    if (event->isAutoRepeat()) {
-        event->accept();
-        return;
-    }
-
-    QWidget *focusWidget = QApplication::focusWidget();
-    const bool typingContext = focusWidget
-        && (qobject_cast<QLineEdit *>(focusWidget)
-            || qobject_cast<QTextEdit *>(focusWidget)
-            || qobject_cast<QPlainTextEdit *>(focusWidget)
-            || qobject_cast<QAbstractSpinBox *>(focusWidget));
-    if (typingContext || !tbcSource.getIsSourceLoaded()) {
-        QMainWindow::keyPressEvent(event);
-        return;
-    }
-
-    if (setInPointKeyPressed) {
-        setInPointAtCurrentFrame();
-        event->accept();
-        return;
-    }
-    if (setOutPointKeyPressed) {
-        setOutPointAtCurrentFrame();
-        event->accept();
-        return;
-    }
-    if (segmentsViewerKeyPressed) {
-        showSegmentsViewer();
-        event->accept();
-        return;
-    }
-    if (segmentInKeyPressed || segmentOutKeyPressed) {
-        const qint32 index = segmentIndexContainingField(currentFirstFieldZeroBased());
-        if (index >= 0) {
-            setInOutFromSegment(index, segmentInKeyPressed, segmentOutKeyPressed);
-        } else {
-            statusBar()->showMessage(tr("No recording segment at the current frame"), 3000);
-        }
-        event->accept();
-        return;
-    }
-    if (markerViewerKeyPressed) {
-        if (notesViewerDialog) {
-            updateNotesViewerState();
-            updateSegmentsViewerState();
-            notesViewerDialog->show();
-            notesViewerDialog->raise();
-            notesViewerDialog->activateWindow();
-        }
-        event->accept();
+// Add a marker comment at the current frame, or edit the one already there
+void MainWindow::addOrEditMarkerAtCurrentFrame()
+{
+    if (!tbcSource.getIsSourceLoaded()) {
         return;
     }
 
@@ -8112,7 +8123,6 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                                                         noteCommentAtFrame,
                                                         &ok);
     if (!ok) {
-        event->accept();
         return;
     }
 
@@ -8136,9 +8146,8 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                                      .arg(framePoint)
                                      .arg(framePointTimecode), 3000);
     }
-
-    event->accept();
 }
+
 // Mouse press event handler
 void MainWindow::mousePressEvent(QMouseEvent *event)
 {

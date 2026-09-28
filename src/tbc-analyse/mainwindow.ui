@@ -735,7 +735,7 @@
    </property>
    <widget class="QMenu" name="menuFile">
     <property name="title">
-     <string>File</string>
+     <string>&amp;File</string>
     </property>
     <addaction name="actionOpen_TBC_file"/>
     <addaction name="actionReload_TBC"/>
@@ -748,7 +748,7 @@
    </widget>
    <widget class="QMenu" name="menuWindow">
     <property name="title">
-     <string>Window</string>
+     <string>&amp;Window</string>
     </property>
     <addaction name="actionDropout_analysis"/>
     <addaction name="actionVisible_Dropout_analysis"/>
@@ -763,7 +763,7 @@
    </widget>
    <widget class="QMenu" name="menuScopes">
     <property name="title">
-     <string>Scopes</string>
+     <string>&amp;Scopes</string>
     </property>
     <addaction name="actionVectorscope"/>
     <addaction name="actionWaveform_monitor"/>
@@ -774,7 +774,7 @@
    </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
-     <string>Help</string>
+     <string>&amp;Help</string>
     </property>
     <addaction name="actionTBC_Tools_Wiki"/>
     <addaction name="separator"/>
@@ -783,13 +783,13 @@
    </widget>
    <widget class="QMenu" name="menuPlugins">
     <property name="title">
-     <string>Plugins</string>
+     <string>&amp;Plugins</string>
     </property>
     <addaction name="actionPluginManager"/>
    </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
-     <string>View</string>
+     <string>&amp;View</string>
     </property>
     <widget class="QMenu" name="menuUiScale">
      <property name="title">
@@ -817,7 +817,7 @@
    </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
-     <string>Tools</string>
+     <string>&amp;Tools</string>
     </property>
     <addaction name="actionProcess_VBI"/>
     <addaction name="actionFix_JSON_SNR"/>
@@ -832,7 +832,7 @@
    </widget>
    <widget class="QMenu" name="menuThemes">
     <property name="title">
-     <string>Themes</string>
+     <string>T&amp;hemes</string>
     </property>
    </widget>
    <addaction name="menuFile"/>
@@ -861,7 +861,10 @@
   </action>
   <action name="actionAbout_ld_analyse">
    <property name="text">
-    <string>About tbc-analyse...</string>
+    <string>&amp;About tbc-analyse...</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::AboutRole</enum>
    </property>
   </action>
   <action name="actionPluginManager">
@@ -877,7 +880,10 @@
   </action>
   <action name="actionCheck_for_Updates">
    <property name="text">
-    <string>Check for Updates...</string>
+    <string>Check for &amp;Updates...</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::ApplicationSpecificRole</enum>
    </property>
    <property name="toolTip">
     <string>Check GitHub for a newer tbc-tools release</string>
@@ -891,10 +897,7 @@
   </action>
   <action name="actionOpen_TBC_file">
    <property name="text">
-    <string>Open TBC/metadata file...</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+O</string>
+    <string>&amp;Open TBC/metadata file...</string>
    </property>
   </action>
   <action name="actionMetadata_Conversion">
@@ -947,10 +950,10 @@
   </action>
   <action name="actionExit">
    <property name="text">
-    <string>Exit</string>
+    <string>E&amp;xit</string>
    </property>
-   <property name="shortcut">
-    <string>Ctrl+W</string>
+   <property name="menuRole">
+    <enum>QAction::QuitRole</enum>
    </property>
   </action>
   <action name="actionLine_scope">
@@ -987,7 +990,7 @@
     <string>Multi-line waveform monitor (sample-luminance histogram across all active lines)</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+M</string>
+    <string>Ctrl+Shift+M</string>
    </property>
   </action>
   <action name="actionField_timing_scope">
@@ -1145,23 +1148,17 @@
     <string>Black SNR analysis...</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+R</string>
+    <string>Ctrl+Shift+R</string>
    </property>
   </action>
   <action name="actionZoom_In">
    <property name="text">
-    <string>Zoom In</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl++</string>
+    <string>Zoom &amp;In</string>
    </property>
   </action>
   <action name="actionZoom_Out">
    <property name="text">
-    <string>Zoom Out</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+-</string>
+    <string>Zoom &amp;Out</string>
    </property>
   </action>
   <action name="actionClosed_Captions">
@@ -1187,18 +1184,12 @@
   </action>
   <action name="actionReload_TBC">
    <property name="text">
-    <string>Reload TBC</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+A</string>
+    <string>&amp;Reload TBC</string>
    </property>
   </action>
   <action name="actionSave_Metadata">
    <property name="text">
-    <string>Save Metadata</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+S</string>
+    <string>&amp;Save Metadata</string>
    </property>
   </action>
   <action name="actionWhite_SNR_analysis">
