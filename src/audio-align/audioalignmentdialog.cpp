@@ -38,10 +38,6 @@ AudioAlignmentDialog::AudioAlignmentDialog(QWidget *parent) :
     ui(new Ui::AudioAlignmentDialog)
 {
     ui->setupUi(this);
-    setAttribute(Qt::WA_TranslucentBackground, false);
-    setAttribute(Qt::WA_NoSystemBackground, false);
-    setAutoFillBackground(true);
-    setWindowOpacity(1.0);
 
     const QString rfTimebaseWarning = tr("RF Video Sample Rate must match the decoder timebase used to generate metadata JSON: use 20000000 for 20 Msps no-resampling captures, 16000000 for 16 Msps captures, or 40000000 when the decoder used internal resampling to 40 Msps.");
     if (ui->rfVideoRatePresetComboBox) {

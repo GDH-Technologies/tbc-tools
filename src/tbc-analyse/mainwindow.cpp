@@ -1238,6 +1238,18 @@ QString chooseFileViaAppleScript(const QString &startPath)
     return QString::fromUtf8(process.readAllStandardOutput()).trimmed();
 }
 #endif
+
+// A new window is shown (and takes focus); one already open is brought to the
+// front instead
+void showOrRaise(QWidget *window)
+{
+    if (window->isVisible()) {
+        window->raise();
+        window->activateWindow();
+    } else {
+        window->show();
+    }
+}
 } // namespace
 
 MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QString themeChoiceParam, QWidget *parent) :
@@ -1450,7 +1462,6 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         updateImage();
     });
     notesViewerDialog = new NotesViewerDialog(this);
-    notesViewerDialog->setWindowFlag(Qt::Window, true);
     connect(notesViewerDialog, &NotesViewerDialog::goToFrameRequested, this, [this](qint32 frameNumber) {
         if (!tbcSource.getIsSourceLoaded()) {
             return;
@@ -1537,14 +1548,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     connect(notesViewerAction, &QAction::triggered, this, [this]() {
         updateNotesViewerState();
         updateSegmentsViewerState();
-        notesViewerDialog->show();
-        notesViewerDialog->raise();
-        notesViewerDialog->activateWindow();
+        showOrRaise(notesViewerDialog);
     });
 
     // Segments viewer: the editable recording-segment layer of the metadata
     segmentsViewerDialog = new SegmentsViewerDialog(this);
-    segmentsViewerDialog->setWindowFlag(Qt::Window, true);
     connect(segmentsViewerDialog, &SegmentsViewerDialog::goToFieldRequested, this, &MainWindow::goToField);
     connect(segmentsViewerDialog, &SegmentsViewerDialog::setInOutRequested, this, [this](qint32 segmentIndex) {
         setInOutFromSegment(segmentIndex, true, true);
@@ -1864,12 +1872,6 @@ MainWindow::~MainWindow()
         tbcSource.unloadSource();
     }
     cleanupTempMetadataFile();
-    if (teletextViewerDialog) {
-        teletextViewerDialog->close();
-        delete teletextViewerDialog;
-        teletextViewerDialog = nullptr;
-    }
-
     delete ui;
 }
 
@@ -2269,9 +2271,8 @@ void MainWindow::dropEvent(QDropEvent *event)
     event->acceptProposedAction();
     if (isTeletextStreamInputExtension(droppedFile)) {
         if (!teletextViewerDialog) {
-            teletextViewerDialog = new TeletextViewerDialog(nullptr);
+            teletextViewerDialog = new TeletextViewerDialog(this);
             teletextViewerDialog->setConfiguration(&configuration);
-            teletextViewerDialog->setWindowFlag(Qt::Window, true);
         }
         QString errorMessage;
         if (!teletextViewerDialog->openTeletextStream(droppedFile, &errorMessage)) {
@@ -2281,9 +2282,7 @@ void MainWindow::dropEvent(QDropEvent *event)
                                      : errorMessage);
             return;
         }
-        teletextViewerDialog->show();
-        teletextViewerDialog->raise();
-        teletextViewerDialog->activateWindow();
+        showOrRaise(teletextViewerDialog);
         if (statusBar()) {
             statusBar()->showMessage(tr("Opened teletext stream: %1").arg(droppedFile), 5000);
         }
@@ -4325,9 +4324,7 @@ void MainWindow::showSegmentsViewer()
         return;
     }
     updateSegmentsViewerState();
-    segmentsViewerDialog->show();
-    segmentsViewerDialog->raise();
-    segmentsViewerDialog->activateWindow();
+    showOrRaise(segmentsViewerDialog);
 }
 
 void MainWindow::goToField(qint32 field)
@@ -4932,17 +4929,13 @@ void MainWindow::on_actionMetadata_Conversion_triggered()
         defaultInput = tbcSource.getCurrentMetadataFilename();
     }
     metadataConversionDialog->setDefaultInput(defaultInput);
-    metadataConversionDialog->show();
-    metadataConversionDialog->raise();
-    metadataConversionDialog->activateWindow();
+    showOrRaise(metadataConversionDialog);
 }
 
 void MainWindow::on_actionMetadata_Status_triggered()
 {
     updateMetadataStatusPanel();
-    metadataStatusDialog->show();
-    metadataStatusDialog->raise();
-    metadataStatusDialog->activateWindow();
+    showOrRaise(metadataStatusDialog);
 }
 void MainWindow::on_actionExport_Decode_Metadata_triggered()
 {
@@ -4982,18 +4975,10 @@ void MainWindow::on_actionExport_Decode_Metadata_triggered()
 
     if (!metadataExportDialog) {
         metadataExportDialog = new MetadataExportDialog(this);
-        metadataExportDialog->setModal(false);
-        metadataExportDialog->setWindowModality(Qt::NonModal);
-        metadataExportDialog->setWindowFlag(Qt::Dialog, true);
-        metadataExportDialog->setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-        metadataExportDialog->setWindowFlag(Qt::WindowMinimizeButtonHint, false);
         connect(metadataExportDialog, &QObject::destroyed, this, [this]() {
             metadataExportDialog = nullptr;
         });
     }
-
-    metadataExportDialog->setModal(false);
-    metadataExportDialog->setWindowModality(Qt::NonModal);
     metadataExportDialog->setExportExecutablePath(toolPath);
 
     const QString sourceDirectory = configuration.getSourceDirectory();
@@ -5004,15 +4989,7 @@ void MainWindow::on_actionExport_Decode_Metadata_triggered()
         metadataExportDialog->setDefaultInputFile(defaultInput);
     }
 
-    if (!metadataExportDialog->windowHandle()) {
-        metadataExportDialog->winId();
-    }
-    if (metadataExportDialog->windowHandle() && windowHandle()) {
-        metadataExportDialog->windowHandle()->setTransientParent(windowHandle());
-    }
-    metadataExportDialog->show();
-    metadataExportDialog->raise();
-    metadataExportDialog->activateWindow();
+    showOrRaise(metadataExportDialog);
 
     if (!defaultInput.isEmpty()) {
         statusBar()->showMessage(tr("Opened Metadata Export GUI with %1").arg(defaultInput), 5000);
@@ -5190,16 +5167,13 @@ void MainWindow::on_actionProcess_VBI_triggered()
         });
         if (!autoTeletextDirectory.isEmpty()) {
             if (!teletextViewerDialog) {
-                teletextViewerDialog = new TeletextViewerDialog(nullptr);
+                teletextViewerDialog = new TeletextViewerDialog(this);
                 teletextViewerDialog->setConfiguration(&configuration);
-                teletextViewerDialog->setWindowFlag(Qt::Window, true);
             }
             if (teletextViewerDialog->directory().compare(autoTeletextDirectory, Qt::CaseInsensitive) != 0) {
                 teletextViewerDialog->setDirectory(autoTeletextDirectory);
             }
-            teletextViewerDialog->show();
-            teletextViewerDialog->raise();
-            teletextViewerDialog->activateWindow();
+            showOrRaise(teletextViewerDialog);
         }
     }
     if (reloadingCurrentSource) {
@@ -5411,18 +5385,12 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
 
     if (!audioAlignmentDialog) {
         audioAlignmentDialog = new AudioAlignmentDialog(this);
-        audioAlignmentDialog->setModal(false);
-        audioAlignmentDialog->setWindowModality(Qt::NonModal);
         audioAlignmentDialog->setWindowFlags(Qt::Window
                                              | Qt::CustomizeWindowHint
                                              | Qt::WindowTitleHint
                                              | Qt::WindowSystemMenuHint
                                              | Qt::WindowMinimizeButtonHint
                                              | Qt::WindowCloseButtonHint);
-        audioAlignmentDialog->setAttribute(Qt::WA_TranslucentBackground, false);
-        audioAlignmentDialog->setAttribute(Qt::WA_NoSystemBackground, false);
-        audioAlignmentDialog->setAutoFillBackground(true);
-        audioAlignmentDialog->setWindowOpacity(1.0);
         connect(audioAlignmentDialog, &QObject::destroyed, this, [this]() {
             audioAlignmentDialog = nullptr;
         });
@@ -5442,9 +5410,6 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
                                      5000);
         });
     }
-    audioAlignmentDialog->setModal(false);
-    audioAlignmentDialog->setWindowModality(Qt::NonModal);
-    audioAlignmentDialog->setWindowOpacity(1.0);
 
     const QString sourceDirectory = configuration.getSourceDirectory();
     if (!sourceDirectory.isEmpty()) {
@@ -5464,12 +5429,7 @@ void MainWindow::on_actionAuto_Audio_Align_triggered()
         }
     }
 
-    audioAlignmentDialog->show();
-    if (audioAlignmentDialog->windowHandle() && windowHandle()) {
-        audioAlignmentDialog->windowHandle()->setTransientParent(windowHandle());
-    }
-    audioAlignmentDialog->raise();
-    audioAlignmentDialog->activateWindow();
+    showOrRaise(audioAlignmentDialog);
 
     if (!defaultJsonPath.isEmpty()) {
         statusBar()->showMessage(tr("Opened Auto Audio Align with %1").arg(defaultJsonPath), 5000);
@@ -5483,18 +5443,12 @@ void MainWindow::on_actionEFM_Handler_triggered()
     if (!efmHandlerDialog) {
         efmHandlerDialog = new EfmHandlerDialog(this);
         efmHandlerDialog->setConfiguration(&configuration);
-        efmHandlerDialog->setModal(false);
-        efmHandlerDialog->setWindowModality(Qt::NonModal);
         efmHandlerDialog->setWindowFlags(Qt::Window
                                          | Qt::CustomizeWindowHint
                                          | Qt::WindowTitleHint
                                          | Qt::WindowSystemMenuHint
                                          | Qt::WindowMinimizeButtonHint
                                          | Qt::WindowCloseButtonHint);
-        efmHandlerDialog->setAttribute(Qt::WA_TranslucentBackground, false);
-        efmHandlerDialog->setAttribute(Qt::WA_NoSystemBackground, false);
-        efmHandlerDialog->setAutoFillBackground(true);
-        efmHandlerDialog->setWindowOpacity(1.0);
         connect(efmHandlerDialog, &QObject::destroyed, this, [this]() {
             efmHandlerDialog = nullptr;
         });
@@ -5512,10 +5466,6 @@ void MainWindow::on_actionEFM_Handler_triggered()
                                              5000);
                 });
     }
-
-    efmHandlerDialog->setModal(false);
-    efmHandlerDialog->setWindowModality(Qt::NonModal);
-    efmHandlerDialog->setWindowOpacity(1.0);
 
     QString sourceDirectory = outputRootDirectoryForCurrentSource();
     if (sourceDirectory.isEmpty()) {
@@ -5541,12 +5491,7 @@ void MainWindow::on_actionEFM_Handler_triggered()
     }
     applyEfmHandlerAutoloads(sourceDirectory);
 
-    efmHandlerDialog->show();
-    if (efmHandlerDialog->windowHandle() && windowHandle()) {
-        efmHandlerDialog->windowHandle()->setTransientParent(windowHandle());
-    }
-    efmHandlerDialog->raise();
-    efmHandlerDialog->activateWindow();
+    showOrRaise(efmHandlerDialog);
     statusBar()->showMessage(tr("Opened EFM Handler. Configure EFM/AC3 stages and run the pipeline."), 5000);
 }
 
@@ -5630,12 +5575,8 @@ void MainWindow::on_actionLine_scope_triggered()
 {
     if (tbcSource.getIsSourceLoaded()) {
         // Show the oscilloscope dialogue for the selected scan-line
-        if (!oscilloscopeDialog->isVisible()) {
-            oscilloscopeDialog->show();
-        }
+        showOrRaise(oscilloscopeDialog);
         updateOscilloscopeDialogue();
-        oscilloscopeDialog->raise();
-        oscilloscopeDialog->activateWindow();
     }
 }
 
@@ -5644,12 +5585,8 @@ void MainWindow::on_actionVectorscope_triggered()
 {
     if (tbcSource.getIsSourceLoaded()) {
         // Show the vectorscope dialogue
-        if (!vectorscopeDialog->isVisible()) {
-            vectorscopeDialog->show();
-        }
+        showOrRaise(vectorscopeDialog);
         updateVectorscopeDialogue();
-        vectorscopeDialog->raise();
-        vectorscopeDialog->activateWindow();
     }
 }
 
@@ -5657,12 +5594,8 @@ void MainWindow::on_actionVectorscope_triggered()
 void MainWindow::on_actionWaveform_monitor_triggered()
 {
     if (tbcSource.getIsSourceLoaded() && !tbcSource.getIsMetadataOnly()) {
-        if (!waveformMonitorDialog->isVisible()) {
-            waveformMonitorDialog->show();
-        }
+        showOrRaise(waveformMonitorDialog);
         updateWaveformMonitorDialogue();
-        waveformMonitorDialog->raise();
-        waveformMonitorDialog->activateWindow();
     }
 }
 
@@ -5672,12 +5605,8 @@ void MainWindow::on_actionRGB_scope_triggered()
     if (!tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
         return;
     }
-    if (!rgbScopeDialog->isVisible()) {
-        rgbScopeDialog->show();
-    }
+    showOrRaise(rgbScopeDialog);
     updateRgbScopeDialogue(true);
-    rgbScopeDialog->raise();
-    rgbScopeDialog->activateWindow();
 }
 
 // Display the YUV range scope pop-out view
@@ -5686,12 +5615,8 @@ void MainWindow::on_actionYUV_range_scope_triggered()
     if (!tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
         return;
     }
-    if (!yuvRangeDialog->isVisible()) {
-        yuvRangeDialog->show();
-    }
+    showOrRaise(yuvRangeDialog);
     updateYuvRangeScopeDialogue(true);
-    yuvRangeDialog->raise();
-    yuvRangeDialog->activateWindow();
 }
 
 // Display the field timing scope view
@@ -5699,9 +5624,7 @@ void MainWindow::on_actionField_timing_scope_triggered()
 {
     if (tbcSource.getIsSourceLoaded()) {
         updateFieldTimingDialogue();
-        fieldTimingDialog->show();
-        fieldTimingDialog->raise();
-        fieldTimingDialog->activateWindow();
+        showOrRaise(fieldTimingDialog);
     }
 }
 
@@ -5732,11 +5655,8 @@ void MainWindow::on_actionPluginManager_triggered()
     if (!pluginManagerDialog) {
         pluginManagerDialog = new PluginManagerDialog(this);
         pluginManagerDialog->setConfiguration(&configuration);
-        pluginManagerDialog->setWindowFlag(Qt::Window, true);
     }
-    pluginManagerDialog->show();
-    pluginManagerDialog->raise();
-    pluginManagerDialog->activateWindow();
+    showOrRaise(pluginManagerDialog);
 }
 
 // Show the Metadata Editor (Tools > Metadata Editor...)
@@ -5757,9 +5677,7 @@ void MainWindow::on_actionMetadata_Editor_triggered()
         const bool firstLineIsRed = (firstField >= 1) ? tbcSource.getSecamFirstLineIsRed(firstField) : false;
         metadataEditorDialog->setSecamFieldContext(firstField, firstLineIsRed, isSecamFamily);
     }
-    metadataEditorDialog->show();
-    metadataEditorDialog->raise();
-    metadataEditorDialog->activateWindow();
+    showOrRaise(metadataEditorDialog);
 }
 
 // Check for updates - manual trigger from the Help menu
@@ -5929,9 +5847,8 @@ void MainWindow::showUpdateAvailableDialog(const QString &latestVersion, const Q
 void MainWindow::on_actionTeletext_Viewer_triggered()
 {
     if (!teletextViewerDialog) {
-        teletextViewerDialog = new TeletextViewerDialog(nullptr);
+        teletextViewerDialog = new TeletextViewerDialog(this);
         teletextViewerDialog->setConfiguration(&configuration);
-        teletextViewerDialog->setWindowFlag(Qt::Window, true);
     }
     const QString suggestedDirectory = resolveTeletextHtmlDirectoryFromHints({
         tbcSource.getCurrentSourceFilename(),
@@ -5944,9 +5861,7 @@ void MainWindow::on_actionTeletext_Viewer_triggered()
         teletextViewerDialog->setDirectory(suggestedDirectory);
     }
 
-    teletextViewerDialog->show();
-    teletextViewerDialog->raise();
-    teletextViewerDialog->activateWindow();
+    showOrRaise(teletextViewerDialog);
 }
 
 // Show the VBI window
@@ -7402,9 +7317,7 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
     } else if (selectedAction == openNotesViewerAction) {
         updateNotesViewerState();
         updateSegmentsViewerState();
-        notesViewerDialog->show();
-        notesViewerDialog->raise();
-        notesViewerDialog->activateWindow();
+        showOrRaise(notesViewerDialog);
     } else if (setInOutFromSegmentAction && selectedAction == setInOutFromSegmentAction) {
         setInOutFromSegment(segmentIndexAtFrame, true, true);
     } else if (splitSegmentAction && selectedAction == splitSegmentAction) {

@@ -25,7 +25,6 @@ YuvRangeDialog::YuvRangeDialog(QWidget *parent)
 {
     setWindowTitle(tr("YUV Range"));
     setWindowFlags(Qt::Window);
-    setModal(false);
     resize(960, 540);
 
     auto *mainLayout = new QVBoxLayout(this);

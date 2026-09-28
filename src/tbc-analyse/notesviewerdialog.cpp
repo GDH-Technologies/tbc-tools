@@ -18,8 +18,6 @@ NotesViewerDialog::NotesViewerDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("Marker Viewer"));
-    setModal(false);
-    setAttribute(Qt::WA_DeleteOnClose, false);
     setMinimumWidth(720);
 
     auto *mainLayout = new QVBoxLayout(this);

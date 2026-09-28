@@ -1486,8 +1486,6 @@ TeletextViewerDialog::TeletextViewerDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("Teletext Viewer"));
-    setModal(false);
-    setAttribute(Qt::WA_DeleteOnClose, false);
     setMinimumSize(520, 420);
     setAcceptDrops(true);
 

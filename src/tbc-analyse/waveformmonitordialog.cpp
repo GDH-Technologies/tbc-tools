@@ -47,8 +47,6 @@ WaveformMonitorDialog::WaveformMonitorDialog(QWidget *parent)
       gain_slider_(nullptr),
       gain_value_label_(nullptr) {
   setWindowFlags(Qt::Window);
-  setModal(false);
-  setAttribute(Qt::WA_DeleteOnClose, false);
   setWindowTitle("Waveform Monitor");
 
   setupUI();

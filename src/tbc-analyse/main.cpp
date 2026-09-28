@@ -317,8 +317,7 @@ void configureBundledQtPluginPaths(int argc, char *argv[])
 void filteredDebugOutputHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
     // Filter out harmless Qt system warnings that don't affect functionality
-    if (msg.contains("Wayland does not support QWindow::requestActivate()") ||
-        msg.contains("QSocketNotifier: Can only be used with threads started with QThread")) {
+    if (msg.contains("QSocketNotifier: Can only be used with threads started with QThread")) {
         return; // Don't output these warnings
     }
     

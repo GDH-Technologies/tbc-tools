@@ -17,8 +17,6 @@ FieldTimingDialog::FieldTimingDialog(QWidget *parent)
     setupUi();
     setWindowTitle(tr("Field Timing Scope"));
     setWindowFlags(Qt::Window);
-    setModal(false);
-    setAttribute(Qt::WA_DeleteOnClose, false);
     resize(900, 500);
 
     QSettings settings;
