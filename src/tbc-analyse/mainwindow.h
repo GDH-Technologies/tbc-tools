@@ -33,6 +33,7 @@
 #include <QActionGroup>
 #include <QImage>
 #include <QProgressDialog>
+#include <functional>
 #include <QFutureWatcher>
 
 #include "oscilloscopedialog.h"
@@ -395,6 +396,8 @@ private:
     void refreshThemeDependentUi();
     void mouseScanLineSelect(qint32 oX, qint32 oY);
 	void resizeEvent(QResizeEvent *event);
+    void closeEvent(QCloseEvent *event) override;
+    bool maybeSave(std::function<void()> continueAfterSave);
     void requestSourceOpen(const QString &inputFileName);
     void processPendingSourceOpenRequest();
     bool runExternalToolWithProgress(const QString &program, const QStringList &arguments,
@@ -413,6 +416,8 @@ private:
     UiStateSnapshot pendingUiStateSnapshot;
     bool restoreUiStateAfterReload = false;
     QString pendingSourceOpenFilename;
+    // Runs once a save started by maybeSave() has succeeded
+    std::function<void()> afterSaveAction;
     bool sourceOperationInProgress = false;
     void updateTimelineMarkers();
     void updateNotesViewerState();

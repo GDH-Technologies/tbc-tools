@@ -69,6 +69,7 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
 #include <optional>
+#include <utility>
 #if defined(Q_OS_UNIX)
 #include <signal.h>
 #endif
@@ -1443,7 +1444,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
             this, [this](const TbcMetaData::PcmAudioParameters &pcmAudioParameters) {
         if (!tbcSource.getIsSourceLoaded()) return;
         tbcSource.setPcmAudioParameters(pcmAudioParameters);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
     });
     // Apply: save the metadata to disk. TbcSource::saveSourceMetadata() writes
     // to a .new file, backs up the original to .bup (timestamped fallback),
@@ -1460,7 +1461,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
             this, [this](qint32 fieldNumber, bool value, bool applyToAll) {
         if (!tbcSource.getIsSourceLoaded()) return;
         tbcSource.setSecamFirstLineIsRed(fieldNumber, value, applyToAll);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
         updateMetadataStatusPanel();
         updateImage();
     });
@@ -1519,7 +1520,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
                 }
 
                 tbcSource.setVideoParameters(videoParameters);
-                ui->actionSave_Metadata->setEnabled(true);
+                setWindowModified(true);
                 updateMetadataStatusPanel();
                 updateTimelineMarkers();
                 updateNotesViewerState();
@@ -1930,6 +1931,13 @@ bool MainWindow::event(QEvent *event)
 
     const bool baseHandled = QMainWindow::event(event);
 
+    // The window's modified flag is the one record of unsaved metadata edits
+    // (it also puts the [*] marker in the title); Save follows it.
+    if (event && event->type() == QEvent::ModifiedChange) {
+        ui->actionSave_Metadata->setEnabled(tbcSource.getIsSourceLoaded() && isWindowModified());
+        updateMetadataStatusPanel();
+    }
+
     if (event && (event->type() == QEvent::PaletteChange
                   || event->type() == QEvent::StyleChange)) {
         if (!themeRefreshPending) {
@@ -1995,8 +2003,8 @@ void MainWindow::setGuiEnabled(bool enabled)
         notesViewerAction->setEnabled(enabled);
     }
 
-    // "Save Metadata" should be disabled by default
-    ui->actionSave_Metadata->setEnabled(false);
+    // "Save Metadata" is available while there are unsaved edits
+    ui->actionSave_Metadata->setEnabled(enabled && isWindowModified());
 
     // Set zoom button states
     ui->zoomInPushButton->setEnabled(enabled);
@@ -2244,6 +2252,11 @@ void MainWindow::requestSourceOpen(const QString &inputFileName)
         return;
     }
 
+    // Opening, reloading or dropping a file replaces the loaded metadata
+    if (!maybeSave([this, normalizedInputFileName]() { requestSourceOpen(normalizedInputFileName); })) {
+        return;
+    }
+
     lastFilename = normalizedInputFileName;
     if (sourceOperationInProgress) {
         pendingSourceOpenFilename = normalizedInputFileName;
@@ -2374,9 +2387,6 @@ void MainWindow::updateGuiLoaded()
                                                 false); // set to false to init the chroma decoder selection
     chromaDecoderConfigDialog->setVideoLevels(tbcSource.getVideoParameters());
 
-    // Disable "Save Metadata", now we've loaded the metadata into the GUI
-    ui->actionSave_Metadata->setEnabled(false);
-
     // Keep load-time sizing stable: either fit frame to existing window, or
     // resize window to image size (legacy auto-resize behavior), but not both.
     if (resizeFrameWithWindow) {
@@ -2419,7 +2429,8 @@ void MainWindow::updateGuiUnloaded()
     ui->posHorizontalSlider->setValue(1);
 
     // Set the window title
-    this->setWindowTitle(tr("tbc-analyse"));
+    setWindowFilePath(QString());
+    setWindowTitle(tr("tbc-analyse"));
 
     // Set the status bar text
     sourceVideoStatus.setText(tr("No source video file loaded"));
@@ -2609,7 +2620,7 @@ void MainWindow::updateMetadataStatusPanel()
     data.ntscChromaWeight = formatOptionalDouble(videoParameters.ntscChromaWeight);
     data.ntscPhaseComp = formatOptionalBoolFromInt(videoParameters.ntscPhaseCompensation);
     data.palTransformThreshold = formatOptionalDouble(videoParameters.palTransformThreshold);
-    data.savePending = ui->actionSave_Metadata->isEnabled() ? QStringLiteral("Yes") : QStringLiteral("No");
+    data.savePending = isWindowModified() ? QStringLiteral("Yes") : QStringLiteral("No");
 
     metadataStatusDialog->updateStatus(data);
 }
@@ -3438,6 +3449,9 @@ void MainWindow::hideImage()
 // Load a TBC file based on the passed file name
 void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool preserveStatusDuringReload)
 {
+    // The current metadata is being replaced; callers have already offered to
+    // save any edits (maybeSave), or just saved them.
+    setWindowModified(false);
     setPlaybackRunning(false);
     if (asyncFrameRenderInProgress) {
         cancelInFlightAsyncFrameRender();
@@ -4222,7 +4236,7 @@ QString MainWindow::segmentSummaryText(const TbcMetaData::Segment &segment) cons
 void MainWindow::applySegmentEdit(const QVector<TbcMetaData::Segment> &segments, const QString &statusText)
 {
     tbcSource.setSegments(segments);
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
     updateMetadataStatusPanel();
     updateTimelineMarkers();
     updateBottomStatusReadout();
@@ -4993,8 +5007,9 @@ void MainWindow::on_actionExit_triggered()
 {
     tbcDebugStream() << "MainWindow::on_actionExit_triggered(): Called";
 
-    // Quit the application
-    qApp->quit();
+    // Close the main window like the title-bar button: closeEvent() offers to
+    // save unsaved metadata edits, and the application quits once it closes.
+    close();
 }
 
 // Load a TBC file based on the file selection from the GUI
@@ -5162,6 +5177,11 @@ void MainWindow::on_actionExport_Decode_Metadata_triggered()
 
 void MainWindow::on_actionProcess_VBI_triggered()
 {
+    // Processing rewrites the metadata on disk and reloads it
+    if (!maybeSave([this]() { on_actionProcess_VBI_triggered(); })) {
+        return;
+    }
+
     QString defaultInput;
     if (tbcSource.getIsSourceLoaded()) {
         defaultInput = tbcSource.getCurrentSourceFilename();
@@ -5353,6 +5373,11 @@ void MainWindow::on_actionProcess_VBI_triggered()
 
 void MainWindow::on_actionFix_JSON_SNR_triggered()
 {
+    // Fixing rewrites the metadata on disk and reloads it
+    if (!maybeSave([this]() { on_actionFix_JSON_SNR_triggered(); })) {
+        return;
+    }
+
     const auto isMetadataFile = [](const QString &filename) {
         return filename.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)
                || filename.endsWith(QStringLiteral(".db"), Qt::CaseInsensitive);
@@ -5712,6 +5737,46 @@ void MainWindow::on_actionSave_Metadata_triggered()
     tbcSource.saveSourceMetadata();
 
     // Saving continues in the background...
+}
+
+// Before anything that would discard unsaved metadata edits (closing, opening
+// or reloading a source, reprocessing it), offer to save them. Returns true
+// when the caller may go ahead now. Choosing Save starts the (asynchronous)
+// save and returns false: continueAfterSave then runs once it has succeeded,
+// and nothing runs if it fails.
+bool MainWindow::maybeSave(std::function<void()> continueAfterSave)
+{
+    if (!isWindowModified()) {
+        return true;
+    }
+
+    const QMessageBox::StandardButton choice = QMessageBox::warning(
+        this, tr("Unsaved metadata changes"),
+        tr("The metadata of %1 has unsaved changes.\nDo you want to save them?")
+            .arg(tbcSource.getCurrentSourceFilename()),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    if (choice == QMessageBox::Discard) {
+        return true;
+    }
+    if (choice == QMessageBox::Save) {
+        afterSaveAction = std::move(continueAfterSave);
+        on_actionSave_Metadata_triggered();
+    }
+    return false;
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // A load or save is running on the worker thread; its busy dialog is up
+    if (sourceOperationInProgress) {
+        event->ignore();
+        return;
+    }
+    if (!maybeSave([this]() { close(); })) {
+        event->ignore();
+        return;
+    }
+    QMainWindow::closeEvent(event);
 }
 
 // Display the scan line oscilloscope view
@@ -6990,9 +7055,8 @@ void MainWindow::handleUiScaleSelected(QAction *action)
         return;
     }
 
-    // Never restart out from under unsaved metadata edits. "Save Metadata"
-    // being enabled is how the rest of the GUI tracks that state.
-    if (ui->actionSave_Metadata && ui->actionSave_Metadata->isEnabled()) {
+    // Never restart out from under unsaved metadata edits
+    if (isWindowModified()) {
         QMessageBox::warning(this, tr("Unsaved metadata changes"),
                              tr("This source has unsaved metadata changes, so tbc-analyse was not "
                                 "restarted. Save the metadata and restart when you are ready; the "
@@ -7430,7 +7494,7 @@ void MainWindow::on_posHorizontalSlider_customContextMenuRequested(const QPoint 
             return false;
         }
         tbcSource.setVideoParameters(videoParameters);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
         updateTimelineMarkers();
         updateNotesViewerState();
         updateSegmentsViewerState();
@@ -8060,7 +8124,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
     if (applyUserNoteMarkersToVideoParameters(videoParameters, noteMarkers)) {
         tbcSource.setVideoParameters(videoParameters);
-        ui->actionSave_Metadata->setEnabled(true);
+        setWindowModified(true);
         updateTimelineMarkers();
         updateNotesViewerState();
         updateSegmentsViewerState();
@@ -8287,7 +8351,7 @@ void MainWindow::videoParametersChangedSignalHandler(const TbcMetaData::VideoPar
     }
 
     // Enable the "Save Metadata" action, since the metadata has been modified
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
 
     // Update the aspect button's label
     updateAspectPushButton();
@@ -8334,7 +8398,7 @@ void MainWindow::exportRangeSelectionChangedSignalHandler(int inPoint, int outPo
     videoParameters.userEditOutSelection = metadataOut;
     tbcSource.setVideoParameters(videoParameters);
 
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
     updateTimelineMarkers();
     updateNotesViewerState();
     updateSegmentsViewerState();
@@ -8394,7 +8458,7 @@ void MainWindow::chromaDecoderConfigChangedSignalHandler()
     tbcSource.setVideoParameters(videoParameters);
 
     // Enable the \"Save Metadata\" action, since the metadata has been modified
-    ui->actionSave_Metadata->setEnabled(true);
+    setWindowModified(true);
 
     // Update the image viewer
     updateImage();
@@ -8470,8 +8534,10 @@ void MainWindow::onSourceLoaded(bool success)
             exportDialog->setSource(&tbcSource);
         }
 
-        // Set the main window title
-        this->setWindowTitle(tr("tbc-analyse - ") + tbcSource.getCurrentSourceFilename());
+        // The window's file (macOS proxy icon) and title; [*] shows the
+        // modified marker while there are unsaved metadata edits
+        setWindowFilePath(QFileInfo(lastFilename).absoluteFilePath());
+        setWindowTitle(tr("%1[*] - tbc-analyse").arg(tbcSource.getCurrentSourceFilename()));
 
         // Update the configuration for the source directory
         QFileInfo inFileInfo(tbcSource.getCurrentSourceFilename());
@@ -8501,8 +8567,15 @@ void MainWindow::onSourceSaved(bool success)
     busyProgress->hide();
 
     if (success) {
-        // Disable the "Save Metadata" action until the metadata is modified again
-        ui->actionSave_Metadata->setEnabled(false);
+        setWindowModified(false);
+
+        // A save chosen at maybeSave()'s prompt: carry on with what was asked
+        // for (close, open, reprocess) instead of reloading this source.
+        if (afterSaveAction) {
+            QTimer::singleShot(0, this, std::exchange(afterSaveAction, {}));
+            updateMetadataStatusPanel();
+            return;
+        }
 
         // Reload the source with the newly-saved metadata so the GUI reflects
         // the edited values (e.g. TV system change, chroma decoder switch).
@@ -8518,6 +8591,8 @@ void MainWindow::onSourceSaved(bool success)
             }
         }
     } else {
+        // Whatever was waiting on the save doesn't happen; the edits stay.
+        afterSaveAction = {};
         // Show the error to the user
         QMessageBox messageBox;
         messageBox.warning(this, tr("Error"), tbcSource.getLastIOError());
