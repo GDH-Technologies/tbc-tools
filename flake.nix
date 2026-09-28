@@ -156,13 +156,14 @@
               top = builtins.head (pkgs.lib.splitString "/" relPath);
               # Top-level entries the Nix build never reads. CMake reads src/,
               # scripts/, test-data/ and the root build files. These are CI
-              # configuration, documentation, agent and developer logs, and
-              # notes. Leaving them out means a docs-only or workflow-only merge
+              # configuration and CI scripts (ci/: guardrails, packaging and
+              # deploy helpers, nothing the build or ctest touches),
+              # documentation, agent and developer logs, and notes. Leaving them out means a docs-only or workflow-only merge
               # is not a new derivation, so wm and air0 install the build they
               # already have instead of rebuilding it.
               notBuildInput =
                 builtins.elem top [
-                  ".github" "docs" "development-logs" "dev-notes" "notes"
+                  ".github" "ci" "docs" "development-logs" "dev-notes" "notes"
                   "AGENTS.md" "BUILD.md" "DEV_NOTES.md" "INSTALL.md" "README.md"
                   "TELETEXT_CENTERING_FIX.md" "WST_DECODER_INTEGRATION.md" "aqtinstall.log"
                 ]
@@ -292,13 +293,14 @@
               "-DCUDAToolkit_ROOT=${cudaPackages.cudatoolkit}"
               "-DCMAKE_CUDA_HOST_COMPILER=${cudaHostCompiler}/bin/g++"
             ];
-          } // pkgs.lib.optionalAttrs (!withCuda && isDarwin) {
+          } // pkgs.lib.optionalAttrs (!withCuda) {
             # ctest runs inside this build, so the binaries the tests exercise
-            # are the ones that get installed and deployed, and CI compiles once.
-            # Darwin only for now: Linux follows once it is proven on wm. The
-            # attrs are merged in only here so no check attribute reaches the
-            # Linux or CUDA derivations.
-            doCheck = !withCuda && isDarwin;
+            # are the ones that get installed and deployed, and CI compiles once
+            # (the self-hosted test runners build this; the package jobs reuse
+            # it). Not for packages.cuda: the plugin-publish job pins that
+            # derivation, and the attrs are merged in only here so none of them
+            # reaches it.
+            doCheck = !withCuda;
             # Serial, and this is what makes it so: nixpkgs' cmake setup hook
             # exports CTEST_PARALLEL_LEVEL=$NIX_BUILD_CORES unless this is off,
             # and a bare `ctest` obeys it. The decode and chroma tests all
@@ -312,7 +314,12 @@
               ]))
               # scripts/test-chroma drives ffmpeg directly.
               p.ffmpeg
-            ];
+            ] ++ pkgs.lib.optionals isLinux [ p.mono ];
+            # mono: the aaa-runtime, aaa-detection and aaa-headless-runtime tests
+            # run the vendored Auto Audio Align .exe under mono, found on PATH,
+            # and skip without it -- they ran on wm's host mono before ctest
+            # moved in here. Linux only: they have always skipped on air0, and
+            # nixpkgs' aarch64-darwin mono is an uncached build.
             # scripts/test-chroma is `#!/usr/bin/python3`, which a Nix build
             # does not have.
             postPatch = ''
@@ -323,7 +330,8 @@
             # directory. On macOS QStandardPaths asks Foundation, which takes
             # the build user's account home (/var/empty, read-only for
             # _nixbld) rather than $HOME -- testconfiguration's writes then
-            # vanish -- unless CFFIXED_USER_HOME overrides it. The teletext
+            # vanish -- unless CFFIXED_USER_HOME overrides it (Linux ignores
+            # it; Qt honours $HOME there). The teletext
             # test runs Python straight from the source tree, which
             # installPhase copies after this phase, so no bytecode may be
             # written or __pycache__ ships in the package.
@@ -333,10 +341,11 @@
               export PYTHONDONTWRITEBYTECODE=1
               patchShebangs bin
             '';
-            # Serial (see enableParallelChecking above).
+            # Serial (see enableParallelChecking above). --no-tests=error: a
+            # check that registered nothing must fail, not pass empty.
             checkPhase = ''
               runHook preCheck
-              ctest --output-on-failure
+              ctest --output-on-failure --no-tests=error
               runHook postCheck
             '';
           });

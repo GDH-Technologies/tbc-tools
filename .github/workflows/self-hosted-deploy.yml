@@ -123,7 +123,6 @@ jobs:
               # The flake derives the Nix build's version from these two.
               - 'vcpkg.json'
               - '.gdh-version'
-              - 'ci/run_local_ci_parity.sh'
               - 'ci/verify_linux_bundle.sh'
               - 'ci/deploy_fleet_host.sh'
               - '.github/workflows/self-hosted-linux.yml'
@@ -133,7 +132,6 @@ jobs:
               - 'flake.lock'
               - 'vcpkg.json'
               - '.gdh-version'
-              - 'ci/run_local_ci_parity.sh'
               - '.github/workflows/self-hosted-macos.yml'
             windows:
               - *common

@@ -7,6 +7,7 @@
 #   wm       -> workflow-master (Fedora, x86_64): builds
 #   wm-light -> workflow-master-light (same box): short jobs -- guardrails,
 #               deploy detect, the Linux install, the version bump and tag
+#   wm-test  -> workflow-master-test (same box): tbc-tools' Linux compile + ctest
 #   air0       -> air-0 (Apple Silicon macOS): builds
 #   air0-light -> air-0-light (same box): the macOS install
 #   air0-test  -> air0-test (same box): tbc-tools' macOS compile + ctest
@@ -15,6 +16,7 @@ self-hosted-runner:
   labels:
     - wm
     - wm-light
+    - wm-test
     - air0
     - air0-light
     - air0-test

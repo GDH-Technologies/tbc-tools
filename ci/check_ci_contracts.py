@@ -17,6 +17,15 @@ CUDA_PLUGIN_PUBLISH_WORKFLOW = ROOT / ".github/workflows/publish_cuda_plugin.yml
 SELF_HOSTED_LINUX_WORKFLOW = ROOT / ".github/workflows/self-hosted-linux.yml"
 SELF_HOSTED_MACOS_WORKFLOW = ROOT / ".github/workflows/self-hosted-macos.yml"
 MACOS_BUNDLE_DEPENDENCIES_SCRIPT = ROOT / "ci/macos_bundle_dependencies.sh"
+# It runs under macOS /bin/bash 3.2. The guardrails' `bash -n` runs bash 5 on
+# wm, which accepts all of these, so they are forbidden by name.
+MACOS_BUNDLE_DEPENDENCIES_FORBIDDEN_SNIPPETS = (
+    "declare -A",
+    "mapfile",
+    "readarray",
+    ",,}",
+    "^^}",
+)
 SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml"
 SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
 FLEET_DEPLOY_HOST_SCRIPT = ROOT / "ci/deploy_fleet_host.sh"
@@ -235,7 +244,16 @@ SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
     # The workspace may not persist, and checkout runs `git clean -ffdx`, so a
     # tag deleted or moved on the remote can linger and poison `git describe`.
     "git fetch --tags --prune --prune-tags --force origin",
-    "bash ci/run_local_ci_parity.sh --build-test-only",
+    # One compile, as on macOS: the test job builds (ctest runs inside that
+    # build, see FLAKE_CHECK_REQUIRED_SNIPPETS) on wm's dedicated test runner,
+    # from a shallow checkout, and the package job waits for it and reuses the
+    # GC-rooted store path, warning loudly on a miss.
+    "runs-on: [self-hosted, wm-test]",
+    'nix build .# --out-link "$ROOTS/result-$GITHUB_RUN_ID"',
+    "needs: test",
+    "ref: ${{ inputs.checkout_ref || github.sha }}",
+    "nix build .# --dry-run",
+    "fetch-depth: 1",
     "bash ci/verify_linux_bundle.sh x86-appimage release/tbc-tools-x86_64.AppImage",
     "bash scripts/build-aaa-linux.sh",
     "bash scripts/package-aaa-appimage.sh",
@@ -250,6 +268,13 @@ SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
     # mono died instantly.
     "nixpkgs#$pkg",
     "patchelfUnstable",
+)
+# The dev-shell CMake build compiled everything a second time just to run
+# ctest, and two jobs checking out the moving merge ref can build different
+# trees.
+SELF_HOSTED_LINUX_FORBIDDEN_SNIPPETS = (
+    "run_local_ci_parity.sh",
+    "inputs.checkout_ref || github.ref",
 )
 SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
@@ -484,6 +509,8 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     # air0's dedicated test runner (--no-default-labels): tbc-tools' macOS
     # compile + ctest, so the main air0 runner only packages.
     "- air0-test",
+    # wm's dedicated test runner: tbc-tools' Linux compile + ctest.
+    "- wm-test",
     "- win0",
 )
 # The light jobs are pinned to wm-light. On the main `wm` runner, a seven-second
@@ -562,6 +589,13 @@ SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS = (
     # A PR's .gdh-version must be unchanged or exactly the next minor/major.
     "python3 scripts/gdh_version.py check-pr",
     "nix build nixpkgs#actionlint",
+    # Behavioural, not textual: the package really runs ctest on both Nix
+    # platforms (a gate edited to `false` would still read "doCheck = !withCuda").
+    "nix eval .#packages.x86_64-linux.default.doCheck",
+    "nix eval .#packages.aarch64-darwin.default.doCheck",
+    # Split by event, so a PR's push and pull_request runs each finish instead
+    # of one cancelling the other and leaving a red X on the PR.
+    "group: tbc-tools-guardrails-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}",
     "git fetch --tags --prune --prune-tags --force origin",
 )
 # It must stay unfiltered. `paths:` appearing at all would mean it had been
@@ -579,6 +613,8 @@ SELF_HOSTED_GUARDRAILS_FORBIDDEN_SNIPPETS = (
 # GitHub's own ordered negation, which does work, so it is not caught here.
 SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS = (
     "- '!",
+    # Neither platform build runs the dev-shell parity build any more.
+    "- 'ci/run_local_ci_parity.sh'",
 )
 # A dispatch selects its platforms from the input: through env, never
 # interpolated into the script, and matched as whole comma-separated names (so
@@ -632,7 +668,9 @@ FLAKE_BUILD_IDENTITY_FORBIDDEN_SNIPPETS = (
 # notes), so a docs-only or workflow-only merge is not a new derivation.
 FLAKE_SRC_FILTER_REQUIRED_SNIPPETS = (
     "notBuildInput",
-    '".github" "docs" "development-logs" "dev-notes" "notes"',
+    # ci/ holds guardrails, packaging and deploy helpers: nothing the build or
+    # ctest reads, so a CI-script edit must not force a rebuild everywhere.
+    '".github" "ci" "docs" "development-logs" "dev-notes" "notes"',
 )
 # Every platform builds from the locked nixpkgs (Qt 6.10.1). nixpkgsLegacy is
 # only for the CUDA 11.8 toolchain unstable no longer has. Upstream builds Linux
@@ -645,11 +683,15 @@ FLAKE_QT_REQUIRED_SNIPPETS = (
 FLAKE_QT_FORBIDDEN_SNIPPETS = (
     "pkgs = if isLinux then legacyPkgs else pkgsUnstable;",
 )
-# ctest runs inside the package build, so what the tests exercise is what gets
-# deployed (Darwin only until the Linux sandbox failure is fixed; the marker
-# below survives that change). A sync must not drop it.
+# ctest runs inside the package build on Linux and Darwin, so what the tests
+# exercise is what gets deployed, and CI compiles once. A sync must not drop it.
 FLAKE_CHECK_REQUIRED_SNIPPETS = (
-    "doCheck = !withCuda",
+    "doCheck = !withCuda;",
+    "} // pkgs.lib.optionalAttrs (!withCuda) {",
+    # The AAA runtime tests need mono on PATH; without it they skip.
+    "++ pkgs.lib.optionals isLinux [ p.mono ]",
+    # A check that registers no tests must fail, not pass empty.
+    "ctest --output-on-failure --no-tests=error",
     # nixpkgs' cmake hook otherwise exports CTEST_PARALLEL_LEVEL, and the
     # decode tests share testout/ and corrupt each other in parallel.
     "enableParallelChecking = false;",
@@ -957,6 +999,10 @@ def main() -> int:
 
     for snippet in SELF_HOSTED_LINUX_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_LINUX_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_LINUX_FORBIDDEN_SNIPPETS:
+        check_not_contains(SELF_HOSTED_LINUX_WORKFLOW, snippet, errors)
+    for snippet in MACOS_BUNDLE_DEPENDENCIES_FORBIDDEN_SNIPPETS:
+        check_not_contains(MACOS_BUNDLE_DEPENDENCIES_SCRIPT, snippet, errors)
     for snippet in SELF_HOSTED_MACOS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS:
