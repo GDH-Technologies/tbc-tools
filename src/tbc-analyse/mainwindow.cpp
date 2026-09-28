@@ -2109,13 +2109,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
         if (event->type() == QEvent::MouseMove) {
             const auto *mouseEvent = static_cast<QMouseEvent *>(event);
-            QPoint globalPos;
-            if (watchingImageLabel) {
-                globalPos = ui->imageViewerLabel->mapToGlobal(mouseEvent->pos());
-            } else {
-                globalPos = ui->scrollArea->viewport()->mapToGlobal(mouseEvent->pos());
-            }
-            const QPoint viewerPos = ui->imageViewerLabel->mapFromGlobal(globalPos);
+            const QPoint viewerPos = ui->imageViewerLabel->mapFromGlobal(mouseEvent->globalPosition().toPoint());
             updateCursorReadout(viewerPos);
             if (exportBoundaryDragHandle == ExportBoundaryHandle::None) {
                 updateExportBoundaryHoverCursor(viewerPos);
@@ -7781,7 +7775,7 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
     }
 
     // Get the mouse position relative to our scene
-    QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+    QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
 
     // Check that the mouse click is within bounds of the current picture
     qint32 oX = origin.x();
@@ -7847,7 +7841,7 @@ void MainWindow::mouseMoveEvent(QMouseEvent *event)
     }
 
     // Get the mouse position relative to our scene
-    QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+    QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
     if (exportBoundaryDragHandle != ExportBoundaryHandle::None
         && !(event->buttons() & Qt::LeftButton)) {
         exportBoundaryDragHandle = ExportBoundaryHandle::None;
@@ -7913,7 +7907,7 @@ void MainWindow::mouseReleaseEvent(QMouseEvent *event)
 
     if (vectorscopeSelectionDragging && event->button() == Qt::LeftButton) {
         vectorscopeSelectionDragging = false;
-        QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+        QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
         qint32 sourceX = 0;
         qint32 sourceY = 0;
         if (vectorscopeDialog && mapViewerToSourceCoordinates(origin, sourceX, sourceY)) {
@@ -7931,7 +7925,7 @@ void MainWindow::mouseReleaseEvent(QMouseEvent *event)
     }
     if (event->button() == Qt::LeftButton
         && exportBoundaryDragHandle != ExportBoundaryHandle::None) {
-        QPoint origin = ui->imageViewerLabel->mapFromGlobal(QCursor::pos());
+        QPoint origin = ui->imageViewerLabel->mapFromGlobal(event->globalPosition().toPoint());
         applyExportBoundaryDragAtViewerPoint(origin);
         exportBoundaryDragHandle = ExportBoundaryHandle::None;
         updateExportBoundaryHoverCursor(origin);

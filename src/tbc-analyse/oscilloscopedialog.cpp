@@ -808,7 +808,7 @@ void OscilloscopeDialog::on_dropoutsCheckBox_clicked()
 void OscilloscopeDialog::mousePressEvent(QMouseEvent *event)
 {
     // Get the mouse position relative to our scene
-    QPoint origin = ui->scopeLabel->mapFromGlobal(QCursor::pos());
+    QPoint origin = ui->scopeLabel->mapFromGlobal(event->globalPosition().toPoint());
 
     // Check that the mouse click is within bounds of the current picture
     qint32 oX = origin.x();
