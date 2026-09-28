@@ -269,8 +269,15 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # FLAKE_CHECK_REQUIRED_SNIPPETS) on air0's dedicated test runner, and the
     # package job waits for it and reuses the GC-rooted store path.
     "runs-on: [self-hosted, air0-test]",
-    'nix build .# --out-link "$ROOTS/result"',
+    # The root is per run: a concurrent run's test job must not remove the
+    # root this run's queued package job relies on.
+    'nix build .# --out-link "$ROOTS/result-$GITHUB_RUN_ID"',
     "needs: test",
+    # Both jobs build the same commit even if main moves between them:
+    # refs/pull/N/merge is recomputed when main moves, github.sha is not.
+    "ref: ${{ inputs.checkout_ref || github.sha }}",
+    # A store miss in the package job is loud, not a silent recompile.
+    "nix build .# --dry-run",
     # The test job clones shallow: the Nix build reads only the tree, and full
     # history is 6.8 GB (a fresh air0-test workspace took 40 min to clone it).
     "fetch-depth: 1",
@@ -291,6 +298,11 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
 # ctest; it must not come back into the macOS workflow.
 SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS = (
     "run_local_ci_parity.sh",
+    # Two jobs checking out the moving merge ref can build different trees.
+    "inputs.checkout_ref || github.ref",
+    # The persistent venv never upgraded these once installed; a weekly
+    # upgrade could break packaging with no code change.
+    "--upgrade pyinstaller dunamai",
 )
 SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not

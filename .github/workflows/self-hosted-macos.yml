@@ -137,7 +137,7 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           submodules: false
-          ref: ${{ inputs.checkout_ref || github.ref }}
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Build and test with Nix
         # ctest runs inside this build (flake.nix: doCheck), serially, and a
@@ -154,21 +154,27 @@ jobs:
         # So every flake input source that `nix flake archive` reports gets an
         # indirect root before evaluation starts, and the result gets one via
         # --out-link: the package job's `nix build .#` then finds it in the
-        # store instead of recompiling. Roots are replaced run to run; the rm
-        # also clears the dev-shell profile this job used before it built in
-        # Nix.
+        # store instead of recompiling. The roots are named for this run. With
+        # one shared name, another PR's test job (or a deploy's, in its own
+        # concurrency group) removed them while this run's package job was
+        # still queued on the shared air0 runner. `package` removes this run's
+        # roots once it has its own; anything a cancelled or failed run left
+        # is pruned after a day. The single-name roots of earlier runs, and
+        # the dev-shell profile this job used before it built in Nix, go too.
         run: |
           set -euo pipefail
           ROOTS="$HOME/Library/Caches/tbc-tools-selfhosted/gcroots"
           mkdir -p "$ROOTS"
-          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link "$ROOTS"/flake-input-* "$ROOTS"/result
+          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link "$ROOTS"/result \
+                "$ROOTS"/flake-input-? "$ROOTS"/flake-input-??
+          find "$ROOTS" -maxdepth 1 \( -name 'result-*' -o -name 'flake-input-*-*' \) -mtime +1 -print -delete
           n=0
           for path in $(nix flake archive --json | grep -o '"path":"[^"]*"' | cut -d'"' -f4); do
-            nix-store --add-root "$ROOTS/flake-input-$n" --realise "$path" > /dev/null
+            nix-store --add-root "$ROOTS/flake-input-$GITHUB_RUN_ID-$n" --realise "$path" > /dev/null
             n=$((n + 1))
           done
           echo "Rooted $n flake input sources"
-          nix build .# --out-link "$ROOTS/result" -L
+          nix build .# --out-link "$ROOTS/result-$GITHUB_RUN_ID" -L
 
   package:
     name: Package tbc-tools (arm64, air0)
@@ -200,7 +206,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: true
-          ref: ${{ inputs.checkout_ref || github.ref }}
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Record the source tree
         # Artifacts are named for the tree they were built from, not the commit.
@@ -231,9 +237,16 @@ jobs:
 
       - name: Build with Nix
         # A store hit: `test` built this exact derivation on this box and
-        # rooted it.
+        # rooted it. A miss (GC, or a different tree) would silently recompile
+        # and re-run ctest here on the shared runner, so it is announced. Once
+        # the workspace `result` roots the output, this run's test roots go.
         run: |
-          nix build .#
+          if nix build .# --dry-run 2>&1 | grep -q 'will be built'; then
+            echo "::warning::tbc-tools is not in air0's store; the package job is recompiling (and re-running ctest) instead of reusing the test job's build."
+          fi
+          nix build .# -L
+          ROOTS="$HOME/Library/Caches/tbc-tools-selfhosted/gcroots"
+          rm -f "$ROOTS/result-$GITHUB_RUN_ID" "$ROOTS"/flake-input-"$GITHUB_RUN_ID"-*
           mkdir -p dist/bin
           if [ ! -f result/bin/tbc-analyse.app/Contents/MacOS/.tbc-analyse-wrapped ]; then
             echo "Missing wrapped GUI binary: result/bin/tbc-analyse.app/Contents/MacOS/.tbc-analyse-wrapped"
@@ -402,15 +415,16 @@ jobs:
             rm -rf "$VENV"
             "$PYTHON311" -m venv "$VENV"
           fi
-          # The venv persists outside the workspace. Reinstalling pip, pyinstaller
-          # and dunamai on every run re-resolved the same versions from PyPI;
-          # the stamp skips that until the set changes or a new ISO week starts,
-          # so unpinned versions still move forward weekly. A recreated venv has
-          # no stamp.
+          # The venv persists outside the workspace. Running pip on every run
+          # re-resolved the same versions from PyPI; the stamp skips that until
+          # the set changes or a new ISO week starts. As before, only pip itself
+          # is upgraded: pyinstaller and dunamai stay at the versions this venv
+          # first installed, so a new release cannot break packaging with no
+          # code change. A recreated venv has no stamp and installs current ones.
           WANT="pip pyinstaller dunamai $(date +%G-W%V)"
           if [ "$(cat "$VENV/.tbc-requirements" 2>/dev/null)" != "$WANT" ]; then
             "$VENV/bin/python" -m pip install --upgrade pip
-            "$VENV/bin/python" -m pip install --upgrade pyinstaller dunamai
+            "$VENV/bin/python" -m pip install pyinstaller dunamai
             echo "$WANT" > "$VENV/.tbc-requirements"
           else
             echo "PyInstaller venv current ($WANT); skipping pip"
