@@ -64,7 +64,9 @@ NotesViewerDialog::NotesViewerDialog(QWidget *parent)
     mainLayout->addLayout(rangeLayout);
 
     auto *notesLabel = new QLabel(tr("User markers"), this);
-    notesLabel->setStyleSheet(QStringLiteral("font-weight: 600;"));
+    QFont notesLabelFont = notesLabel->font();
+    notesLabelFont.setWeight(QFont::DemiBold);
+    notesLabel->setFont(notesLabelFont);
     mainLayout->addWidget(notesLabel);
 
     notesTable_ = new QTableWidget(this);
