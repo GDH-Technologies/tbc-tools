@@ -49,9 +49,6 @@ bool writeAudacityLabels(TbcMetaData &metaData, const QString &fileName)
         return false;
     }
     QTextStream stream(&file);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    stream.setCodec("UTF-8");
-#endif
 
     // Write the chapter changes
     for (const auto &chapter: navInfo.chapters) {

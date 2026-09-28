@@ -70,6 +70,9 @@
          <property name="text">
           <string>Browse...</string>
          </property>
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
         </widget>
        </item>
       </layout>
@@ -94,6 +97,9 @@
         <widget class="QPushButton" name="linearInputBrowseButton">
          <property name="text">
           <string>Browse...</string>
+         </property>
+         <property name="autoDefault">
+          <bool>false</bool>
          </property>
         </widget>
        </item>
@@ -120,6 +126,9 @@
          <property name="text">
           <string>Browse...</string>
          </property>
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
         </widget>
        </item>
       </layout>
@@ -145,6 +154,9 @@
          <property name="text">
           <string>Browse...</string>
          </property>
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
         </widget>
        </item>
       </layout>
@@ -169,6 +181,9 @@
         <widget class="QPushButton" name="hifiOutputBrowseButton">
          <property name="text">
           <string>Browse...</string>
+         </property>
+         <property name="autoDefault">
+          <bool>false</bool>
          </property>
         </widget>
        </item>
@@ -319,6 +334,9 @@
      </item>
      <item>
       <widget class="QPushButton" name="cancelButton">
+       <property name="autoDefault">
+        <bool>false</bool>
+       </property>
        <property name="enabled">
         <bool>false</bool>
        </property>
@@ -331,6 +349,9 @@
       <widget class="QPushButton" name="alignButton">
        <property name="text">
         <string>Align</string>
+       </property>
+       <property name="default">
+        <bool>true</bool>
        </property>
       </widget>
      </item>

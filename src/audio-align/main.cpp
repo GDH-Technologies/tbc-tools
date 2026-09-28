@@ -13,6 +13,8 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 
+#include <memory>
+
 #include "audioalignmentdialog.h"
 #include "headlessalign.h"
 #include "tbc/logging.h"
@@ -34,7 +36,16 @@ int main(int argc, char *argv[])
     setDebug(true);
     qInstallMessageHandler(debugOutputHandler);
 
-    QApplication app(argc, argv);
+    // --help and --version need no display, so they get a QCoreApplication
+    // (parser.process() answers them and exits); anything else a QApplication
+    bool informationOnly = false;
+    for (int i = 1; i < argc; ++i) {
+        const QByteArray argument(argv[i]);
+        informationOnly = informationOnly || argument == "-h" || argument == "-?" || argument == "--help"
+                          || argument == "--help-all" || argument == "-v" || argument == "--version";
+    }
+    std::unique_ptr<QCoreApplication> app(informationOnly ? new QCoreApplication(argc, argv)
+                                                          : new QApplication(argc, argv));
 
     // Set application name and version
     QCoreApplication::setApplicationName("tbc-audio-align");
@@ -90,7 +101,7 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("light-theme",
                                         QCoreApplication::translate("main", "Use the light theme")));
 
-    parser.process(app);
+    parser.process(*app);
     processStandardDebugOptions(parser);
 
     // Qt's own Fusion theme, dark by default

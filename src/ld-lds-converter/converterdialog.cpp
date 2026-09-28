@@ -26,15 +26,13 @@
 #include "ui_converterdialog.h"
 
 #include <QDir>
-#include <QCloseEvent>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QFile>
 #include <QHeaderView>
-#include <QCoreApplication>
-#include <QEventLoop>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMimeData>
@@ -44,11 +42,10 @@
 #include <QSet>
 #include <QTableWidgetItem>
 #include <QThread>
+#include <QThreadPool>
 #include <QUrl>
+#include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
-#include <chrono>
-#include <future>
-#include <vector>
 
 namespace {
 QString stripWrappingQuotes(const QString &value)
@@ -185,6 +182,12 @@ ConverterDialog::ConverterDialog(QWidget *parent)
     setAcceptDrops(true);
     resetProgressDisplay();
 
+    // No default button: Enter in the input field adds to the queue, and a
+    // default (or auto-default) button would also be pressed by that Enter
+    for (QPushButton *button : findChildren<QPushButton *>()) {
+        button->setAutoDefault(false);
+    }
+
     if (ui->outputFormatComboBox) {
         ui->outputFormatComboBox->clear();
         ui->outputFormatComboBox->addItem(tr("FLAC (default)"), static_cast<int>(DataConverter::OutputFormat::Flac));
@@ -200,12 +203,16 @@ ConverterDialog::ConverterDialog(QWidget *parent)
         ui->queuedInputsTableWidget->horizontalHeader()->setStretchLastSection(false);
         ui->queuedInputsTableWidget->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         ui->queuedInputsTableWidget->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        connect(ui->queuedInputsTableWidget, &QTableWidget::itemSelectionChanged, this, [this]() {
+            setConversionControlsEnabled(!conversionInProgress.load());
+        });
     }
 
     if (ui->inputLineEdit) {
         // Typing into the manual entry field must never wipe the queue.
         // Only refresh the output preview when nothing is queued yet.
         connect(ui->inputLineEdit, &QLineEdit::textChanged, this, [this]() {
+            setConversionControlsEnabled(!conversionInProgress.load());
             if (queuedInputFiles.isEmpty()) {
                 updateOutputPathFromInput(false);
                 resetProgressDisplay();
@@ -245,6 +252,13 @@ ConverterDialog::ConverterDialog(QWidget *parent)
 
 ConverterDialog::~ConverterDialog()
 {
+    // reject() keeps the dialog open while converting, but if it is destroyed
+    // anyway, the workers must not outlive what they report to
+    if (runPending > 0) {
+        cancelRequestedByUser = true;
+        requestCancellationForActiveParallelConverters();
+        QThreadPool::globalInstance()->waitForDone();
+    }
     delete ui;
 }
 
@@ -350,23 +364,14 @@ void ConverterDialog::dropEvent(QDropEvent *event)
     event->ignore();
 }
 
-void ConverterDialog::closeEvent(QCloseEvent *event)
+void ConverterDialog::reject()
 {
     if (conversionInProgress.load()) {
-        cancelRequestedByUser.store(true);
-        requestCancellationForActiveParallelConverters();
-        if (ui->statusLabel) {
-            ui->statusLabel->setText(tr("Stopping conversion..."));
-        }
-        if (ui->stopButton) {
-            ui->stopButton->setEnabled(false);
-            ui->stopButton->setText(tr("Stopping..."));
-        }
-        event->ignore();
+        closeWhenFinished = true;
+        on_stopButton_clicked();
         return;
     }
-
-    QDialog::closeEvent(event);
+    QDialog::reject();
 }
 
 void ConverterDialog::on_inputBrowseButton_clicked()
@@ -442,17 +447,6 @@ void ConverterDialog::on_outputBrowseButton_clicked()
 
 void ConverterDialog::on_convertButton_clicked()
 {
-    struct ConversionJob {
-        QString inputFileName;
-        QString outputFileName;
-    };
-    struct ConversionResult {
-        QString inputFileName;
-        bool conversionOk = false;
-        bool cancelled = false;
-        bool deleteFailed = false;
-    };
-
     QStringList inputFileNames = normalizedUniqueInputs(queuedInputFiles);
     if (inputFileNames.isEmpty()) {
         inputFileNames = normalizedUniqueInputs(QStringList() << ui->inputLineEdit->text());
@@ -463,7 +457,6 @@ void ConverterDialog::on_convertButton_clicked()
     const DataConverter::OutputFormat format = selectedOutputFormat();
     const bool deleteAfterCompletion = ui->deleteAfterCompletionCheckBox != nullptr
                                        && ui->deleteAfterCompletionCheckBox->isChecked();
-    const bool verifyBeforeDelete = deleteAfterCompletion;
     const bool parallelCompressRequested = ui->parallelCompressCheckBox != nullptr
                                            && ui->parallelCompressCheckBox->isChecked();
     const bool useParallelCompression = parallelCompressRequested && batchMode;
@@ -576,30 +569,11 @@ void ConverterDialog::on_convertButton_clicked()
         ui->stopButton->setText(tr("Stop"));
         ui->stopButton->setEnabled(true);
     }
-    QCoreApplication::processEvents(QEventLoop::AllEvents);
 
     if (parallelCompressRequested && !batchMode && ui->statusLabel) {
         ui->statusLabel->setText(
             tr("Parallel compress is available in batch mode; running sequential conversion."));
     }
-
-    // Every job (single, batch, parallel, or sequential) runs on a worker thread.
-    // The main thread only pumps events here so that Stop is always deliverable
-    // and the UI never freezes while a large file is being processed.
-    struct PendingTask {
-        int jobIndex = -1;
-        std::future<ConversionResult> future;
-    };
-
-    std::vector<PendingTask> pendingTasks;
-    std::vector<ConversionResult> orderedResults(static_cast<std::size_t>(conversionJobs.size()));
-    std::vector<bool> orderedResultsReady(static_cast<std::size_t>(conversionJobs.size()), false);
-
-    const int maxParallelJobs = useParallelCompression
-                                    ? std::max(1, QThread::idealThreadCount())
-                                    : 1;
-    int launchedJobs = 0;
-    int completedJobs = 0;
 
     if (ui->progressBar) {
         ui->progressBar->setRange(0, std::max<int>(1, conversionJobs.size()));
@@ -609,137 +583,142 @@ void ConverterDialog::on_convertButton_clicked()
         ui->progressPercentLabel->setText(tr("0%"));
     }
 
-    while (completedJobs < conversionJobs.size()
-           && !(cancelRequestedByUser.load() && pendingTasks.empty())) {
-        while (launchedJobs < conversionJobs.size()
-               && static_cast<int>(pendingTasks.size()) < maxParallelJobs
-               && !cancelRequestedByUser.load()) {
-            const ConversionJob job = conversionJobs.at(launchedJobs);
-            const int jobIndex = launchedJobs;
-            setQueuedFileStatus(job.inputFileName, tr("Starting..."), 0);
-            if (ui->statusLabel) {
-                if (batchMode) {
-                    ui->statusLabel->setText(
-                        tr("Converting %1 of %2: %3")
-                            .arg(jobIndex + 1)
-                            .arg(conversionJobs.size())
-                            .arg(QFileInfo(job.inputFileName).fileName()));
-                } else {
-                    ui->statusLabel->setText(tr("Converting..."));
-                }
+    // Every job (single, batch, parallel, or sequential) runs on a worker
+    // thread and reports back through the event loop, so Stop is always
+    // deliverable and the UI never freezes while a large file is processed.
+    runJobs = conversionJobs;
+    runJobResults = QList<std::optional<ConversionResult>>(conversionJobs.size());
+    runResults = conversionResults;
+    runLaunched = 0;
+    runPending = 0;
+    runCompleted = 0;
+    runMaxParallel = useParallelCompression ? std::max(1, QThread::idealThreadCount()) : 1;
+    runInputCount = inputFileNames.size();
+    runBatchMode = batchMode;
+    runDeleteAfterCompletion = deleteAfterCompletion;
+    runFormat = format;
+    launchPendingJobs();
+}
+
+// Start queued jobs until runMaxParallel are running. Not after Stop: any job
+// not yet launched is simply skipped.
+void ConverterDialog::launchPendingJobs()
+{
+    while (runLaunched < runJobs.size() && runPending < runMaxParallel && !cancelRequestedByUser.load()) {
+        const ConversionJob job = runJobs.at(runLaunched);
+        const int jobIndex = runLaunched++;
+        setQueuedFileStatus(job.inputFileName, tr("Starting..."), 0);
+        if (ui->statusLabel) {
+            if (runBatchMode) {
+                ui->statusLabel->setText(
+                    tr("Converting %1 of %2: %3")
+                        .arg(jobIndex + 1)
+                        .arg(runJobs.size())
+                        .arg(QFileInfo(job.inputFileName).fileName()));
+            } else {
+                ui->statusLabel->setText(tr("Converting..."));
             }
-            pendingTasks.push_back(PendingTask{
-                jobIndex,
-                std::async(std::launch::async,
-                           [this, job, format, batchMode, deleteAfterCompletion, verifyBeforeDelete]() -> ConversionResult {
-                               ConversionResult result;
-                               result.inputFileName = job.inputFileName;
-
-                               DataConverter converter(job.inputFileName,
-                                                      job.outputFileName,
-                                                      false,
-                                                      format,
-                                                      40000,
-                                                      8,
-                                                      verifyBeforeDelete);
-                               QObject::connect(&converter,
-                                                &DataConverter::progressUpdated,
-                                                this,
-                                                [this, inputFileName = job.inputFileName, batchMode](qint64 processedBytes,
-                                                                                          qint64 totalBytes) {
-                                                    updateQueuedFileProgress(inputFileName,
-                                                                             processedBytes,
-                                                                             totalBytes);
-                                                    if (!batchMode) {
-                                                        updateProgressDisplay(processedBytes, totalBytes);
-                                                    }
-                                                },
-                                                Qt::QueuedConnection);
-                               {
-                                   QMutexLocker locker(&activeParallelConvertersMutex);
-                                   activeParallelConverters.insert(&converter);
-                               }
-                               if (cancelRequestedByUser.load()) {
-                                   converter.requestCancel();
-                               }
-                               const bool conversionOk = converter.process();
-                               {
-                                   QMutexLocker locker(&activeParallelConvertersMutex);
-                                   activeParallelConverters.remove(&converter);
-                               }
-
-                               result.conversionOk = conversionOk;
-                               result.cancelled = converter.wasCancelled();
-                               if (result.conversionOk && deleteAfterCompletion) {
-                                   QFile inputFile(job.inputFileName);
-                                   if (!inputFile.remove()) {
-                                       result.deleteFailed = true;
-                                   }
-                               }
-                               return result;
-                           })});
-            launchedJobs++;
         }
 
-        bool completedAnyTask = false;
-        for (auto taskIt = pendingTasks.begin(); taskIt != pendingTasks.end();) {
-            const auto taskStatus = taskIt->future.wait_for(std::chrono::milliseconds(0));
-            if (taskStatus == std::future_status::ready) {
+        auto *watcher = new QFutureWatcher<ConversionResult>(this);
+        connect(watcher, &QFutureWatcher<ConversionResult>::finished, this, [this, watcher, jobIndex]() {
+            watcher->deleteLater();
+            ConversionResult result;
+            result.inputFileName = runJobs.at(jobIndex).inputFileName;
+            try {
+                result = watcher->result();
+            } catch (...) {
+                result.conversionOk = false;
+                result.cancelled = cancelRequestedByUser.load();
+            }
+            runJobResults[jobIndex] = result;
+            runPending--;
+            runCompleted++;
+
+            if (ui->progressBar) {
+                ui->progressBar->setRange(0, std::max<int>(1, runJobs.size()));
+                ui->progressBar->setValue(runCompleted);
+            }
+            if (ui->progressPercentLabel) {
+                ui->progressPercentLabel->setText(tr("%1%").arg((runCompleted * 100) / runJobs.size()));
+            }
+            if (ui->statusLabel && runBatchMode) {
+                ui->statusLabel->setText(
+                    tr("Conversion progress: %1/%2 completed.").arg(runCompleted).arg(runJobs.size()));
+            }
+
+            launchPendingJobs();
+            if (runPending == 0) {
+                finishConversionRun();
+            }
+        });
+
+        const DataConverter::OutputFormat format = runFormat;
+        const bool batchMode = runBatchMode;
+        const bool deleteAfterCompletion = runDeleteAfterCompletion;
+        const bool verifyBeforeDelete = deleteAfterCompletion;
+        watcher->setFuture(QtConcurrent::run(
+            [this, job, format, batchMode, deleteAfterCompletion, verifyBeforeDelete]() -> ConversionResult {
                 ConversionResult result;
-                const int jobIndex = taskIt->jobIndex;
-                result.inputFileName = conversionJobs.at(jobIndex).inputFileName;
-                try {
-                    result = taskIt->future.get();
-                } catch (const std::exception &) {
-                    result.conversionOk = false;
-                    result.cancelled = cancelRequestedByUser.load();
-                } catch (...) {
-                    result.conversionOk = false;
-                    result.cancelled = cancelRequestedByUser.load();
-                }
-                orderedResults[static_cast<std::size_t>(taskIt->jobIndex)] = result;
-                orderedResultsReady[static_cast<std::size_t>(taskIt->jobIndex)] = true;
-                taskIt = pendingTasks.erase(taskIt);
-                completedJobs++;
-                completedAnyTask = true;
+                result.inputFileName = job.inputFileName;
 
-                if (ui->progressBar) {
-                    ui->progressBar->setRange(0, std::max<int>(1, conversionJobs.size()));
-                    ui->progressBar->setValue(completedJobs);
+                DataConverter converter(job.inputFileName,
+                                        job.outputFileName,
+                                        false,
+                                        format,
+                                        40000,
+                                        8,
+                                        verifyBeforeDelete);
+                QObject::connect(&converter,
+                                 &DataConverter::progressUpdated,
+                                 this,
+                                 [this, inputFileName = job.inputFileName, batchMode](qint64 processedBytes,
+                                                                                      qint64 totalBytes) {
+                                     updateQueuedFileProgress(inputFileName, processedBytes, totalBytes);
+                                     if (!batchMode) {
+                                         updateProgressDisplay(processedBytes, totalBytes);
+                                     }
+                                 },
+                                 Qt::QueuedConnection);
+                {
+                    QMutexLocker locker(&activeParallelConvertersMutex);
+                    activeParallelConverters.insert(&converter);
                 }
-                if (ui->progressPercentLabel) {
-                    const int percentage = conversionJobs.isEmpty()
-                                               ? 0
-                                               : static_cast<int>((completedJobs * 100)
-                                                                  / conversionJobs.size());
-                    ui->progressPercentLabel->setText(tr("%1%").arg(percentage));
+                if (cancelRequestedByUser.load()) {
+                    converter.requestCancel();
                 }
-                if (ui->statusLabel && batchMode) {
-                    ui->statusLabel->setText(
-                        tr("Conversion progress: %1/%2 completed.")
-                            .arg(completedJobs)
-                            .arg(conversionJobs.size()));
+                const bool conversionOk = converter.process();
+                {
+                    QMutexLocker locker(&activeParallelConvertersMutex);
+                    activeParallelConverters.remove(&converter);
                 }
-            } else {
-                ++taskIt;
-            }
-        }
 
-        if (completedJobs < conversionJobs.size() || !pendingTasks.empty()) {
-            if (completedAnyTask) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents);
-            } else {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-            }
+                result.conversionOk = conversionOk;
+                result.cancelled = converter.wasCancelled();
+                if (result.conversionOk && deleteAfterCompletion) {
+                    QFile inputFile(job.inputFileName);
+                    if (!inputFile.remove()) {
+                        result.deleteFailed = true;
+                    }
+                }
+                return result;
+            }));
+        runPending++;
+    }
+}
+
+// Every launched job has reported: re-enable the controls and report the run
+void ConverterDialog::finishConversionRun()
+{
+    QList<ConversionResult> conversionResults = runResults;
+    for (const std::optional<ConversionResult> &result : std::as_const(runJobResults)) {
+        if (result) {
+            conversionResults << *result;
         }
     }
-
-    // If Stop was pressed, any not-yet-launched jobs are simply skipped.
-    for (std::size_t index = 0; index < orderedResults.size(); index++) {
-        if (orderedResultsReady[index]) {
-            conversionResults << orderedResults[index];
-        }
-    }
+    runJobs.clear();
+    runJobResults.clear();
+    runResults.clear();
     {
         QMutexLocker locker(&activeParallelConvertersMutex);
         activeParallelConverters.clear();
@@ -785,20 +764,25 @@ void ConverterDialog::on_convertButton_clicked()
     };
 
     if (cancelled) {
-        if (batchMode) {
+        if (runBatchMode) {
             ui->statusLabel->setText(
                 tr("Batch conversion cancelled (%1/%2 completed).")
                     .arg(successfulConversions)
-                    .arg(inputFileNames.size()));
+                    .arg(runInputCount));
         } else {
             ui->statusLabel->setText(tr("Conversion cancelled."));
         }
         showDeleteFailureWarning();
+        // Closing was asked for while the run was stopping
+        if (closeWhenFinished) {
+            closeWhenFinished = false;
+            QDialog::reject();
+        }
         return;
     }
 
     if (!failedInputFiles.isEmpty()) {
-        if (batchMode) {
+        if (runBatchMode) {
             ui->statusLabel->setText(
                 tr("Batch conversion completed with errors (%1 succeeded, %2 failed).")
                     .arg(successfulConversions)
@@ -816,7 +800,7 @@ void ConverterDialog::on_convertButton_clicked()
     }
 
     updateProgressDisplay(1, 1);
-    if (batchMode) {
+    if (runBatchMode) {
         ui->statusLabel->setText(tr("Batch conversion complete (%1 files).").arg(successfulConversions));
     } else {
         ui->statusLabel->setText(tr("Conversion complete."));
@@ -1016,6 +1000,7 @@ void ConverterDialog::on_clearQueuedButton_clicked()
 
 void ConverterDialog::refreshQueuedInputDisplay()
 {
+    setConversionControlsEnabled(!conversionInProgress.load());
     if (ui->queuedInputsTableWidget == nullptr || ui->queuedSummaryLabel == nullptr) {
         return;
     }
@@ -1197,10 +1182,14 @@ DataConverter::OutputFormat ConverterDialog::selectedOutputFormat() const
     return static_cast<DataConverter::OutputFormat>(formatData.toInt());
 }
 
+// enabled: not converting. Convert also needs an input, Remove a selected
+// queued file and Clear a queue.
 void ConverterDialog::setConversionControlsEnabled(bool enabled)
 {
     if (ui->convertButton) {
-        ui->convertButton->setEnabled(enabled);
+        const bool hasInput = !queuedInputFiles.isEmpty()
+                              || (ui->inputLineEdit && !ui->inputLineEdit->text().trimmed().isEmpty());
+        ui->convertButton->setEnabled(enabled && hasInput);
     }
     if (ui->inputBrowseButton) {
         ui->inputBrowseButton->setEnabled(enabled);
@@ -1227,10 +1216,11 @@ void ConverterDialog::setConversionControlsEnabled(bool enabled)
         ui->queuedInputsTableWidget->setEnabled(enabled);
     }
     if (ui->removeQueuedButton) {
-        ui->removeQueuedButton->setEnabled(enabled);
+        ui->removeQueuedButton->setEnabled(enabled && ui->queuedInputsTableWidget
+                                           && !ui->queuedInputsTableWidget->selectedItems().isEmpty());
     }
     if (ui->clearQueuedButton) {
-        ui->clearQueuedButton->setEnabled(enabled);
+        ui->clearQueuedButton->setEnabled(enabled && !queuedInputFiles.isEmpty());
     }
 }
 
@@ -1261,6 +1251,4 @@ void ConverterDialog::updateProgressDisplay(qint64 processedBytes, qint64 totalB
         ui->progressBar->setValue(percentage);
         ui->progressPercentLabel->setText(tr("%1%").arg(percentage));
     }
-
-    QCoreApplication::processEvents(QEventLoop::AllEvents);
 }

@@ -14,7 +14,6 @@
 #include "tbc/uistyle.h"
 #include "gui/processprogressrunner.h"
 
-#include <QApplication>
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -22,7 +21,6 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
 #include <QLineEdit>
@@ -30,49 +28,14 @@
 #include <QMimeData>
 #include <QProcess>
 #include <QSignalBlocker>
+#include <QSpinBox>
+#include <QTimer>
 #include <QUrl>
 
 namespace {
 // The file-dialog helper this dialog uses is shared by every GUI tool and lives
 // in tbc/uistyle.h; this file used to carry its own copy.
 using tbc::ui::runOpenFileDialog;
-
-bool parsePositiveInteger(const QString &text, qint32 *value)
-{
-    bool ok = false;
-    const qint32 parsedValue = text.toInt(&ok);
-    if (!ok || parsedValue < 1) {
-        return false;
-    }
-    if (value) {
-        *value = parsedValue;
-    }
-    return true;
-}
-
-QString helpOutputForExecutable(const QString &executablePath)
-{
-    static QHash<QString, QString> helpOutputCache;
-    const QString cacheKey = QDir::cleanPath(executablePath);
-    if (helpOutputCache.contains(cacheKey)) {
-        return helpOutputCache.value(cacheKey);
-    }
-
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(executablePath, {QStringLiteral("--help")});
-    QString helpOutput;
-    if (process.waitForStarted(2000)) {
-        if (!process.waitForFinished(6000)) {
-            process.kill();
-            process.waitForFinished(1000);
-        }
-        helpOutput = QString::fromLocal8Bit(process.readAllStandardOutput());
-    }
-
-    helpOutputCache.insert(cacheKey, helpOutput);
-    return helpOutput;
-}
 } // namespace
 
 MetadataExportDialog::MetadataExportDialog(QWidget *parent) :
@@ -111,8 +74,11 @@ MetadataExportDialog::MetadataExportDialog(QWidget *parent) :
         });
     };
     connectStatusClear(ui->inputLineEdit);
-    connectStatusClear(ui->ffmetadataStartLineEdit);
-    connectStatusClear(ui->ffmetadataLengthLineEdit);
+    for (QSpinBox *spinBox : {ui->ffmetadataStartSpinBox, ui->ffmetadataLengthSpinBox}) {
+        connect(spinBox, &QSpinBox::valueChanged, this, [this]() {
+            ui->statusLabel->clear();
+        });
+    }
 
     const auto connectStatusClearCheckBox = [this](QCheckBox *checkBox) {
         if (!checkBox) {
@@ -197,8 +163,8 @@ void MetadataExportDialog::setInitialOptions(const InitialOptions &options)
         ui->segmentsJsonCheckBox->setChecked(options.exportSegmentsJson);
     }
     ui->closedCaptionsCheckBox->setChecked(options.exportClosedCaptions);
-    ui->ffmetadataStartLineEdit->setText(options.ffmetadataStart > 0 ? QString::number(options.ffmetadataStart) : QString());
-    ui->ffmetadataLengthLineEdit->setText(options.ffmetadataLength > 0 ? QString::number(options.ffmetadataLength) : QString());
+    ui->ffmetadataStartSpinBox->setValue(qMax(0, options.ffmetadataStart));
+    ui->ffmetadataLengthSpinBox->setValue(qMax(0, options.ffmetadataLength));
     ui->debugCheckBox->setChecked(options.debug);
     ui->quietCheckBox->setChecked(options.quiet);
     updateOptionCompatibilityState();
@@ -313,8 +279,6 @@ void MetadataExportDialog::on_inputBrowseButton_clicked()
 void MetadataExportDialog::on_exportButton_clicked()
 {
     const QString inputFile = normalizedPath(ui->inputLineEdit->text());
-    const QString startText = ui->ffmetadataStartLineEdit->text().trimmed();
-    const QString lengthText = ui->ffmetadataLengthLineEdit->text().trimmed();
 
     {
         const QSignalBlocker inputBlocker(ui->inputLineEdit);
@@ -391,21 +355,12 @@ void MetadataExportDialog::on_exportButton_clicked()
         }
     }
     if (ffmetadataSelected || segmentsJsonSelected) {
-        if (!startText.isEmpty()) {
-            qint32 startValue = -1;
-            if (!parsePositiveInteger(startText, &startValue)) {
-                ui->statusLabel->setText(tr("FFMETADATA start frame must be a positive integer."));
-                return;
-            }
-            arguments << QStringLiteral("--start") << QString::number(startValue);
+        // 0 is the spin boxes' special value: the whole source
+        if (ui->ffmetadataStartSpinBox->value() > 0) {
+            arguments << QStringLiteral("--start") << QString::number(ui->ffmetadataStartSpinBox->value());
         }
-        if (!lengthText.isEmpty()) {
-            qint32 lengthValue = -1;
-            if (!parsePositiveInteger(lengthText, &lengthValue)) {
-                ui->statusLabel->setText(tr("FFMETADATA length must be a positive integer."));
-                return;
-            }
-            arguments << QStringLiteral("--length") << QString::number(lengthValue);
+        if (ui->ffmetadataLengthSpinBox->value() > 0) {
+            arguments << QStringLiteral("--length") << QString::number(ui->ffmetadataLengthSpinBox->value());
         }
     }
 
@@ -590,70 +545,99 @@ bool MetadataExportDialog::isSupportedInputPath(const QString &path) const
     return isJsonPath(path);
 }
 
-bool MetadataExportDialog::exportToolSupportsOption(const QString &optionName) const
-{
-    if (optionName.trimmed().isEmpty()) {
-        return false;
-    }
-    const QString executablePath = exportExecutablePath.isEmpty()
-                                       ? QCoreApplication::applicationFilePath()
-                                       : exportExecutablePath;
-    if (executablePath.isEmpty()) {
-        return false;
-    }
-    const QString helpOutput = helpOutputForExecutable(executablePath);
-    if (helpOutput.isEmpty()) {
-        return false;
-    }
-    return helpOutput.contains(optionName);
-}
-
+// Enable the options the export tool has. This build, or a tbc-export-metadata
+// installed beside it, has them all. Another tool (an older one on PATH, say)
+// is asked with --help once, asynchronously, and its answer cached; until it
+// answers, the options that depend on it are unavailable.
 void MetadataExportDialog::updateOptionCompatibilityState()
 {
-    const bool supportsUserMarkersTxt = exportToolSupportsOption(QStringLiteral("--user-markers-txt"));
-    const bool supportsUserMarkersCsv = exportToolSupportsOption(QStringLiteral("--user-markers-csv"));
-    ffmetadataSegmentsSupported = exportToolSupportsOption(QStringLiteral("--ffmetadata-no-segments"));
+    static QHash<QString, QString> helpOutputCache;
+
+    const QFileInfo toolInfo(exportExecutablePath.isEmpty() ? QCoreApplication::applicationFilePath()
+                                                             : exportExecutablePath);
+    const QFileInfo selfInfo(QCoreApplication::applicationFilePath());
+    const QString cacheKey = toolInfo.absoluteFilePath();
+    if (toolInfo.absolutePath() == selfInfo.absolutePath()) {
+        applyOptionSupport(OptionSupport::All);
+        return;
+    }
+    if (helpOutputCache.contains(cacheKey)) {
+        applyOptionSupport(OptionSupport::FromHelp, helpOutputCache.value(cacheKey));
+        return;
+    }
+
+    applyOptionSupport(OptionSupport::Pending);
+    if (optionProbe) {
+        // Its answer re-runs this, for whichever tool is set by then
+        return;
+    }
+    optionProbe = new QProcess(this);
+    optionProbe->setProcessChannelMode(QProcess::MergedChannels);
+    const auto finishProbe = [this, cacheKey]() {
+        helpOutputCache.insert(cacheKey, QString::fromLocal8Bit(optionProbe->readAllStandardOutput()));
+        optionProbe->deleteLater();
+        optionProbe = nullptr;
+        updateOptionCompatibilityState();
+    };
+    connect(optionProbe, &QProcess::finished, this, finishProbe);
+    connect(optionProbe, &QProcess::errorOccurred, this, [finishProbe](QProcess::ProcessError error) {
+        // Every other error is followed by finished()
+        if (error == QProcess::FailedToStart) {
+            finishProbe();
+        }
+    });
+    QTimer::singleShot(6000, optionProbe, [probe = optionProbe.data()]() {
+        probe->kill();
+    });
+    optionProbe->start(toolInfo.absoluteFilePath(), {QStringLiteral("--help")});
+}
+
+void MetadataExportDialog::applyOptionSupport(OptionSupport support, const QString &helpOutput)
+{
+    const auto supported = [support, &helpOutput](const QString &optionName) {
+        return support == OptionSupport::All
+               || (support == OptionSupport::FromHelp && helpOutput.contains(optionName));
+    };
+    const auto unavailableText = [support](const QString &optionName) {
+        return support == OptionSupport::Pending
+                   ? tr("Checking what the export tool supports...")
+                   : tr("Unavailable: selected export tool does not support %1.").arg(optionName);
+    };
+
+    ffmetadataSegmentsSupported = supported(QStringLiteral("--ffmetadata-no-segments"));
     if (ui->ffmetadataSegmentsComboBox) {
         ui->ffmetadataSegmentsComboBox->setToolTip(
             ffmetadataSegmentsSupported
                 ? tr("Recording segments stored in the metadata become chapters in place of LaserDisc navigation chapters.")
-                : tr("Unavailable: selected export tool does not support --ffmetadata-no-segments."));
+                : unavailableText(QStringLiteral("--ffmetadata-no-segments")));
     }
     updateFfmetadataControlsEnabled();
 
-    const auto applyCompatibility = [this](QCheckBox *checkBox,
-                                           QLabel *label,
-                                           bool supported,
-                                           const QString &optionName) {
+    const auto applyCompatibility = [&](QCheckBox *checkBox, QLabel *label, const QString &optionName) {
+        const bool optionSupported = supported(optionName);
         if (label) {
-            label->setEnabled(supported);
+            label->setEnabled(optionSupported);
         }
         if (!checkBox) {
             return;
         }
 
-        if (!supported) {
-            if (checkBox->isChecked()) {
+        if (!optionSupported) {
+            // Pending keeps the choice for when the answer comes
+            if (support != OptionSupport::Pending && checkBox->isChecked()) {
                 const QSignalBlocker blocker(checkBox);
                 checkBox->setChecked(false);
             }
             checkBox->setEnabled(false);
-            checkBox->setToolTip(tr("Unavailable: selected export tool does not support %1.")
-                                     .arg(optionName));
+            checkBox->setToolTip(unavailableText(optionName));
         } else {
             checkBox->setEnabled(true);
             checkBox->setToolTip(QString());
         }
     };
 
-    applyCompatibility(ui->userMarkersTxtCheckBox,
-                       ui->userMarkersTxtLabel,
-                       supportsUserMarkersTxt,
-                       QStringLiteral("--user-markers-txt"));
-    applyCompatibility(ui->userMarkersCsvCheckBox,
-                       ui->userMarkersCsvLabel,
-                       supportsUserMarkersCsv,
-                       QStringLiteral("--user-markers-csv"));
+    applyCompatibility(ui->userMarkersTxtCheckBox, ui->userMarkersTxtLabel, QStringLiteral("--user-markers-txt"));
+    applyCompatibility(ui->userMarkersCsvCheckBox, ui->userMarkersCsvLabel, QStringLiteral("--user-markers-csv"));
 }
 
 void MetadataExportDialog::updateFfmetadataControlsEnabled()
@@ -668,12 +652,8 @@ void MetadataExportDialog::updateFfmetadataControlsEnabled()
     if (ui->ffmetadataVitcTimecodeCheckBox) {
         ui->ffmetadataVitcTimecodeCheckBox->setEnabled(enabled);
     }
-    if (ui->ffmetadataStartLineEdit) {
-        ui->ffmetadataStartLineEdit->setEnabled(enabled);
-    }
-    if (ui->ffmetadataLengthLineEdit) {
-        ui->ffmetadataLengthLineEdit->setEnabled(enabled);
-    }
+    ui->ffmetadataStartSpinBox->setEnabled(enabled);
+    ui->ffmetadataLengthSpinBox->setEnabled(enabled);
     if (ui->ffmetadataSegmentsLabel) {
         ui->ffmetadataSegmentsLabel->setEnabled(enabled && ffmetadataSegmentsSupported);
     }

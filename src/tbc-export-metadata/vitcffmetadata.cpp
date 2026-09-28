@@ -104,9 +104,6 @@ bool writeVitcFfmetadataText(TbcMetaData &metaData, const QString &fileName)
         return false;
     }
     QTextStream stream(&file);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    stream.setCodec("UTF-8");
-#endif
 
     const bool is30Frame = (metaData.getVideoParameters().system != PAL && metaData.getVideoParameters().system != PAL_M
                              && metaData.getVideoParameters().system != SECAM && metaData.getVideoParameters().system != MESECAM);
