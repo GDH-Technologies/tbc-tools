@@ -5974,6 +5974,7 @@ void MainWindow::on_actionSave_all_modes_as_PNGs_triggered()
     QAbstractButton *imageButton = exportModeDialog.addButton(tr("Image"), QMessageBox::ActionRole);
     QAbstractButton *scopesButton = exportModeDialog.addButton(tr("Scopes"), QMessageBox::ActionRole);
     QAbstractButton *snrGraphsButton = exportModeDialog.addButton(tr("SNR Graphs"), QMessageBox::ActionRole);
+    QAbstractButton *cancelButton = exportModeDialog.addButton(tr("Cancel"), QMessageBox::RejectRole);
     if (QPushButton *defaultButton = qobject_cast<QPushButton *>(everythingButton)) {
         exportModeDialog.setDefaultButton(defaultButton);
     }
@@ -5982,7 +5983,7 @@ void MainWindow::on_actionSave_all_modes_as_PNGs_triggered()
     exportModeDialog.exec();
 
     const QAbstractButton *selectedExportModeButton = exportModeDialog.clickedButton();
-    if (!selectedExportModeButton) {
+    if (!selectedExportModeButton || selectedExportModeButton == cancelButton) {
         return;
     }
 
