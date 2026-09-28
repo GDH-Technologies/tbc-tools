@@ -108,4 +108,12 @@ if(BUILD_TESTING)
             --rf-video-sample-rate-hz 40000000
     )
     set_tests_properties(aaa-headless-runtime PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The GUI's --help and --version answer without a display: no display
+    # variables and no platform override, so a QApplication would abort.
+    add_test(NAME aaa-help-no-display COMMAND tbc-audio-align --help)
+    add_test(NAME aaa-version-no-display COMMAND tbc-audio-align --version)
+    set_tests_properties(aaa-help-no-display aaa-version-no-display PROPERTIES
+        ENVIRONMENT "DISPLAY=;WAYLAND_DISPLAY=;QT_QPA_PLATFORM="
+        TIMEOUT 60)
 endif()

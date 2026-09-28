@@ -16,7 +16,6 @@
 #include "audioalignmentutil.h"
 
 #include <QApplication>
-#include <QCloseEvent>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -41,26 +40,25 @@ AudioAlignmentDialog::AudioAlignmentDialog(QWidget *parent) :
 
     const QString rfTimebaseWarning = tr("RF Video Sample Rate must match the decoder timebase used to generate metadata JSON: use 20000000 for 20 Msps no-resampling captures, 16000000 for 16 Msps captures, or 40000000 when the decoder used internal resampling to 40 Msps.");
     if (ui->rfVideoRatePresetComboBox) {
+        // Each preset carries its rate in Hz (the .ui order); Custom carries 0
+        const QList<quint32> presetRates = {40000000, 20000000, 16000000, 0};
+        for (int index = 0; index < presetRates.size(); ++index) {
+            ui->rfVideoRatePresetComboBox->setItemData(index, presetRates.at(index));
+        }
         ui->rfVideoRatePresetComboBox->setCurrentIndex(0);
         ui->rfVideoRatePresetComboBox->setToolTip(rfTimebaseWarning);
         connect(ui->rfVideoRatePresetComboBox,
-                QOverload<int>::of(&QComboBox::currentIndexChanged),
+                &QComboBox::currentIndexChanged,
                 this,
-                [this](int presetIndex) {
+                [this]() {
             if (!applyingRfVideoSampleRate) {
                 setRfVideoSampleRateSource(tr("set by user"));
             }
-            const bool customSelected = (presetIndex == 3);
+            const quint32 presetRate = ui->rfVideoRatePresetComboBox->currentData().toUInt();
             if (ui->rfVideoSampleRateCustomSpinBox) {
-                ui->rfVideoSampleRateCustomSpinBox->setEnabled(customSelected);
-                if (!customSelected) {
-                    if (presetIndex == 1) {
-                        ui->rfVideoSampleRateCustomSpinBox->setValue(20000000);
-                    } else if (presetIndex == 2) {
-                        ui->rfVideoSampleRateCustomSpinBox->setValue(16000000);
-                    } else {
-                        ui->rfVideoSampleRateCustomSpinBox->setValue(40000000);
-                    }
+                ui->rfVideoSampleRateCustomSpinBox->setEnabled(presetRate == 0);
+                if (presetRate != 0) {
+                    ui->rfVideoSampleRateCustomSpinBox->setValue(static_cast<int>(presetRate));
                 }
             }
         });
@@ -70,11 +68,11 @@ AudioAlignmentDialog::AudioAlignmentDialog(QWidget *parent) :
         ui->rfVideoSampleRateCustomSpinBox->setEnabled(false);
         ui->rfVideoSampleRateCustomSpinBox->setToolTip(rfTimebaseWarning);
         connect(ui->rfVideoSampleRateCustomSpinBox,
-                QOverload<int>::of(&QSpinBox::valueChanged),
+                &QSpinBox::valueChanged,
                 this,
                 [this](int) {
             if (!applyingRfVideoSampleRate && ui->rfVideoRatePresetComboBox
-                && ui->rfVideoRatePresetComboBox->currentIndex() == 3) {
+                && ui->rfVideoRatePresetComboBox->currentData().toUInt() == 0) {
                 setRfVideoSampleRateSource(tr("set by user"));
             }
         });
@@ -206,7 +204,7 @@ void AudioAlignmentDialog::startAlignmentRun(const QString &jsonFileName,
                                              quint32 rfVideoSampleRateHz)
 {
     if (alignmentInProgress || alignmentWorkerThread) {
-        QApplication::restoreOverrideCursor();
+        unsetCursor();
         if (ui && ui->statusLabel) {
             ui->statusLabel->setText(tr("Alignment is already running..."));
         }
@@ -313,7 +311,7 @@ void AudioAlignmentDialog::startAlignmentRun(const QString &jsonFileName,
 
     if (!alignmentWorkerThread) {
         setAlignmentUiBusy(false);
-        QApplication::restoreOverrideCursor();
+        unsetCursor();
         if (ui && ui->statusLabel) {
             ui->statusLabel->setText(tr("Unable to start alignment worker."));
         }
@@ -332,7 +330,7 @@ void AudioAlignmentDialog::startAlignmentRun(const QString &jsonFileName,
 
 void AudioAlignmentDialog::finishAlignmentRun(const AlignmentRunResult &result)
 {
-    QApplication::restoreOverrideCursor();
+    unsetCursor();
     setAlignmentUiBusy(false);
     alignmentCancelRequested.store(false, std::memory_order_relaxed);
 
@@ -425,7 +423,7 @@ AudioAlignmentDialog::~AudioAlignmentDialog()
     delete ui;
 }
 
-void AudioAlignmentDialog::closeEvent(QCloseEvent *event)
+void AudioAlignmentDialog::reject()
 {
     if (alignmentInProgress) {
         if (ui && ui->statusLabel) {
@@ -434,11 +432,10 @@ void AudioAlignmentDialog::closeEvent(QCloseEvent *event)
                                          ? tr("Alignment stop requested. Please wait for the running process to exit.")
                                          : tr("Alignment is currently running. Use Cancel / Force Stop to stop it."));
         }
-        event->ignore();
         return;
     }
 
-    QDialog::closeEvent(event);
+    QDialog::reject();
 }
 
 void AudioAlignmentDialog::setSourceDirectory(const QString &directory)
@@ -536,14 +533,11 @@ void AudioAlignmentDialog::setDefaultRfVideoSampleRate(quint32 sampleRateHz)
     applyingRfVideoSampleRate = true;
     const auto releaseFlag = qScopeGuard([this]() { applyingRfVideoSampleRate = false; });
 
-    if (sampleRateHz == 40000000) {
-        ui->rfVideoRatePresetComboBox->setCurrentIndex(0);
-    } else if (sampleRateHz == 20000000) {
-        ui->rfVideoRatePresetComboBox->setCurrentIndex(1);
-    } else if (sampleRateHz == 16000000) {
-        ui->rfVideoRatePresetComboBox->setCurrentIndex(2);
+    const int presetIndex = ui->rfVideoRatePresetComboBox->findData(sampleRateHz);
+    if (presetIndex >= 0 && sampleRateHz != 0) {
+        ui->rfVideoRatePresetComboBox->setCurrentIndex(presetIndex);
     } else {
-        ui->rfVideoRatePresetComboBox->setCurrentIndex(3);
+        ui->rfVideoRatePresetComboBox->setCurrentIndex(ui->rfVideoRatePresetComboBox->findData(0u));
         ui->rfVideoSampleRateCustomSpinBox->setValue(static_cast<int>(sampleRateHz));
     }
 }
@@ -787,7 +781,7 @@ void AudioAlignmentDialog::on_alignButton_clicked()
         trackRequests.push_back(request);
     }
 
-    QApplication::setOverrideCursor(Qt::WaitCursor);
+    setCursor(Qt::BusyCursor);
     startAlignmentRun(jsonFileName,
                       trackRequests,
                       ui->overwriteCheckBox && ui->overwriteCheckBox->isChecked(),
@@ -1035,15 +1029,6 @@ quint32 AudioAlignmentDialog::currentRfVideoSampleRateHz() const
         return 40000000;
     }
 
-    switch (ui->rfVideoRatePresetComboBox->currentIndex()) {
-    case 1:
-        return 20000000;
-    case 2:
-        return 16000000;
-    case 3:
-        return static_cast<quint32>(ui->rfVideoSampleRateCustomSpinBox->value());
-    case 0:
-    default:
-        return 40000000;
-    }
+    const quint32 presetRate = ui->rfVideoRatePresetComboBox->currentData().toUInt();
+    return presetRate != 0 ? presetRate : static_cast<quint32>(ui->rfVideoSampleRateCustomSpinBox->value());
 }

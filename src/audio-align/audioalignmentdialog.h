@@ -20,7 +20,6 @@
 namespace Ui {
 class AudioAlignmentDialog;
 }
-class QCloseEvent;
 class QThread;
 
 class AudioAlignmentDialog : public QDialog
@@ -44,8 +43,9 @@ public:
     void setExportTrackOutputFile(const QString &outputFilename);
 signals:
     void exportTracksPrepared(const QStringList &trackFiles, const QStringList &trackNames);
-protected:
-    void closeEvent(QCloseEvent *event) override;
+public:
+    // Escape and the close button: refused while an alignment runs (stop it first)
+    void reject() override;
 
 private slots:
     void on_jsonBrowseButton_clicked();
