@@ -131,8 +131,8 @@ jobs:
         # (its version comes from .gdh-version, its ezpwd from a flake input),
         # and a depth-1 checkout evaluates to the same derivation as a full
         # one. Full history is 6.8 GB -- a fresh workspace spent 40 minutes
-        # cloning it at air0's download rate. `package` keeps the full clone
-        # its `git describe` needs, in the main runner's own workspace.
+        # cloning it at air0's download rate. `package` needs history and tags
+        # for gdh_version.py, so it takes a partial clone instead.
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -202,10 +202,17 @@ jobs:
 
 
       - uses: actions/checkout@v5
+        # A partial clone: full history and tags for gdh_version.py (describe,
+        # path-limited log), file contents only for HEAD. The full clone held
+        # 6.8 GB of old blobs on air0's nearly full disk, where free space
+        # decides whether Nix's GC evicts the next build's inputs. No
+        # submodules: nothing here reads them, and the Nix build filters both
+        # mount points out, so this evaluates to the test job's derivation.
         with:
           fetch-depth: 0
           fetch-tags: true
-          submodules: true
+          filter: blob:none
+          submodules: false
           ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Record the source tree

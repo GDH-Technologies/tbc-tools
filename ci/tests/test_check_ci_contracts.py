@@ -587,6 +587,14 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS,
         )
 
+    def test_macos_package_job_checks_out_a_partial_clone(self) -> None:
+        # The package job needs history and tags for gdh_version.py, not 6.8 GB
+        # of old blobs on air0's nearly full disk (free space there is what
+        # decides whether Nix's GC evicts the next build's inputs). Nothing in
+        # it reads a submodule: the Nix build filters both mount points out.
+        self.assertIn("filter: blob:none", check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS)
+        self.assertIn("submodules: true", check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS)
+
     def test_linux_contract_compiles_once_on_the_test_runner(self) -> None:
         # Same shape as macOS: ctest runs inside `nix build .#` on wm-test, and
         # the package job on wm waits for it and reuses the store path. The
