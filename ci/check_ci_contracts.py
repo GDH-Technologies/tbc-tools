@@ -307,6 +307,11 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # The test job clones shallow: the Nix build reads only the tree, and full
     # history is 6.8 GB (a fresh air0-test workspace took 40 min to clone it).
     "fetch-depth: 1",
+    # The package job clones partial: full history and tags for gdh_version.py,
+    # file contents only for HEAD. The old full clone held 6.8 GB of blobs on
+    # air0's nearly full disk, and free space there decides whether Nix's GC
+    # evicts the next build's inputs.
+    "filter: blob:none",
     # ffmpeg must come from the flake's pinned nixpkgs, not the live channel --
     # same reasoning as the hosted job's MACOS_REQUIRED_SNIPPETS entry.
     "nix build .#ffmpeg^bin",
@@ -334,6 +339,9 @@ SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS = (
     # The persistent venv never upgraded these once installed; a weekly
     # upgrade could break packaging with no code change.
     "--upgrade pyinstaller dunamai",
+    # Neither job reads a submodule: the Nix build filters both mount points
+    # out, so fetching them only costs air0 disk and time.
+    "submodules: true",
 )
 SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
