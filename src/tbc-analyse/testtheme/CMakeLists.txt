@@ -12,5 +12,8 @@ target_link_libraries(testtheme PRIVATE
 )
 
 add_test(NAME testtheme COMMAND testtheme)
-# It builds a QApplication; no display is needed or wanted.
-set_tests_properties(testtheme PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# It builds a QApplication (not on Windows; see testtheme.cpp); no display is
+# needed or wanted. It takes well under a second, so a hang fails fast.
+set_tests_properties(testtheme PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60)
