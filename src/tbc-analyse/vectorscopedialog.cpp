@@ -22,6 +22,7 @@
 #include <QButtonGroup>
 #include <QDebug>
 #include <QGroupBox>
+#include <QIcon>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
@@ -270,14 +271,17 @@ VectorscopeDialog::VectorscopeDialog(QWidget *parent) :
     ui->scopeLabel->setAlignment(Qt::AlignCenter);
     ui->scopeLabel->setScaledContents(false);
 
-    // Set up field selection colors
-    QColor firstFieldColor = QColor(255, 255, 0);   // Yellow for first field
-    QColor secondFieldColor = QColor(0, 255, 255);  // Cyan for second field
-
-    ui->fieldSelectFirstRadioButton->setStyleSheet(
-        QString("color: %1;").arg(firstFieldColor.name()));
-    ui->fieldSelectSecondRadioButton->setStyleSheet(
-        QString("color: %1;").arg(secondFieldColor.name()));
+    // Each field's trace colour as a swatch beside its label. The label keeps
+    // the palette's text colour, and QIcon greys the swatch when disabled.
+    const auto fieldSwatch = [this](const QColor &colour) {
+        const qreal ratio = devicePixelRatioF();
+        QPixmap swatch(QSize(12, 12) * ratio);
+        swatch.setDevicePixelRatio(ratio);
+        swatch.fill(colour);
+        return QIcon(swatch);
+    };
+    ui->fieldSelectFirstRadioButton->setIcon(fieldSwatch(QColor(255, 255, 0)));   // Yellow: first field
+    ui->fieldSelectSecondRadioButton->setIcon(fieldSwatch(QColor(0, 255, 255)));  // Cyan: second field
 
     initialiseAdvancedControls();
 }

@@ -104,6 +104,7 @@ void Configuration::writeConfiguration(void)
     configuration->beginGroup("viewOptions");
     configuration->setValue("toggleChromaDuringSeek", settings.viewOptions.toggleChromaDuringSeek);
     configuration->setValue("skipBySegments", settings.viewOptions.skipBySegments);
+    configuration->setValue("theme", settings.viewOptions.theme);
     configuration->setValue("generateProxyEnabled", settings.viewOptions.generateProxyEnabled);
     configuration->setValue("exportProfileConfigEnabled", settings.viewOptions.exportProfileConfigEnabled);
     configuration->setValue("exportProfileConfigPath", settings.viewOptions.exportProfileConfigPath);
@@ -201,6 +202,10 @@ void Configuration::readConfiguration(void)
     configuration->beginGroup("viewOptions");
     settings.viewOptions.toggleChromaDuringSeek = configuration->value("toggleChromaDuringSeek", false).toBool();
     settings.viewOptions.skipBySegments = configuration->value("skipBySegments", true).toBool();
+    settings.viewOptions.theme = configuration->value("theme", QStringLiteral("dark")).toString();
+    if (settings.viewOptions.theme != QLatin1String("light")) {
+        settings.viewOptions.theme = QStringLiteral("dark");
+    }
     settings.viewOptions.generateProxyEnabled = configuration->value("generateProxyEnabled", false).toBool();
     settings.viewOptions.exportProfileConfigEnabled = configuration->value("exportProfileConfigEnabled", false).toBool();
     settings.viewOptions.exportProfileConfigPath = configuration->value("exportProfileConfigPath", QString()).toString();
@@ -312,6 +317,7 @@ void Configuration::setDefault(void)
     // View options
     settings.viewOptions.toggleChromaDuringSeek = false;
     settings.viewOptions.skipBySegments = true;
+    settings.viewOptions.theme = QStringLiteral("dark");
     settings.viewOptions.generateProxyEnabled = false;
     settings.viewOptions.exportProfileConfigEnabled = false;
     settings.viewOptions.exportProfileConfigPath = QString();
@@ -546,6 +552,16 @@ void Configuration::setSkipBySegments(bool skipBySegments)
 bool Configuration::getSkipBySegments(void)
 {
     return settings.viewOptions.skipBySegments;
+}
+
+void Configuration::setTheme(QString theme)
+{
+    settings.viewOptions.theme = theme;
+}
+
+QString Configuration::getTheme(void)
+{
+    return settings.viewOptions.theme;
 }
 
 void Configuration::setGenerateProxyEnabled(bool generateProxyEnabled)

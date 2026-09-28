@@ -9,14 +9,11 @@
  ******************************************************************************/
 
 #include <QApplication>
-#include <QColor>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QFileInfo>
-#include <QPalette>
 #include <QStringList>
-#include <QStyleFactory>
 
 #include "efmhandlerdialog.h"
 #include "tbc/logging.h"
@@ -32,9 +29,7 @@ int main(int argc, char *argv[])
     setDebug(true);
     qInstallMessageHandler(debugOutputHandler);
 
-    tbc::ui::prepareStockThemeEnvironment();
-
-    tbc::ui::ThemedApplication app(argc, argv);
+    QApplication app(argc, argv);
 
     QCoreApplication::setApplicationName("tbc-efm-handler");
     QCoreApplication::setApplicationVersion(
@@ -75,9 +70,9 @@ int main(int argc, char *argv[])
                                         QCoreApplication::translate("main", "path"));
     parser.addOption(outputBaseOption);
     parser.addOption(QCommandLineOption("force-dark-theme",
-                                        QCoreApplication::translate("main", "Force dark theme regardless of system settings (default; no-op)")));
+                                        QCoreApplication::translate("main", "Use the dark theme (default)")));
     parser.addOption(QCommandLineOption("light-theme",
-                                        QCoreApplication::translate("main", "Use the light Fusion theme instead of the stock dark theme")));
+                                        QCoreApplication::translate("main", "Use the light theme")));
 
     parser.addPositionalArgument(
         "input",
@@ -88,14 +83,9 @@ int main(int argc, char *argv[])
     parser.process(app);
     processStandardDebugOptions(parser);
 
-    // Apply the stock theme (dark by default, light via --light-theme). Sets
-    // the Fusion palette, isDarkTheme property, Qt 6.8 color scheme override,
-    // and input-widget contrast guard; re-asserted on macOS switchover.
-    if (parser.isSet(QStringLiteral("light-theme"))) {
-        app.applyStockLightTheme();
-    } else {
-        app.applyStockDarkTheme();
-    }
+    // Qt's own Fusion theme, dark by default
+    tbc::ui::applyFusionTheme(parser.isSet(QStringLiteral("light-theme")) ? Qt::ColorScheme::Light
+                                                                         : Qt::ColorScheme::Dark);
 
     EfmHandlerDialog dialog;
 

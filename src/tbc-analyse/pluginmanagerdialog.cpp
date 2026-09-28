@@ -88,7 +88,7 @@ PluginManagerDialog::PluginManagerDialog(QWidget *parent)
     rightLayout->addWidget(m_nameLabel);
 
     m_categoryLabel = new QLabel(rightWidget);
-    m_categoryLabel->setStyleSheet(QStringLiteral("color: gray;"));
+    m_categoryLabel->setForegroundRole(QPalette::PlaceholderText);
     rightLayout->addWidget(m_categoryLabel);
 
     m_descriptionLabel = new QLabel(rightWidget);

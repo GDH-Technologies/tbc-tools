@@ -785,6 +785,17 @@ class ContractCoverageTests(unittest.TestCase):
         for snippet in check_ci_contracts.FLAKE_SRC_FILTER_REQUIRED_SNIPPETS:
             self.assertIn(snippet, flake)
 
+    def test_guis_use_qts_own_fusion_theme(self) -> None:
+        # Qt's own palette, unmodified: no hand-built palette, no contrast-guard
+        # stylesheet, no palette re-assert, and desktop-settings awareness left
+        # on (without it Qt ignores the colour-scheme request).
+        for path in check_ci_contracts.THEME_SOURCES:
+            content = path.read_text(encoding="utf-8")
+            for snippet in check_ci_contracts.THEME_FORBIDDEN_SNIPPETS:
+                self.assertNotIn(snippet, content, f"{path}: {snippet}")
+        uistyle = check_ci_contracts.THEME_SOURCES[0].read_text(encoding="utf-8")
+        self.assertIn("inline void applyFusionTheme(Qt::ColorScheme scheme)", uistyle)
+
     def test_flake_builds_every_platform_on_unstable_qt(self) -> None:
         # Upstream builds Linux from nixos-24.11 (Qt 6.8.3). The fork builds
         # every platform from the locked unstable (Qt 6.10.1) and keeps legacy

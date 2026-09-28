@@ -72,6 +72,19 @@ void TimelineMarkerSlider::paintEvent(QPaintEvent *event)
     const int lineBottom = grooveRect.bottom() + 3;
 
     // Segment spans first, tinting the groove
+    // While the slider is disabled the markers grey out with it: each takes the
+    // palette's disabled text colour, keeping its own transparency.
+    const bool enabled = isEnabled();
+    const QColor disabledColor = palette().color(QPalette::Disabled, QPalette::WindowText);
+    auto shown = [&](const QColor &color) {
+        if (enabled) {
+            return color;
+        }
+        QColor muted = disabledColor;
+        muted.setAlpha(color.alpha());
+        return muted;
+    };
+
     for (const TimelineSegmentSpan &span : segmentSpans_) {
         if (span.endPosition < span.startPosition || span.endPosition < minimum() || span.startPosition > maximum()) {
             continue;
@@ -79,12 +92,12 @@ void TimelineMarkerSlider::paintEvent(QPaintEvent *event)
         const int x1 = xForPosition(span.startPosition, grooveRect, option.upsideDown);
         const int x2 = xForPosition(span.endPosition, grooveRect, option.upsideDown);
         const QRect spanRect(qMin(x1, x2), grooveRect.top(), qAbs(x2 - x1) + 1, grooveRect.height());
-        painter.fillRect(spanRect, span.color);
+        painter.fillRect(spanRect, shown(span.color));
     }
 
     // Segment boundary ticks, a little taller than note ticks
     {
-        QPen pen(QColor(255, 170, 0));
+        QPen pen(shown(QColor(255, 170, 0)));
         pen.setWidth(2);
         painter.setPen(pen);
         for (qint32 position : segmentBoundaries_) {
@@ -101,7 +114,7 @@ void TimelineMarkerSlider::paintEvent(QPaintEvent *event)
             return;
         }
         const int x = xForPosition(framePosition, grooveRect, option.upsideDown);
-        QPen pen(color);
+        QPen pen(shown(color));
         pen.setWidth(2);
         painter.setPen(pen);
         painter.drawLine(x, lineTop, x, lineBottom);

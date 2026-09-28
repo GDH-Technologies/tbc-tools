@@ -59,6 +59,7 @@ class WaveformMonitorWidget : public QWidget {
  protected:
   void paintEvent(QPaintEvent *event) override;
   void resizeEvent(QResizeEvent *event) override;
+  void changeEvent(QEvent *event) override;
 
  private:
   void accumulate(const std::vector<int16_t> &samples, int total_lines,

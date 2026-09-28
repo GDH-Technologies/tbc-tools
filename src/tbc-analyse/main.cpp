@@ -16,7 +16,6 @@
 #include <QCommandLineParser>
 #include <QLoggingCategory>
 #include <QPixmap>
-#include <QStyleFactory>
 #include <QDir>
 #include <QFileInfo>
 #include <QEventLoop>
@@ -353,21 +352,22 @@ int main(int argc, char *argv[])
     // Apply the saved UI scale. Qt has no runtime API for a manual global scale
     // factor, so this has to be in the environment before the application is
     // constructed. 0 means "follow the OS scale", and an operator who has set
-    // QT_SCALE_FACTOR themselves keeps control of it.
+    // QT_SCALE_FACTOR themselves keeps control of it. The saved theme is read
+    // here too and applied once the command line is parsed.
+    QString themeChoice;
     {
         Configuration startupConfiguration;
         const double uiScaleFactor = startupConfiguration.getUiScaleFactor();
         if (uiScaleFactor != 0.0 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR")) {
             qputenv("QT_SCALE_FACTOR", QByteArray::number(uiScaleFactor));
         }
+        themeChoice = startupConfiguration.getTheme();
     }
 
     // Qt 6 already defaults to PassThrough; stating it pins fractional desktop
     // scales (125%, 150%) against a future change of the platform default.
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
         Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
-
-    tbc::ui::prepareStockThemeEnvironment();
 
     // --save-frame never opens a window, so it must not need a display
     for (int i = 1; i < argc; i++) {
@@ -376,7 +376,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    tbc::ui::ThemedApplication a(argc, argv);
+    QApplication a(argc, argv);
 
     // Set desktop file name for proper GNOME integration
     // This must match the installed .desktop file name (without .desktop extension)
@@ -406,12 +406,10 @@ int main(int argc, char *argv[])
     // Add the standard debug options --debug and --quiet
     addStandardDebugOptions(parser);
 
-    // Theme options. Stock default is Fusion + dark (absolute; re-asserted on
-    // macOS appearance switchover by ThemedApplication). --light-theme opts
-    // into the light palette; --force-dark-theme is kept as a back-compat
-    // no-op (dark is now the default).
-    parser.addOption(QCommandLineOption("force-dark-theme", "Force dark theme regardless of system settings (default; no-op)"));
-    parser.addOption(QCommandLineOption("light-theme", "Use the light Fusion theme instead of the stock dark theme"));
+    // Theme options. They override the Themes-menu choice for this session
+    // only and are never saved.
+    parser.addOption(QCommandLineOption("force-dark-theme", "Use the dark theme for this session"));
+    parser.addOption(QCommandLineOption("light-theme", "Use the light theme for this session"));
     parser.addOption(QCommandLineOption("metadata-only", "Load metadata (.db or .json) without TBC data"));
 
     // Headless "Save frame as PNG"
@@ -436,15 +434,15 @@ int main(int argc, char *argv[])
     // Standard logging options
     processStandardDebugOptions(parser);
 
-    // Apply the stock theme (dark by default, light via --light-theme). This
-    // sets the Fusion palette, the isDarkTheme app property, the Qt 6.8 color
-    // scheme override, and the input-widget contrast guard. ThemedApplication
-    // re-asserts it on any ApplicationPaletteChange (e.g. macOS switchover).
+    // Qt's own Fusion theme. The saved Themes-menu choice (dark by default)
+    // unless a command-line option overrides it for this session.
     if (parser.isSet("light-theme")) {
-        a.applyStockLightTheme();
-    } else {
-        a.applyStockDarkTheme();
+        themeChoice = QStringLiteral("light");
+    } else if (parser.isSet("force-dark-theme")) {
+        themeChoice = QStringLiteral("dark");
     }
+    tbc::ui::applyFusionTheme(themeChoice == QLatin1String("light") ? Qt::ColorScheme::Light
+                                                                    : Qt::ColorScheme::Dark);
 
     // Get the arguments from the parser
     QString inputFileName;
@@ -461,7 +459,7 @@ int main(int argc, char *argv[])
     const bool metadataOnly = parser.isSet("metadata-only");
 
     // Start the GUI application
-    MainWindow w(inputFileName, metadataOnly);
+    MainWindow w(inputFileName, metadataOnly, themeChoice);
     w.show();
 
     return a.exec();

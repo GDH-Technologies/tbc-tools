@@ -11,6 +11,7 @@
 #include "oscilloscopedialog.h"
 #include "ui_oscilloscopedialog.h"
 #include "tbc/logging.h"
+#include "theme_color_tokens.h"
 
 #include <cassert>
 #include <QVBoxLayout>
@@ -298,7 +299,8 @@ void OscilloscopeDialog::updateAdvancedSampleMarker(qint32 pictureDot)
     advancedSampleMarker = advancedPlotWidget->addMarker();
     advancedSampleMarker->setStyle(PlotMarker::VLine);
     advancedSampleMarker->setPosition(QPointF(timeUs, 0.0));
-    advancedSampleMarker->setPen(QPen(QColor(0, 255, 0), 2));
+    advancedSampleMarker->setPen(QPen(theme_tokens::plotColor(theme_tokens::PlotColorToken::MarkerSelection,
+                                                              PlotWidget::isDarkTheme()), 2));
 }
 
 void OscilloscopeDialog::updateAdvancedScope(const TbcSource::ScanLineData &scanLineData, qint32 pictureDot, bool bothSources)
@@ -324,16 +326,20 @@ void OscilloscopeDialog::updateAdvancedScope(const TbcSource::ScanLineData &scan
 
     if (!advancedCompositeSeries) {
         advancedCompositeSeries = advancedPlotWidget->addSeries(tr("Composite"));
-        advancedCompositeSeries->setPen(QPen(QColor(100, 200, 255), 1));
     }
     if (!advancedYSeries) {
         advancedYSeries = advancedPlotWidget->addSeries(tr("Luma (Y)"));
-        advancedYSeries->setPen(QPen(QColor(255, 255, 100), 1));
     }
     if (!advancedCSeries) {
         advancedCSeries = advancedPlotWidget->addSeries(tr("Chroma (C)"));
-        advancedCSeries->setPen(QPen(QColor(120, 160, 255), 1));
     }
+    // Pens follow the colour scheme; set on every update, which MainWindow
+    // also runs after a scheme change.
+    using theme_tokens::PlotColorToken;
+    const bool darkTheme = PlotWidget::isDarkTheme();
+    advancedCompositeSeries->setPen(QPen(theme_tokens::plotColor(PlotColorToken::CompositePrimary, darkTheme), 1));
+    advancedYSeries->setPen(QPen(theme_tokens::plotColor(PlotColorToken::LumaPrimary, darkTheme), 1));
+    advancedCSeries->setPen(QPen(theme_tokens::plotColor(PlotColorToken::ChromaPrimary, darkTheme), 1));
 
     const bool showYC = ui->YCcheckBox->isChecked();
     const bool showY = ui->YcheckBox->isChecked();
@@ -437,24 +443,24 @@ void OscilloscopeDialog::updateAdvancedScope(const TbcSource::ScanLineData &scan
         auto *burstStart = advancedPlotWidget->addMarker();
         burstStart->setStyle(PlotMarker::VLine);
         burstStart->setPosition(QPointF(static_cast<double>(scanLineData.colourBurstStart) * usPerSample, 0.0));
-        burstStart->setPen(QPen(QColor(0, 255, 255), 1, Qt::DashLine));
+        burstStart->setPen(QPen(theme_tokens::plotColor(PlotColorToken::RegionBurst, darkTheme), 1, Qt::DashLine));
 
         auto *burstEnd = advancedPlotWidget->addMarker();
         burstEnd->setStyle(PlotMarker::VLine);
         burstEnd->setPosition(QPointF(static_cast<double>(scanLineData.colourBurstEnd) * usPerSample, 0.0));
-        burstEnd->setPen(QPen(QColor(0, 255, 255), 1, Qt::DashLine));
+        burstEnd->setPen(QPen(theme_tokens::plotColor(PlotColorToken::RegionBurst, darkTheme), 1, Qt::DashLine));
     }
 
     if (scanLineData.activeVideoStart >= 0 && scanLineData.activeVideoEnd >= 0) {
         auto *activeStart = advancedPlotWidget->addMarker();
         activeStart->setStyle(PlotMarker::VLine);
         activeStart->setPosition(QPointF(static_cast<double>(scanLineData.activeVideoStart) * usPerSample, 0.0));
-        activeStart->setPen(QPen(QColor(255, 255, 100), 1, Qt::DashLine));
+        activeStart->setPen(QPen(theme_tokens::plotColor(PlotColorToken::RegionActiveVideo, darkTheme), 1, Qt::DashLine));
 
         auto *activeEnd = advancedPlotWidget->addMarker();
         activeEnd->setStyle(PlotMarker::VLine);
         activeEnd->setPosition(QPointF(static_cast<double>(scanLineData.activeVideoEnd) * usPerSample, 0.0));
-        activeEnd->setPen(QPen(QColor(255, 255, 100), 1, Qt::DashLine));
+        activeEnd->setPen(QPen(theme_tokens::plotColor(PlotColorToken::RegionActiveVideo, darkTheme), 1, Qt::DashLine));
     }
 
     updateAdvancedSampleMarker(pictureDot);

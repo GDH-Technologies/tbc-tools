@@ -46,8 +46,7 @@ int main(int argc, char *argv[])
     setDebug(true);
     qInstallMessageHandler(debugOutputHandler);
     if (wantsGui(argc, argv)) {
-        tbc::ui::prepareStockThemeEnvironment();
-        tbc::ui::ThemedApplication a(argc, argv);
+        QApplication a(argc, argv);
 
         QCoreApplication::setApplicationName("tbc-metadata-converter");
         QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
@@ -68,7 +67,7 @@ int main(int argc, char *argv[])
                                      QCoreApplication::translate("main", "Launch the GUI (default when no arguments are provided)."));
         parser.addOption(guiOption);
         QCommandLineOption lightThemeOption("light-theme",
-                                            QCoreApplication::translate("main", "Use the light Fusion theme instead of the stock dark theme"));
+                                            QCoreApplication::translate("main", "Use the light theme"));
         parser.addOption(lightThemeOption);
 
         QCommandLineOption directionOption(QStringList() << "direction",
@@ -100,14 +99,9 @@ int main(int argc, char *argv[])
         parser.process(a);
         processStandardDebugOptions(parser);
 
-        // Apply the stock theme (dark by default, light via --light-theme). Sets
-        // the Fusion palette, isDarkTheme property, Qt 6.8 color scheme override,
-        // and input-widget contrast guard; re-asserted on macOS switchover.
-        if (parser.isSet(lightThemeOption)) {
-            a.applyStockLightTheme();
-        } else {
-            a.applyStockDarkTheme();
-        }
+        // Qt's own Fusion theme, dark by default
+        tbc::ui::applyFusionTheme(parser.isSet(lightThemeOption) ? Qt::ColorScheme::Light
+                                                                 : Qt::ColorScheme::Dark);
 
         QString inputFilename;
         if (parser.isSet(inputJsonOption)) {

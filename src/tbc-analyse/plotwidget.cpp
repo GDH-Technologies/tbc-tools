@@ -16,6 +16,7 @@
 #include <QPainter>
 #include <QGestureEvent>
 #include <QPinchGesture>
+#include <QStyleHints>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,13 @@ QFont plotUiFont(const QWidget *widget, int pointDelta)
         baseFont.setPointSize(baseFont.pointSize() + pointDelta);
     }
     return baseFont;
+}
+
+// The palette plot items paint with: their PlotWidget's, which follows the
+// widget's state (Disabled/Inactive) as well as the application palette.
+QPalette plotPalette(const PlotWidget *widget)
+{
+    return widget ? widget->palette() : QApplication::palette();
 }
 
 // Smallest "nice" step (1/2/5 x 10^n) that is >= framesPerPixel. Used to snap
@@ -61,7 +69,6 @@ PlotWidget::PlotWidget(QWidget *parent)
     , m_xAutoScale(true)
     , m_yAutoScale(true)
     , m_yIntegerLabels(false)
-    , m_isDarkTheme(false)
     , m_secondaryYAxisEnabled(false)
     , m_secondaryYMin(0)
     , m_secondaryYMax(100)
@@ -135,7 +142,6 @@ void PlotWidget::setupView()
     // Create hover readout (crosshair + label); hidden until the cursor enters
     m_hoverMarker = new PlotMarker(this);
     m_hoverMarker->setStyle(PlotMarker::Cross);
-    m_hoverMarker->setPen(QPen(theme_tokens::mutedText(QApplication::palette()), 1, Qt::DashLine));
     m_hoverMarker->setVisible(false);
     m_scene->addItem(m_hoverMarker);
 
@@ -339,8 +345,8 @@ void PlotWidget::showNoDataMessage(const QString &message)
     QFont font = plotUiFont(this, 1);
     m_noDataTextItem->setFont(font);
     
-    m_noDataTextItem->setDefaultTextColor(theme_tokens::mutedText(QApplication::palette()));
-    
+    m_noDataTextItem->setDefaultTextColor(theme_tokens::mutedText(palette()));
+
     // Center the text in the plot area
     QRectF textRect = m_noDataTextItem->boundingRect();
     m_noDataTextItem->setPos(m_plotRect.center().x() - textRect.width() / 2,
@@ -425,37 +431,37 @@ void PlotWidget::setReplotSuppressed(bool suppressed)
     }
 }
 
+// The colour scheme Qt is using. Only when a platform reports none (e.g. the
+// offscreen platform) is the palette itself inspected.
 bool PlotWidget::isDarkTheme()
 {
-    // Check for command line overrides first
-    QVariant themeProperty = QApplication::instance()->property("isDarkTheme");
-    if (themeProperty.isValid()) {
-        return themeProperty.toBool();
+    switch (QGuiApplication::styleHints()->colorScheme()) {
+    case Qt::ColorScheme::Dark:
+        return true;
+    case Qt::ColorScheme::Light:
+        return false;
+    default:
+        return theme_tokens::isDarkPalette(QApplication::palette());
     }
-    
-    // Otherwise, use Qt's automatic palette detection (OS provides this)
-    QPalette appPalette = QApplication::palette();
-    QColor windowColor = appPalette.color(QPalette::Window);
-    QColor textColor = appPalette.color(QPalette::WindowText);
-    
-    // Simple heuristic: if window is darker than text, we're in dark mode
-    return windowColor.lightness() < textColor.lightness();
 }
 
 void PlotWidget::updateTheme()
 {
-    // Use the static utility function
-    m_isDarkTheme = isDarkTheme();
-    
     if (m_usePaletteCanvasBackground) {
-        m_canvasBackground = QApplication::palette().color(QPalette::Base);
+        m_canvasBackground = palette().color(QPalette::Base);
         m_scene->setBackgroundBrush(QBrush(m_canvasBackground));
     }
 
     if (m_noDataTextItem) {
-        m_noDataTextItem->setDefaultTextColor(theme_tokens::mutedText(QApplication::palette()));
+        m_noDataTextItem->setDefaultTextColor(theme_tokens::mutedText(palette()));
     }
-    
+    if (m_hoverMarker) {
+        m_hoverMarker->setPen(QPen(theme_tokens::mutedText(palette()), 1, Qt::DashLine));
+    }
+
+    // Let owners re-pen their series and markers before the replot
+    emit themeChanged();
+
     // Update all plot elements for the new theme
     replot();
 }
@@ -491,7 +497,7 @@ void PlotWidget::replot()
     
     // Update grid
     if (m_grid) {
-        m_grid->updateGrid(m_plotRect, m_dataRect, m_isDarkTheme,
+        m_grid->updateGrid(m_plotRect, m_dataRect,
                           m_xMin, m_xMax, m_yMin, m_yMax,
                           m_xAxisUseCustomTicks, m_xAxisTickStep, m_xAxisTickOrigin,
                           m_yAxisUseCustomTicks, m_yAxisTickStep, m_yAxisTickOrigin,
@@ -517,7 +523,7 @@ void PlotWidget::replot()
     // Update axis labels
     if (m_axisLabels) {
         m_axisLabels->updateLabels(m_plotRect, m_dataRect, m_xAxisTitle, m_yAxisTitle, 
-                                  m_xMin, m_xMax, m_yMin, m_yMax, m_yIntegerLabels, m_isDarkTheme,
+                                  m_xMin, m_xMax, m_yMin, m_yMax, m_yIntegerLabels,
                                   m_secondaryYAxisEnabled, m_secondaryYAxisTitle,
                                   m_secondaryYMin, m_secondaryYMax,
                                   m_xAxisUseCustomTicks, m_xAxisTickStep, m_xAxisTickOrigin,
@@ -540,11 +546,9 @@ void PlotWidget::resizeEvent(QResizeEvent *event)
 void PlotWidget::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
-    // The stock theme switch (and the macOS appearance switchover) delivers a
-    // PaletteChange to every widget. PlotWidget caches m_isDarkTheme in
-    // updateTheme(); without refreshing it here the grid/axis labels and
-    // canvas background stay on the old theme until a second event, which is
-    // why Light/Dark appeared to need double-selecting.
+    // A colour-scheme change delivers a PaletteChange to every widget. The
+    // canvas background, hover pen and owners' series pens are resolved in
+    // updateTheme(), so refresh them here.
     if (event->type() == QEvent::PaletteChange) {
         updateTheme();
     }
@@ -963,8 +967,8 @@ void PlotWidget::showHoverReadout(const QPointF &dataPoint, const PlotSeries *se
                         QString::number(dataPoint.y(), 'f', 1));
     }
 
-    const QColor bg = QApplication::palette().color(QPalette::Window);
-    const QColor fg = QApplication::palette().color(QPalette::WindowText);
+    const QColor bg = palette().color(QPalette::ToolTipBase);
+    const QColor fg = palette().color(QPalette::ToolTipText);
     m_hoverLabel->setFont(plotUiFont(this, 0));
     m_hoverLabel->setHtml(QStringLiteral(
         "<span style=\"background-color: rgba(%1,%2,%3,220); "
@@ -1070,7 +1074,7 @@ PlotSeries::PlotSeries(PlotWidget *parent)
     , m_plotWidget(parent)
     , m_style(Lines)
 {
-    setPen(QPen(Qt::blue, 1.0));
+    setPen(QPen(plotPalette(parent).color(QPalette::Text), 1.0));
 }
 
 void PlotSeries::setTitle(const QString &title)
@@ -1276,7 +1280,6 @@ PlotGrid::PlotGrid(PlotWidget *parent)
     , m_pen(QPen(Qt::gray, 0.5))
     , m_usePalettePen(true)
     , m_enabled(true)
-    , m_isDarkTheme(false)
     , m_xMin(0), m_xMax(100), m_yMin(0), m_yMax(100)
     , m_xUseCustomTicks(false), m_yUseCustomTicks(false)
     , m_xTickStep(0), m_xTickOrigin(0), m_yTickStep(0), m_yTickOrigin(0)
@@ -1315,7 +1318,7 @@ void PlotGrid::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, 
     if (!m_enabled) return;
 
     if (m_usePalettePen) {
-        painter->setPen(QPen(theme_tokens::gridLine(QApplication::palette()), 0.5));
+        painter->setPen(QPen(theme_tokens::gridLine(plotPalette(m_plotWidget)), 0.5));
     } else {
         painter->setPen(m_pen);
     }
@@ -1378,7 +1381,7 @@ void PlotGrid::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, 
     }
 }
 
-void PlotGrid::updateGrid(const QRectF &plotRect, const QRectF &dataRect, bool isDarkTheme,
+void PlotGrid::updateGrid(const QRectF &plotRect, const QRectF &dataRect,
                           double xMin, double xMax, double yMin, double yMax,
                           bool xUseCustomTicks, double xTickStep, double xTickOrigin,
                           bool yUseCustomTicks, double yTickStep, double yTickOrigin,
@@ -1387,7 +1390,6 @@ void PlotGrid::updateGrid(const QRectF &plotRect, const QRectF &dataRect, bool i
 {
     m_plotRect = plotRect;
     m_dataRect = dataRect;
-    m_isDarkTheme = isDarkTheme;
     m_xMin = xMin;
     m_xMax = xMax;
     m_yMin = yMin;
@@ -1411,7 +1413,7 @@ void PlotGrid::updateGrid(const QRectF &plotRect, const QRectF &dataRect, bool i
 PlotMarker::PlotMarker(PlotWidget *parent)
     : QGraphicsItem()
     , m_style(VLine)
-    , m_pen(QPen(Qt::red, 1.0))
+    , m_pen(QPen(plotPalette(parent).color(QPalette::Accent), 1.0))
     , m_dataPos(0, 0)
     , m_plotWidget(parent)
 {
@@ -1572,13 +1574,13 @@ void PlotLegend::paint(QPainter *painter, const QStyleOptionGraphicsItem *option
     
     if (!m_enabled || m_series.isEmpty()) return;
 
-    const QPalette palette = QApplication::palette();
-    
+    const QPalette palette = plotPalette(m_plotWidget);
+
     // Draw legend background
     QColor legend_background = palette.color(QPalette::Window);
     legend_background.setAlpha(220);
     painter->fillRect(m_boundingRect, legend_background);
-    painter->setPen(QPen(palette.color(QPalette::Mid), 1.0));
+    painter->setPen(QPen(theme_tokens::neutralLine(palette, 0.3), 1.0));
     painter->drawRect(m_boundingRect);
     
     QFont font = plotUiFont(m_plotWidget, 1);
@@ -1608,7 +1610,6 @@ PlotAxisLabels::PlotAxisLabels(PlotWidget *parent)
     : QGraphicsItem()
     , m_xMin(0), m_xMax(100), m_yMin(0), m_yMax(100)
     , m_yIntegerLabels(false)
-    , m_isDarkTheme(false)
     , m_plotWidget(parent)
 {
     setZValue(2); // Draw on top of grid but below curves
@@ -1617,7 +1618,7 @@ PlotAxisLabels::PlotAxisLabels(PlotWidget *parent)
 void PlotAxisLabels::updateLabels(const QRectF &plotRect, const QRectF &dataRect, 
                                   const QString &xTitle, const QString &yTitle,
                                   double xMin, double xMax, double yMin, double yMax,
-                                  bool yIntegerLabels, bool isDarkTheme,
+                                  bool yIntegerLabels,
                                   bool secondaryYEnabled, const QString &secondaryYTitle,
                                   double secondaryYMin, double secondaryYMax,
                                   bool xUseCustomTicks, double xTickStep, double xTickOrigin,
@@ -1639,7 +1640,6 @@ void PlotAxisLabels::updateLabels(const QRectF &plotRect, const QRectF &dataRect
     m_secondaryYMin = secondaryYMin;
     m_secondaryYMax = secondaryYMax;
     m_yIntegerLabels = yIntegerLabels;
-    m_isDarkTheme = isDarkTheme;
     m_secondaryYEnabled = secondaryYEnabled;
     m_xUseCustomTicks = xUseCustomTicks;
     m_xTickStep = xTickStep;
@@ -1666,7 +1666,7 @@ void PlotAxisLabels::paint(QPainter *painter, const QStyleOptionGraphicsItem *op
     Q_UNUSED(option)
     Q_UNUSED(widget)
     
-    QColor axisColor = QApplication::palette().color(QPalette::WindowText);
+    QColor axisColor = plotPalette(m_plotWidget).color(QPalette::WindowText);
     
     painter->setPen(QPen(axisColor));
     QFont font = plotUiFont(m_plotWidget, 1);

@@ -9,12 +9,9 @@
  ******************************************************************************/
 
 #include <QApplication>
-#include <QColor>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
-#include <QPalette>
-#include <QStyleFactory>
 
 #include "audioalignmentdialog.h"
 #include "headlessalign.h"
@@ -37,9 +34,7 @@ int main(int argc, char *argv[])
     setDebug(true);
     qInstallMessageHandler(debugOutputHandler);
 
-    tbc::ui::prepareStockThemeEnvironment();
-
-    tbc::ui::ThemedApplication app(argc, argv);
+    QApplication app(argc, argv);
 
     // Set application name and version
     QCoreApplication::setApplicationName("tbc-audio-align");
@@ -91,21 +86,16 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("headless",
                                         QCoreApplication::translate("main", "Align without the dialog (see --headless --help)")));
     parser.addOption(QCommandLineOption("force-dark-theme",
-                                        QCoreApplication::translate("main", "Force dark theme regardless of system settings (default; no-op)")));
+                                        QCoreApplication::translate("main", "Use the dark theme (default)")));
     parser.addOption(QCommandLineOption("light-theme",
-                                        QCoreApplication::translate("main", "Use the light Fusion theme instead of the stock dark theme")));
+                                        QCoreApplication::translate("main", "Use the light theme")));
 
     parser.process(app);
     processStandardDebugOptions(parser);
 
-    // Apply the stock theme (dark by default, light via --light-theme). Sets
-    // the Fusion palette, isDarkTheme property, Qt 6.8 color scheme override,
-    // and input-widget contrast guard; re-asserted on macOS switchover.
-    if (parser.isSet(QStringLiteral("light-theme"))) {
-        app.applyStockLightTheme();
-    } else {
-        app.applyStockDarkTheme();
-    }
+    // Qt's own Fusion theme, dark by default
+    tbc::ui::applyFusionTheme(parser.isSet(QStringLiteral("light-theme")) ? Qt::ColorScheme::Light
+                                                                         : Qt::ColorScheme::Dark);
 
     AudioAlignmentDialog dialog;
     if (parser.isSet(sourceDirectoryOption)) {

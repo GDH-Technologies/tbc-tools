@@ -92,6 +92,9 @@ public:
     bool getToggleChromaDuringSeek(void);
     void setSkipBySegments(bool skipBySegments);
     bool getSkipBySegments(void);
+    // Colour scheme: "dark" (default) or "light"
+    void setTheme(QString theme);
+    QString getTheme(void);
     void setGenerateProxyEnabled(bool generateProxyEnabled);
     bool getGenerateProxyEnabled(void);
     void setExportProfileConfigEnabled(bool exportProfileConfigEnabled);
@@ -172,6 +175,7 @@ private:
     struct ViewOptions {
         bool toggleChromaDuringSeek;
         bool skipBySegments;
+        QString theme;
         bool generateProxyEnabled;
         bool exportProfileConfigEnabled;
         QString exportProfileConfigPath;

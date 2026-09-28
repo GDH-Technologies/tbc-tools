@@ -28,8 +28,6 @@
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
-#include <QColor>
-#include <QPalette>
 #include <QSet>
 #include <QStringList>
 #include <QUrl>
@@ -145,10 +143,6 @@ void sanitizeGuiStartupEnvironment()
 {
     ensureUtf8ProcessLocale();
     sanitizeGtkModulesEnvironment();
-    // prepareStockThemeEnvironment() calls setDesktopSettingsAware(false) and
-    // normalizes QT_STYLE_OVERRIDE to Fusion. The stock palette itself is
-    // applied via ThemedApplication after CLI parse (dark default, light opt-in).
-    tbc::ui::prepareStockThemeEnvironment();
 }
 QString normalizePathForCurrentPlatform(const QString &path)
 {
@@ -427,7 +421,7 @@ int main(int argc, char *argv[])
 
     if (wantsGui(argc, argv)) {
         sanitizeGuiStartupEnvironment();
-        tbc::ui::ThemedApplication a(argc, argv);
+        QApplication a(argc, argv);
 
         QCoreApplication::setApplicationName("ld-lds-converter");
         QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
@@ -448,7 +442,7 @@ int main(int argc, char *argv[])
                                      QCoreApplication::translate("main", "Launch the GUI (default when no explicit CLI mode is provided)."));
         parser.addOption(guiOption);
         QCommandLineOption lightThemeOption("light-theme",
-                                            QCoreApplication::translate("main", "Use the light Fusion theme instead of the stock dark theme"));
+                                            QCoreApplication::translate("main", "Use the light theme"));
         parser.addOption(lightThemeOption);
 
         QCommandLineOption sourceVideoFileOption(QStringList() << "i" << "input",
@@ -467,14 +461,9 @@ int main(int argc, char *argv[])
         parser.process(a);
         processStandardDebugOptions(parser);
 
-        // Apply the stock theme (dark by default, light via --light-theme). Sets
-        // the Fusion palette, isDarkTheme property, Qt 6.8 color scheme override,
-        // and input-widget contrast guard; re-asserted on macOS switchover.
-        if (parser.isSet(lightThemeOption)) {
-            a.applyStockLightTheme();
-        } else {
-            a.applyStockDarkTheme();
-        }
+        // Qt's own Fusion theme, dark by default
+        tbc::ui::applyFusionTheme(parser.isSet(lightThemeOption) ? Qt::ColorScheme::Light
+                                                                 : Qt::ColorScheme::Dark);
 
         bool outputFormatIsValid = false;
         const DataConverter::OutputFormat outputFormat = parseOutputFormat(parser.value(outputFormatOption), &outputFormatIsValid);

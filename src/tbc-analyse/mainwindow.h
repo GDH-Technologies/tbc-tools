@@ -77,7 +77,10 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QString inputFilenameParam, bool metadataOnlyParam = false, QWidget *parent = nullptr);
+    // themeChoiceParam is this session's colour scheme ("dark" or "light"),
+    // for the Themes menu's check mark.
+    explicit MainWindow(QString inputFilenameParam, bool metadataOnlyParam = false,
+                        QString themeChoiceParam = QStringLiteral("dark"), QWidget *parent = nullptr);
 	TbcSource& getTbcSource();
     ~MainWindow();
 
@@ -270,7 +273,6 @@ private:
     ExportBoundaryHandle exportBoundaryDragHandle = ExportBoundaryHandle::None;
     ExportBoundaryHandle exportBoundarySelectedHandle = ExportBoundaryHandle::None;
     double scaleFactor;
-    QPalette buttonPalette;
     QString lastFilename;
     bool metadataJsonLoaded = false;
     QString metadataJsonFilename;
@@ -389,7 +391,7 @@ private:
     void updateWaveformMonitorDialogue();
     void updateFieldTimingDialogue();
     void populateThemesMenu();
-    void applyThemeStyle(const QString &styleName);
+    void updateDropoutsButtonTint();
     void refreshThemeDependentUi();
     void mouseScanLineSelect(qint32 oX, qint32 oY);
 	void resizeEvent(QResizeEvent *event);
@@ -401,6 +403,7 @@ private:
     UiStateSnapshot captureUiStateSnapshot() const;
     void applyUiStateSnapshot(const UiStateSnapshot &snapshot);
     QActionGroup *themesActionGroup = nullptr;
+    QString themeChoice;
     QAction *saveAllModesPngAction = nullptr;
     QAction *copyCurrentDisplayAction = nullptr;
     QAction *notesViewerAction = nullptr;

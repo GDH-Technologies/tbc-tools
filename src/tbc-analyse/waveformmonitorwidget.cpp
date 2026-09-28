@@ -246,6 +246,16 @@ void WaveformMonitorWidget::resizeEvent(QResizeEvent *event) {
   image_dirty_ = true;
 }
 
+// The cached image bakes in palette colours (background, trace), so rebuild it
+// when the palette changes, e.g. on a colour-scheme switch.
+void WaveformMonitorWidget::changeEvent(QEvent *event) {
+  QWidget::changeEvent(event);
+  if (event->type() == QEvent::PaletteChange) {
+    image_dirty_ = true;
+    update();
+  }
+}
+
 void WaveformMonitorWidget::paintEvent(QPaintEvent *) {
   QPainter painter(this);
 
