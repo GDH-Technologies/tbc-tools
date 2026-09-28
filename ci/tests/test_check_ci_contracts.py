@@ -555,11 +555,25 @@ class ContractCoverageTests(unittest.TestCase):
         for snippet in (
             "runs-on: [self-hosted, air0-test]",
             "needs: test",
-            'nix build .# --out-link "$ROOTS/result"',
+            # Per-run root: a concurrent run's test job must not remove the
+            # root this run's queued package job relies on.
+            'nix build .# --out-link "$ROOTS/result-$GITHUB_RUN_ID"',
+            # Both jobs build the same commit even if main moves between them
+            # (refs/pull/N/merge is recomputed; github.sha is not).
+            "ref: ${{ inputs.checkout_ref || github.sha }}",
+            # A store miss in the package job is loud, not a silent recompile.
+            "nix build .# --dry-run",
             # The test job clones shallow: full history is 6.8 GB.
             "fetch-depth: 1",
         ):
             self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS)
+        for snippet in (
+            "inputs.checkout_ref || github.ref",
+            # The old step never upgraded these once installed; a weekly
+            # upgrade could break packaging with no code change.
+            "--upgrade pyinstaller dunamai",
+        ):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS)
         self.assertNotIn(
             "bash ci/run_local_ci_parity.sh --build-test-only",
             check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
