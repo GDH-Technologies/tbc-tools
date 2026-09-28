@@ -151,6 +151,7 @@ run_guardrails() {
   python3 -m unittest -v ci.tests.test_check_ci_contracts
   python3 ci/check_ci_contracts.py
   bash -n ci/verify_linux_bundle.sh
+  bash -n ci/macos_bundle_dependencies.sh
 }
 
 run_full_build_and_test() {

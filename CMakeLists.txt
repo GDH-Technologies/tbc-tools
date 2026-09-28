@@ -613,12 +613,23 @@ if(BUILD_TESTING)
 
     # nnTransform3D (the ONNX chroma model). Pinned to the CPU provider so the
     # result does not depend on the machine having a GPU or the CUDA plugin.
+    # On macOS the CPU provider takes about 12 s a frame on air0 (8 GB M1), so
+    # the full 29-frame clip cost six minutes of every CI run; four frames still
+    # exercise the model end to end there. Other platforms decode the whole clip.
+    if(APPLE)
+        set(_nntransform3d_frames 4)
+        set(_nntransform3d_length --length 4)
+    else()
+        set(_nntransform3d_frames 29)
+        set(_nntransform3d_length)
+    endif()
     add_test(
         NAME decode-pretbc-ntsc-nntransform3d
         COMMAND ${SCRIPTS_DIR}/test-decode-pretbc
             --build ${CMAKE_BINARY_DIR}
             --decoder nntransform3d
-            --expect-frames 29
+            ${_nntransform3d_length}
+            --expect-frames ${_nntransform3d_frames}
             ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut
     )
     set_tests_properties(decode-pretbc-ntsc-nntransform3d PROPERTIES

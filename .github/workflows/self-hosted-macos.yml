@@ -25,6 +25,12 @@ name: "Self-hosted macOS build (air0)"
 #     is not a reason to depend on it.
 #   * No cache-nix-action. The disk persists; anything cached lives outside
 #     the workspace, because actions/checkout runs `git clean -ffdx`.
+#   * Two jobs, one compile. `test` runs on air0-test, air0's dedicated test
+#     runner: `nix build .#` compiles tbc-tools and runs ctest inside the build
+#     (flake.nix doCheck), so the tested binaries are the shipped ones.
+#     `package` runs on the main air0 runner once `test` passes. The two
+#     runners share air0's Nix store, so its `nix build .#` is a store hit and
+#     the runner is busy only for the bundle and DMG.
 
 on:
   # Path-gated so a docs-only or tooling-only change does not occupy the single
@@ -94,10 +100,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build:
-    name: Build, test and package tbc-tools (arm64, air0)
-    runs-on: [self-hosted, macOS, ARM64, air0]
-    timeout-minutes: 180
+  test:
+    name: Build and test tbc-tools (arm64, air0-test)
+    # air0's dedicated test runner: registered with --no-default-labels, so its
+    # only labels are self-hosted and air0-test and no generic macOS job can
+    # land on it.
+    runs-on: [self-hosted, air0-test]
+    timeout-minutes: 90
     # A merge to main is owned by self-hosted-deploy.yml (from_deploy), and a
     # forked PR must never execute on a workstation -- this repository is
     # public.
@@ -117,6 +126,64 @@ jobs:
           nix --version
           xcode-select -p
 
+      - uses: actions/checkout@v5
+        # Shallow, no tags, no submodules: the Nix build reads only the tree
+        # (its version comes from .gdh-version, its ezpwd from a flake input),
+        # and a depth-1 checkout evaluates to the same derivation as a full
+        # one. Full history is 6.8 GB -- a fresh workspace spent 40 minutes
+        # cloning it at air0's download rate. `package` keeps the full clone
+        # its `git describe` needs, in the main runner's own workspace.
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: Build and test with Nix
+        # ctest runs inside this build (flake.nix: doCheck), serially, and a
+        # failing test fails the build. It is the only job a deploy runs.
+        #
+        # determinate-nixd's automatic GC runs every two hours on air0, and
+        # under disk pressure sooner, and deletes any store path without a GC
+        # root -- mid-build if need be. On 2026-09-15 (PR #30) it deleted the
+        # dev shell's scipy, matplotlib, tqdm and pyzmq 58 s before the
+        # teletext test ran; on 2026-09-28 (PR #43), with the disk 95% full, it
+        # deleted nixpkgs' unpacked source while `nix build .#` was evaluating
+        # it ("path '.../pkgs/development/libraries/qt-6' does not exist").
+        #
+        # So every flake input source that `nix flake archive` reports gets an
+        # indirect root before evaluation starts, and the result gets one via
+        # --out-link: the package job's `nix build .#` then finds it in the
+        # store instead of recompiling. Roots are replaced run to run; the rm
+        # also clears the dev-shell profile this job used before it built in
+        # Nix.
+        run: |
+          set -euo pipefail
+          ROOTS="$HOME/Library/Caches/tbc-tools-selfhosted/gcroots"
+          mkdir -p "$ROOTS"
+          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link "$ROOTS"/flake-input-* "$ROOTS"/result
+          n=0
+          for path in $(nix flake archive --json | grep -o '"path":"[^"]*"' | cut -d'"' -f4); do
+            nix-store --add-root "$ROOTS/flake-input-$n" --realise "$path" > /dev/null
+            n=$((n + 1))
+          done
+          echo "Rooted $n flake input sources"
+          nix build .# --out-link "$ROOTS/result" -L
+
+  package:
+    name: Package tbc-tools (arm64, air0)
+    needs: test
+    runs-on: [self-hosted, macOS, ARM64, air0]
+    timeout-minutes: 60
+    # Never in a deploy: the deploy installs the Nix build, not the DMG. The
+    # fork guard repeats `test`'s so this job cannot run on its own.
+    if: >-
+      ${{ !inputs.from_deploy
+          && github.event_name != 'push'
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository) }}
+
+    steps:
       - name: Reset stale build state
         # Before checkout: parts of a previous run's dist/ were copied out of
         # the Nix store read-only, which checkout's clean chokes on. Harmless
@@ -149,7 +216,6 @@ jobs:
         run: git fetch --tags --prune --prune-tags --force origin
 
       - name: Provision build tools from nixpkgs
-        if: ${{ !inputs.from_deploy }}
         # Replaces actions/setup-python@v6 and `brew install create-dmg`.
         # --out-link rather than --no-link keeps them as GC roots, so Nix's
         # auto-GC cannot collect the interpreter out from under the venv
@@ -163,45 +229,9 @@ jobs:
           echo "$TOOLS/create-dmg/bin" >> "$GITHUB_PATH"
           echo "PYTHON311=$TOOLS/python311/bin/python3.11" >> "$GITHUB_ENV"
 
-      - name: Pin the dev shell against GC
-        # determinate-nixd's automatic GC runs every two hours on air0 and
-        # deletes any store path without a GC root, and `nix develop -c`
-        # creates none. On 2026-09-15 (PR #30) it deleted the devShell's scipy,
-        # matplotlib, tqdm and pyzmq 58 s before ctest's teletext test ran. A
-        # dev profile is a GC root for the shell's whole closure; the
-        # `nix develop` calls in run_local_ci_parity.sh evaluate the same shell.
-        # Old generations are removed first so only this run's shell is pinned.
-        # No from_deploy guard: the next step runs in deploys too.
-        #
-        # The profile roots the shell's outputs but not the flake's input
-        # sources (the unpacked nixpkgs trees every evaluation reads). On
-        # 2026-09-28 (PR #43), with air0's disk 95% full, a pressure GC at
-        # 13:27:13 deleted nixpkgs' source while `nix build .#` was evaluating
-        # it ("path '.../pkgs/development/libraries/qt-6' does not exist").
-        # `nix flake archive` fetches every input; each path it reports gets
-        # an indirect root here, replaced run to run like the shell's. They
-        # are rooted before `nix develop`, whose own evaluation reads them: a
-        # rerun of #43 lost nixpkgs' mkshell to the same GC inside it.
-        run: |
-          set -euo pipefail
-          ROOTS="$HOME/Library/Caches/tbc-tools-selfhosted/gcroots"
-          mkdir -p "$ROOTS"
-          rm -f "$ROOTS"/devshell "$ROOTS"/devshell-*-link "$ROOTS"/flake-input-*
-          n=0
-          for path in $(nix flake archive --json | grep -o '"path":"[^"]*"' | cut -d'"' -f4); do
-            nix-store --add-root "$ROOTS/flake-input-$n" --realise "$path" > /dev/null
-            n=$((n + 1))
-          done
-          nix develop --profile "$ROOTS/devshell" -c true
-          echo "Pinned $n flake input sources and the dev shell"
-
-      - name: Build and test (CMake + Ninja + ctest)
-        # The hosted macOS job does not run ctest at all; the fleet should.
-        run: bash ci/run_local_ci_parity.sh --build-test-only
-
-
       - name: Build with Nix
-        if: ${{ !inputs.from_deploy }}
+        # A store hit: `test` built this exact derivation on this box and
+        # rooted it.
         run: |
           nix build .#
           mkdir -p dist/bin
@@ -265,7 +295,6 @@ jobs:
           fi
 
       - name: Get version info
-        if: ${{ !inputs.from_deploy }}
         id: version
         run: |
           if [ -n "${{ inputs.release_tag }}" ]; then
@@ -276,7 +305,6 @@ jobs:
 
 
       - name: Create app bundle structure
-        if: ${{ !inputs.from_deploy }}
         run: |
           mkdir -p dist/tbc-tools.app/Contents/{Resources,MacOS,Frameworks,PlugIns,share}
 
@@ -355,7 +383,6 @@ jobs:
 
 
       - name: Build self-contained tbc-video-export (PyInstaller)
-        if: ${{ !inputs.from_deploy }}
         # Replace the CMake bash wrapper (which execs a *host* Python with host
         # site-packages) with a PyInstaller --onefile Mach-O binary that bundles
         # the interpreter and all deps.
@@ -375,8 +402,19 @@ jobs:
             rm -rf "$VENV"
             "$PYTHON311" -m venv "$VENV"
           fi
-          "$VENV/bin/python" -m pip install --upgrade pip
-          "$VENV/bin/python" -m pip install pyinstaller dunamai
+          # The venv persists outside the workspace. Reinstalling pip, pyinstaller
+          # and dunamai on every run re-resolved the same versions from PyPI;
+          # the stamp skips that until the set changes or a new ISO week starts,
+          # so unpinned versions still move forward weekly. A recreated venv has
+          # no stamp.
+          WANT="pip pyinstaller dunamai $(date +%G-W%V)"
+          if [ "$(cat "$VENV/.tbc-requirements" 2>/dev/null)" != "$WANT" ]; then
+            "$VENV/bin/python" -m pip install --upgrade pip
+            "$VENV/bin/python" -m pip install --upgrade pyinstaller dunamai
+            echo "$WANT" > "$VENV/.tbc-requirements"
+          else
+            echo "PyInstaller venv current ($WANT); skipping pip"
+          fi
           EXPORTER_ROOT="$GITHUB_WORKSPACE/src/tbc-video-export"
           export PYTHONPATH="$EXPORTER_ROOT/src"
           cd "$EXPORTER_ROOT"
@@ -393,7 +431,6 @@ jobs:
           echo "Bundled self-contained tbc-video-export PyInstaller binary"
 
       - name: Verify app executable architecture
-        if: ${{ !inputs.from_deploy }}
         # The hosted job branches on matrix.arch; air0 is Apple Silicon only.
         run: |
           BIN="dist/tbc-tools.app/Contents/MacOS/tbc-analyse"
@@ -412,7 +449,6 @@ jobs:
 
 
       - name: Bundle Python deps (numpy)
-        if: ${{ !inputs.from_deploy }}
         # The hosted job assumes `/usr/bin/python3 -m pip` works. On a personal
         # Mac that pip can be absent or externally managed, so fall back to the
         # PyInstaller venv. The bundled test-decode-pretbc shim still execs
@@ -427,7 +463,20 @@ jobs:
           if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
             PYTHON_BIN="$VENV/bin/python"
           fi
-          "$PYTHON_BIN" -m pip install --target "$PY_DIR" numpy
+          # numpy must match the interpreter that runs it on the END USER's Mac
+          # (/usr/bin/python3 when its pip works here), so the cache is keyed on
+          # that interpreter's version and the arch, and refreshed weekly.
+          PYVER="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+          NUMPY_CACHE="$HOME/Library/Caches/tbc-tools-selfhosted/numpy-$PYVER-$(uname -m)"
+          WANT="numpy $(date +%G-W%V)"
+          if [ "$(cat "$NUMPY_CACHE/.tbc-requirements" 2>/dev/null)" != "$WANT" ]; then
+            rm -rf "$NUMPY_CACHE"
+            "$PYTHON_BIN" -m pip install --target "$NUMPY_CACHE" numpy
+            echo "$WANT" > "$NUMPY_CACHE/.tbc-requirements"
+          else
+            echo "numpy cache current for Python $PYVER ($WANT)"
+          fi
+          rsync -a --exclude .tbc-requirements "$NUMPY_CACHE/" "$PY_DIR/"
 
           SCRIPT="$APP/Contents/MacOS/test-decode-pretbc"
           if [ -f "$SCRIPT" ] && [ ! -f "$SCRIPT.py" ]; then
@@ -449,7 +498,6 @@ jobs:
 
 
       - name: Create app icon
-        if: ${{ !inputs.from_deploy }}
         run: |
           ICONSET_ROOT="$(mktemp -d)"
           ICONSET="$ICONSET_ROOT/tbc-analyse.iconset"
@@ -472,7 +520,6 @@ jobs:
           iconutil -c icns "$ICONSET" -o dist/tbc-tools.app/Contents/Resources/tbc-tools.icns
 
       - name: Bundle Qt plugins and qt.conf
-        if: ${{ !inputs.from_deploy }}
         run: |
           mkdir -p dist/tbc-tools.app/Contents/PlugIns
           
@@ -500,175 +547,17 @@ jobs:
 
 
       - name: Bundle dependencies
-        if: ${{ !inputs.from_deploy }}
+        # Copies every /nix/store dylib and framework into Contents/Frameworks
+        # and rewrites load commands and rpaths; see the script's header.
         shell: bash
-        run: |
-          APP="dist/tbc-tools.app"
-          FW_DIR="$APP/Contents/Frameworks"
-          PLUGINS_DIR="$APP/Contents/PlugIns"
-
-          mkdir -p "$FW_DIR" "$PLUGINS_DIR"
-          chmod -R u+w "$APP/Contents" 2>/dev/null || true
-
-          is_macho() {
-            file "$1" 2>/dev/null | grep -q "Mach-O"
-          }
-
-          dep_unique_name() {
-            local dep="$1"
-            if [[ "$dep" == /nix/store/* ]]; then
-              local store_entry
-              store_entry=$(echo "$dep" | sed -E 's|^/nix/store/([^/]+)/.*$|\1|')
-              local store_hash
-              store_hash=$(echo "$store_entry" | sed -E 's|^([^-]+)-.*$|\1|')
-              echo "${store_hash}_$(basename "$dep")"
-            else
-              echo "$(basename "$dep")"
-            fi
-          }
-
-          newref_for_dep() {
-            local dep="$1"
-            if [[ "$dep" == *".framework/"* ]]; then
-              local framework_root
-              framework_root=$(echo "$dep" | sed -E "s|(.*\\.framework)/.*|\\1|")
-              local framework_name
-              framework_name=$(basename "$framework_root")
-              local version
-              version=$(echo "$dep" | sed -E "s|.*\\.framework/Versions/([^/]+)/.*|\\1|")
-              local bin_name
-              bin_name=$(basename "$dep")
-              echo "@rpath/$framework_name/Versions/$version/$bin_name"
-            else
-              local unique_name
-              unique_name=$(dep_unique_name "$dep")
-              echo "@rpath/$unique_name"
-            fi
-          }
-
-          copy_dep() {
-            local dep="$1"
-            if [[ "$dep" == *".framework/"* ]]; then
-              local framework_root
-              framework_root=$(echo "$dep" | sed -E "s|(.*\\.framework)/.*|\\1|")
-              local framework_name
-              framework_name=$(basename "$framework_root")
-              local version
-              version=$(echo "$dep" | sed -E "s|.*\\.framework/Versions/([^/]+)/.*|\\1|")
-              local bin_name
-              bin_name=$(basename "$dep")
-              local target="$FW_DIR/$framework_name/Versions/$version/$bin_name"
-
-              if [ ! -f "$target" ]; then
-                rsync -a "$framework_root" "$FW_DIR/"
-                chmod -R u+w "$FW_DIR/$framework_name" || true
-              fi
-
-              install_name_tool -id "@rpath/$framework_name/Versions/$version/$bin_name" "$target" 2>/dev/null || true
-              echo "$target"
-            else
-              local unique_name
-              unique_name=$(dep_unique_name "$dep")
-              local target="$FW_DIR/$unique_name"
-              if [ ! -f "$target" ]; then
-                cp "$dep" "$target" 2>/dev/null || true
-                chmod u+w "$target" 2>/dev/null || true
-              fi
-              install_name_tool -id "@rpath/$unique_name" "$target" 2>/dev/null || true
-              echo "$target"
-            fi
-          }
-
-          add_rpaths() {
-            local file="$1"
-            install_name_tool -add_rpath "@executable_path/../Frameworks" "$file" 2>/dev/null || true
-            install_name_tool -add_rpath "@loader_path/../Frameworks" "$file" 2>/dev/null || true
-            install_name_tool -add_rpath "@loader_path/../../Frameworks" "$file" 2>/dev/null || true
-          }
-
-          delete_nix_rpaths() {
-            local file="$1"
-            local rpaths
-            rpaths=$(otool -l "$file" 2>/dev/null | awk '/LC_RPATH/{getline;getline;print $2}' || true)
-            for rp in $rpaths; do
-              if [[ "$rp" == /nix/store/* ]]; then
-                install_name_tool -delete_rpath "$rp" "$file" 2>/dev/null || true
-              fi
-            done
-          }
-
-          process_file() {
-            local file="$1"
-            is_macho "$file" || return 0
-
-            chmod u+w "$file" 2>/dev/null || true
-            add_rpaths "$file"
-            delete_nix_rpaths "$file"
-
-            local deps
-            deps=$(otool -L "$file" 2>/dev/null | tail -n +2 | awk "{print \$1}" || true)
-            for dep in $deps; do
-              local store_dep=""
-              case "$dep" in
-                # Keep runtime dependency capture strictly in Nix store paths.
-                # Mixing host Homebrew dylibs with Nix dylibs can cause ABI
-                # mismatches (for example libidn2 expecting GNU libiconv symbols
-                # while a different host libiconv is bundled first).
-                /nix/store/*)
-                  store_dep="$dep"
-                  ;;
-              esac
-              if [ -n "$store_dep" ]; then
-                local target
-                target=$(copy_dep "$store_dep")
-                local newref
-                newref=$(newref_for_dep "$store_dep")
-                install_name_tool -change "$dep" "$newref" "$file" 2>/dev/null || true
-                [ -n "$target" ] && QUEUE+=("$target")
-              fi
-            done
-          }
-
-          QUEUE=()
-          while IFS= read -r -d '' f; do QUEUE+=("$f"); done < <(find "$APP/Contents/MacOS" -type f -print0)
-          while IFS= read -r -d '' f; do QUEUE+=("$f"); done < <(find "$FW_DIR" -type f -print0)
-          if [ -d "$PLUGINS_DIR" ]; then
-            while IFS= read -r -d '' f; do QUEUE+=("$f"); done < <(find "$PLUGINS_DIR" -type f -print0)
-          fi
-
-          SEEN_FILE=$(mktemp)
-          while [ ${#QUEUE[@]} -gt 0 ]; do
-            file="${QUEUE[0]}"
-            QUEUE=("${QUEUE[@]:1}")
-            if grep -Fxq "$file" "$SEEN_FILE"; then
-              continue
-            fi
-            echo "$file" >> "$SEEN_FILE"
-            process_file "$file"
-          done
-          rm -f "$SEEN_FILE"
-
-          if [ -d "$FW_DIR" ]; then
-            while IFS= read -r -d '' lib; do
-              is_macho "$lib" || continue
-              chmod u+w "$lib" 2>/dev/null || true
-              rel="${lib#$FW_DIR/}"
-              if [[ "$rel" == *.framework/* ]]; then
-                install_name_tool -id "@rpath/$rel" "$lib" 2>/dev/null || true
-              else
-                install_name_tool -id "@rpath/$(basename "$lib")" "$lib" 2>/dev/null || true
-              fi
-            done < <(find "$FW_DIR" -type f -print0)
-          fi
+        run: bash ci/macos_bundle_dependencies.sh dist/tbc-tools.app
 
 
       - name: Codesign app bundle (ad-hoc)
-        if: ${{ !inputs.from_deploy }}
         run: |
           codesign --force --deep --sign - "dist/tbc-tools.app"
 
       - name: Verify app bundle
-        if: ${{ !inputs.from_deploy }}
         run: |
           echo "App bundle contents:"
           find dist/tbc-tools.app -type f | head -20
@@ -831,7 +720,6 @@ jobs:
           fi
 
       - name: Create DMG
-        if: ${{ !inputs.from_deploy }}
         run: |
           create-dmg \
             --volname "TBC Tools ${{ steps.version.outputs.version }}" \
@@ -848,7 +736,6 @@ jobs:
             "dist/tbc-tools.app"
 
       - name: Upload binary artifact
-        if: ${{ !inputs.from_deploy }}
         uses: actions/upload-artifact@v7
         with:
           # Named for the full source tree, so the deploy's plan job can find a

@@ -16,6 +16,7 @@ WIN_CUDA_RUNTIME_SCRIPT = ROOT / "scripts/windows-cuda-runtime.sh"
 CUDA_PLUGIN_PUBLISH_WORKFLOW = ROOT / ".github/workflows/publish_cuda_plugin.yml"
 SELF_HOSTED_LINUX_WORKFLOW = ROOT / ".github/workflows/self-hosted-linux.yml"
 SELF_HOSTED_MACOS_WORKFLOW = ROOT / ".github/workflows/self-hosted-macos.yml"
+MACOS_BUNDLE_DEPENDENCIES_SCRIPT = ROOT / "ci/macos_bundle_dependencies.sh"
 SELF_HOSTED_WINDOWS_WORKFLOW = ROOT / ".github/workflows/self-hosted-windows.yml"
 SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
 FLEET_DEPLOY_HOST_SCRIPT = ROOT / "ci/deploy_fleet_host.sh"
@@ -264,7 +265,15 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     "workflow_call:",
     "permissions:\n  contents: read",
     "git fetch --tags --prune --prune-tags --force origin",
-    "bash ci/run_local_ci_parity.sh --build-test-only",
+    # One compile: the test job builds (and ctest runs inside that build, see
+    # FLAKE_CHECK_REQUIRED_SNIPPETS) on air0's dedicated test runner, and the
+    # package job waits for it and reuses the GC-rooted store path.
+    "runs-on: [self-hosted, air0-test]",
+    'nix build .# --out-link "$ROOTS/result"',
+    "needs: test",
+    # The test job clones shallow: the Nix build reads only the tree, and full
+    # history is 6.8 GB (a fresh air0-test workspace took 40 min to clone it).
+    "fetch-depth: 1",
     # ffmpeg must come from the flake's pinned nixpkgs, not the live channel --
     # same reasoning as the hosted job's MACOS_REQUIRED_SNIPPETS entry.
     "nix build .#ffmpeg^bin",
@@ -274,6 +283,14 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # air0 runs macOS 26, the version the hosted job pins away from. Printing
     # sw_vers first keeps a future Qt uic regression at the top of the log.
     "sw_vers",
+    # The bundle rewrite lives in a script the guardrails can parse-check
+    # (bash 3.2 safe: macOS /bin/bash).
+    "bash ci/macos_bundle_dependencies.sh dist/tbc-tools.app",
+)
+# The dev-shell CMake build compiled everything a second time just to run
+# ctest; it must not come back into the macOS workflow.
+SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS = (
+    "run_local_ci_parity.sh",
 )
 SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # Path-gated triggers: one box per OS, so a docs-only change must not
@@ -442,6 +459,9 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     "- wm-light",
     "- air0",
     "- air0-light",
+    # air0's dedicated test runner (--no-default-labels): tbc-tools' macOS
+    # compile + ctest, so the main air0 runner only packages.
+    "- air0-test",
     "- win0",
 )
 # The light jobs are pinned to wm-light. On the main `wm` runner, a seven-second
@@ -553,6 +573,22 @@ FLAKE_QT_REQUIRED_SNIPPETS = (
 )
 FLAKE_QT_FORBIDDEN_SNIPPETS = (
     "pkgs = if isLinux then legacyPkgs else pkgsUnstable;",
+)
+# ctest runs inside the package build, so what the tests exercise is what gets
+# deployed (Darwin only until the Linux sandbox failure is fixed; the marker
+# below survives that change). A sync must not drop it.
+FLAKE_CHECK_REQUIRED_SNIPPETS = (
+    "doCheck = !withCuda",
+    # nixpkgs' cmake hook otherwise exports CTEST_PARALLEL_LEVEL, and the
+    # decode tests share testout/ and corrupt each other in parallel.
+    "enableParallelChecking = false;",
+    # The teletext test runs Python from the source tree, which installPhase
+    # copies after the check: bytecode caches would ship in the package (and
+    # the macOS bundle verifier rejects them).
+    "export PYTHONDONTWRITEBYTECODE=1",
+    "patchShebangs scripts",
+    "patchShebangs bin",
+    "ctest --output-on-failure",
 )
 
 # The GUIs use Qt's own Fusion theme (tbc::ui::applyFusionTheme): the Fusion
@@ -813,6 +849,7 @@ def main() -> int:
         CUDA_PLUGIN_PACKAGE_SCRIPT,
         SELF_HOSTED_LINUX_WORKFLOW,
         SELF_HOSTED_MACOS_WORKFLOW,
+        MACOS_BUNDLE_DEPENDENCIES_SCRIPT,
         SELF_HOSTED_WINDOWS_WORKFLOW,
         SELF_HOSTED_DEPLOY_WORKFLOW,
         ACTIONLINT_CONFIG,
@@ -850,6 +887,8 @@ def main() -> int:
         check_contains(SELF_HOSTED_LINUX_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_MACOS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS:
+        check_not_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_WINDOWS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS:
@@ -876,6 +915,8 @@ def main() -> int:
         check_contains(FLAKE_NIX, snippet, errors)
     for snippet in FLAKE_QT_FORBIDDEN_SNIPPETS:
         check_not_contains(FLAKE_NIX, snippet, errors)
+    for snippet in FLAKE_CHECK_REQUIRED_SNIPPETS:
+        check_contains(FLAKE_NIX, snippet, errors)
     for path in THEME_SOURCES:
         for snippet in THEME_FORBIDDEN_SNIPPETS:
             check_not_contains(path, snippet, errors)

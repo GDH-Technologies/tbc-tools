@@ -581,6 +581,8 @@ def run_ld_chroma_decoder(args, decoder):
     cmd += ['--input-metadata', args.output + '.doc.tbc.db']
     if decoder is not None:
         cmd += ['--decoder', decoder]
+    if args.length is not None:
+        cmd += ['--length', str(args.length)]
     cmd += [args.output + '.doc.tbc', rgb_file]
     run_command(cmd)
 
@@ -634,6 +636,8 @@ def main():
                        dest='decoders', default=[],
                        help='use specific tbc-chroma-decoder decoder '
                             '(use more than once to test multiple decoders)')
+    group.add_argument('--length', metavar='N', type=int,
+                       help='have tbc-chroma-decoder decode only the first N frames')
     group = parser.add_argument_group("Sanity checks")
     group.add_argument('--expect-frames', metavar='N', type=int,
                        help='expect at least N frames of video output')

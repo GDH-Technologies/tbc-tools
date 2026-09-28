@@ -229,7 +229,7 @@
           # the code still compiles on Qt 6.8.3, which the upstream-hosted
           # vcpkg Windows job builds against.
           let p = if withCuda then legacyPkgs else pkgs; in
-          p.stdenv.mkDerivation {
+          p.stdenv.mkDerivation ({
             pname = "tbc-tools";
             version = packageVersion;
             src = tbcSrc;
@@ -291,7 +291,54 @@
               "-DCUDAToolkit_ROOT=${cudaPackages.cudatoolkit}"
               "-DCMAKE_CUDA_HOST_COMPILER=${cudaHostCompiler}/bin/g++"
             ];
-          };
+          } // pkgs.lib.optionalAttrs (!withCuda && isDarwin) {
+            # ctest runs inside this build, so the binaries the tests exercise
+            # are the ones that get installed and deployed, and CI compiles once.
+            # Darwin only for now: Linux follows once it is proven on wm. The
+            # attrs are merged in only here so no check attribute reaches the
+            # Linux or CUDA derivations.
+            doCheck = !withCuda && isDarwin;
+            # Serial, and this is what makes it so: nixpkgs' cmake setup hook
+            # exports CTEST_PARALLEL_LEVEL=$NIX_BUILD_CORES unless this is off,
+            # and a bare `ctest` obeys it. The decode and chroma tests all
+            # write testout/test, and in parallel they corrupt each other's
+            # SQLite files; testconfiguration's settings checks race too.
+            enableParallelChecking = false;
+            nativeCheckInputs = [
+              # scripts/test-* and the vendored vhs-teletext tree need these.
+              (p.python3.withPackages (ps: with ps; [
+                numpy scipy matplotlib click tqdm pyzmq watchdog typing-extensions
+              ]))
+              # scripts/test-chroma drives ffmpeg directly.
+              p.ffmpeg
+            ];
+            # scripts/test-chroma is `#!/usr/bin/python3`, which a Nix build
+            # does not have.
+            postPatch = ''
+              patchShebangs scripts
+            '';
+            # CMake configures build/bin/tbc-video-export with an /usr/bin/env
+            # shebang, and the Qt tests write settings under the home
+            # directory. On macOS QStandardPaths asks Foundation, which takes
+            # the build user's account home (/var/empty, read-only for
+            # _nixbld) rather than $HOME -- testconfiguration's writes then
+            # vanish -- unless CFFIXED_USER_HOME overrides it. The teletext
+            # test runs Python straight from the source tree, which
+            # installPhase copies after this phase, so no bytecode may be
+            # written or __pycache__ ships in the package.
+            preCheck = ''
+              export HOME=$TMPDIR
+              export CFFIXED_USER_HOME=$TMPDIR
+              export PYTHONDONTWRITEBYTECODE=1
+              patchShebangs bin
+            '';
+            # Serial (see enableParallelChecking above).
+            checkPhase = ''
+              runHook preCheck
+              ctest --output-on-failure
+              runHook postCheck
+            '';
+          });
       in
       assert pkgs.lib.assertMsg
         (!enableCuda || pkgs.lib.versionAtLeast cudaPackages.cudatoolkit.version "11.8")
