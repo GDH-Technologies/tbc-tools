@@ -6555,14 +6555,65 @@ void MainWindow::runRfSegmentExport(bool interactive)
     if (flacChopPath.isEmpty()) {
         flacChopPath = resolveExternalExecutable({QStringLiteral("flac-chop")});
     }
-    if (flacChopPath.isEmpty()) {
-        const QString message = tr("FLAC-Chop was not found beside the application or in PATH.\n"
-                                   "Install FLAC-Chop or configure its path and try again.");
-        if (interactive) {
-            QMessageBox::warning(this, tr("Export source RF segment"), message);
-        } else {
-            statusBar()->showMessage(message, 5000);
+    if (flacChopPath.isEmpty() && interactive) {
+        // Self-contained installs put flac-chop beside the application or in
+        // PATH; when it is not found anywhere, prompt for its location,
+        // validate the pick, and save it persistently so the background
+        // save-all-PNGs RF export can use it too.
+        QString pickDirectory = QCoreApplication::applicationDirPath();
+        if (pickDirectory.isEmpty() || !QFileInfo::exists(pickDirectory)) {
+            pickDirectory = QDir::homePath();
         }
+        for (;;) {
+            const QString pickedPath = QFileDialog::getOpenFileName(
+                this,
+                tr("Locate the FLAC-Chop binary (flac-chop)"),
+                pickDirectory,
+                tr("FLAC-Chop (flac-chop*);;All files (*)"));
+            if (pickedPath.isEmpty()) {
+                return; // user cancelled the prompt
+            }
+            if (!isRunnableExecutableFile(pickedPath)) {
+                QMessageBox::warning(this, tr("Export source RF segment"),
+                                     tr("The selected file is not a runnable executable:\n%1")
+                                         .arg(pickedPath));
+                pickDirectory = QFileInfo(pickedPath).absolutePath();
+                continue;
+            }
+            // The binary must identify itself as FLAC-Chop (--version exits 0
+            // with the FLAC-Chop banner), so a wrong pick is rejected here
+            // instead of failing later with a confusing probe error.
+            QProcess versionProcess;
+            versionProcess.start(pickedPath, {QStringLiteral("--version")});
+            const bool versionOk = versionProcess.waitForStarted(10000)
+                                       && versionProcess.waitForFinished(10000)
+                                       && versionProcess.exitStatus() == QProcess::NormalExit
+                                       && versionProcess.exitCode() == 0
+                                       && QString::fromUtf8(versionProcess.readAllStandardOutput())
+                                              .startsWith(QLatin1String("FLAC-Chop"));
+            if (!versionOk) {
+                if (versionProcess.state() != QProcess::NotRunning) {
+                    versionProcess.kill();
+                    versionProcess.waitForFinished(5000);
+                }
+                QMessageBox::warning(this, tr("Export source RF segment"),
+                                     tr("The selected file is not FLAC-Chop (no valid --version response):\n%1")
+                                         .arg(pickedPath));
+                pickDirectory = QFileInfo(pickedPath).absolutePath();
+                continue;
+            }
+            flacChopPath = pickedPath;
+            configuration.setRfExportFlacChopPath(flacChopPath);
+            configuration.writeConfiguration();
+            statusBar()->showMessage(tr("FLAC-Chop location saved: %1").arg(flacChopPath), 5000);
+            break;
+        }
+    }
+    if (flacChopPath.isEmpty()) {
+        statusBar()->showMessage(tr("RF segment export skipped: FLAC-Chop was not found."
+                                    " Use 'Export source RF segment for frame...' once to locate it;"
+                                    " the location is saved for future exports."),
+                                 5000);
         return;
     }
 
