@@ -554,6 +554,15 @@ FLAKE_QT_REQUIRED_SNIPPETS = (
 FLAKE_QT_FORBIDDEN_SNIPPETS = (
     "pkgs = if isLinux then legacyPkgs else pkgsUnstable;",
 )
+# ctest runs inside the package build, so what the tests exercise is what gets
+# deployed (Darwin only until the Linux sandbox failure is fixed; the marker
+# below survives that change). A sync must not drop it.
+FLAKE_CHECK_REQUIRED_SNIPPETS = (
+    "doCheck = !withCuda",
+    "patchShebangs scripts",
+    "patchShebangs bin",
+    "ctest --output-on-failure",
+)
 
 # The GUIs use Qt's own Fusion theme (tbc::ui::applyFusionTheme): the Fusion
 # style and a colour-scheme request, with Qt's palette unmodified. The fork
@@ -876,6 +885,8 @@ def main() -> int:
         check_contains(FLAKE_NIX, snippet, errors)
     for snippet in FLAKE_QT_FORBIDDEN_SNIPPETS:
         check_not_contains(FLAKE_NIX, snippet, errors)
+    for snippet in FLAKE_CHECK_REQUIRED_SNIPPETS:
+        check_contains(FLAKE_NIX, snippet, errors)
     for path in THEME_SOURCES:
         for snippet in THEME_FORBIDDEN_SNIPPETS:
             check_not_contains(path, snippet, errors)

@@ -544,6 +544,18 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS,
         )
 
+    def test_flake_contract_requires_ctest_inside_the_darwin_build(self) -> None:
+        # ctest runs inside `nix build .#`, so the binaries it exercises are the
+        # ones that get deployed. A sync that drops these lines would silently
+        # ship an untested build.
+        for snippet in (
+            "doCheck = !withCuda",
+            "patchShebangs scripts",
+            "patchShebangs bin",
+            "ctest --output-on-failure",
+        ):
+            self.assertIn(snippet, check_ci_contracts.FLAKE_CHECK_REQUIRED_SNIPPETS)
+
     def test_actionlint_config_declares_every_fleet_label(self) -> None:
         # actionlint knows only the GitHub-hosted labels plus the generic
         # self-hosted ones, so an undeclared fleet label fails the guardrails
