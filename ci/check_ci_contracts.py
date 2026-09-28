@@ -346,7 +346,15 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # the "PR build set == redeploy set" claim in each file's own trigger
     # comment is merely stated, not enforced.
     '".gdh-version"',
-    "runs-on: [self-hosted, Windows, X64, win0]",
+    # The whole job runs on win0's dedicated test runner (no split: its ctest
+    # takes seconds), leaving the main win0 runner to deploys and other repos.
+    "runs-on: [self-hosted, win0-test]",
+    # Both the ref every other platform builds (a moving merge ref could change
+    # the tree mid-run) and a partial clone: full history and tags for git
+    # describe and gdh_version.py, file contents only for HEAD, instead of
+    # 6.8 GB of old blobs on a fresh runner's first checkout.
+    "ref: ${{ inputs.checkout_ref || github.sha }}",
+    "filter: blob:none",
     "workflow_call:",
     # The freeze regression test: the built binary must report the version
     # the checkout resolves (the reused build directory once kept its first).
@@ -390,14 +398,30 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # the toolchain; see "Choose the persistent build directory".
     'ctest --test-dir "$env:BUILD_DIR" -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"',
     "Choose the persistent build directory",
-    # The deploy job installs from this workspace when this stamp matches the
-    # tree being deployed, and otherwise downloads the tree-named artifact.
+    # The stamp is the deploy's proof that the artifact it downloads was built
+    # from the tree being deployed. upload-artifact drops dot-files unless
+    # told otherwise, and without it every Windows deploy was refused.
     "release\\.build-tree",
+    "include-hidden-files: true",
     # Named for the full source tree, which is how the deploy's plan job finds
     # a reusable build of exactly that source.
     "selfhosted_tbc-tools_windows_x86_64-${{ env.SOURCE_TREE }}",
 )
+# The main win0 runner no longer builds tbc-tools; a deploy-driven build on
+# win0-test must still package, stamp and upload, because that artifact is
+# what the deploy installs.
+SELF_HOSTED_WINDOWS_FORBIDDEN_SNIPPETS = (
+    "runs-on: [self-hosted, Windows, X64, win0]",
+    "inputs.checkout_ref || github.ref",
+    "if: ${{ !inputs.from_deploy }}",
+)
 SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
+    # The install is per-user on win0, from the tree-named artifact, unpacked
+    # into a cleared directory (download-artifact extracts on top of whatever an
+    # earlier deploy left) and refused unless stamped with the deployed tree.
+    "runs-on: [self-hosted, Windows, X64, win0]",
+    "Remove-Item -Recurse -Force incoming",
+    "Refusing to deploy: $src was not built from tree",
     "uses: ./.github/workflows/self-hosted-linux.yml",
     "uses: ./.github/workflows/self-hosted-macos.yml",
     "uses: ./.github/workflows/self-hosted-windows.yml",
@@ -512,6 +536,8 @@ ACTIONLINT_CONFIG_REQUIRED_SNIPPETS = (
     # wm's dedicated test runner: tbc-tools' Linux compile + ctest.
     "- wm-test",
     "- win0",
+    # win0's dedicated test runner: tbc-tools' whole Windows CI job.
+    "- win0-test",
 )
 # The light jobs are pinned to wm-light. On the main `wm` runner, a seven-second
 # guardrails run queued for minutes behind the PR's own build.
@@ -615,6 +641,9 @@ SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS = (
     "- '!",
     # Neither platform build runs the dev-shell parity build any more.
     "- 'ci/run_local_ci_parity.sh'",
+    # No Windows build runs in win0's workspace any more, so the deploy never
+    # looks there: it always installs the tree-named artifact.
+    "source=workspace",
 )
 # A dispatch selects its platforms from the input: through env, never
 # interpolated into the script, and matched as whole comma-separated names (so
@@ -738,8 +767,8 @@ THEME_FORBIDDEN_SNIPPETS = (
 #   - it has not expired;
 #   - it came from a run in this repository, never from a fork;
 #   - that run succeeded, which means it built and passed ctest on this tree.
-# win0 also re-checks the .build-tree stamp inside what it installs, before
-# the swap.
+# win0 also re-checks the .build-tree stamp inside the artifact it installs,
+# before the swap.
 SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS = (
     "TREE=\"$(git rev-parse 'HEAD^{tree}')\"",
     ".expired == false",
@@ -1009,6 +1038,8 @@ def main() -> int:
         check_not_contains(SELF_HOSTED_MACOS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_WINDOWS_WORKFLOW, snippet, errors)
+    for snippet in SELF_HOSTED_WINDOWS_FORBIDDEN_SNIPPETS:
+        check_not_contains(SELF_HOSTED_WINDOWS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS:

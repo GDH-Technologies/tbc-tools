@@ -657,33 +657,15 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Locate the packaged tree
-        id: locate
-        # Prefer a release already in this workspace. It is on this machine,
-        # and round-tripping a few hundred megabytes through the artifact store
-        # is pure waste. That release is this run's build output, or on "reuse"
-        # often the PR run's own output, left in the same workspace. The
-        # .build-tree stamp is what makes this safe: a workspace that was
-        # cleaned, or holds a build of a different tree, falls through to the
-        # artifact instead of installing the wrong binaries.
-        env:
-          DEPLOY_TREE: ${{ needs.detect.outputs.tree }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = Join-Path $env:GITHUB_WORKSPACE 'release'
-          $stamp = Join-Path $ws '.build-tree'
-          if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $env:DEPLOY_TREE)) {
-            Write-Host "Using the release already in the workspace at $ws"
-            "source=workspace" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            "dir=$ws"          | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          } else {
-            Write-Host "Workspace tree absent or stale; falling back to the uploaded artifact."
-            "source=artifact" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            "dir=incoming"    | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          }
+      - name: Clear the download directory
+        # The release always comes from the tree-named artifact: no Windows
+        # build runs in this workspace (tbc-tools builds on win0-test).
+        # download-artifact extracts on top of whatever is already there, and
+        # the swap below copies all of it, so an earlier deploy's files must go
+        # first or they would ship alongside the new ones.
+        run: Remove-Item -Recurse -Force incoming -ErrorAction SilentlyContinue
 
       - name: Download the packaged release
-        if: steps.locate.outputs.source == 'artifact'
         uses: actions/download-artifact@v8
         with:
           name: selfhosted_tbc-tools_windows_x86_64-${{ needs.detect.outputs.tree }}
@@ -694,8 +676,7 @@ jobs:
 
       - name: Swap the installed tree
         env:
-          SRC_DIR: ${{ steps.locate.outputs.dir }}
-          SRC_KIND: ${{ steps.locate.outputs.source }}
+          SRC_DIR: incoming
           DEPLOY_TREE: ${{ needs.detect.outputs.tree }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -707,8 +688,8 @@ jobs:
           if (-not (Test-Path (Join-Path $src 'tbc-analyse.exe'))) {
             throw "Source tree does not look like a tbc-tools release: $src"
           }
-          # Whatever the source, workspace or artifact, it must have been built
-          # from exactly the tree being deployed.
+          # The artifact must have been built from exactly the tree being
+          # deployed: its .build-tree stamp is the proof.
           $treeStamp = Join-Path $src '.build-tree'
           if (-not (Test-Path $treeStamp) -or ((Get-Content $treeStamp -Raw).Trim() -ne $env:DEPLOY_TREE)) {
             throw "Refusing to deploy: $src was not built from tree $env:DEPLOY_TREE"
@@ -751,7 +732,7 @@ jobs:
           # block or pop a window on an interactive session.
           & (Join-Path $dest 'tbc-video-export.exe') --version
 
-          "## win0 deploy`n`nInstalled ``$env:GITHUB_SHA`` to ``$dest`` (source: $env:SRC_KIND)." |
+          "## win0 deploy`n`nInstalled ``$env:GITHUB_SHA`` to ``$dest`` (from the tree-named artifact)." |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
   deploy-fleet:

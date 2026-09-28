@@ -1,4 +1,4 @@
-name: "Self-hosted Windows build (win0)"
+name: "Self-hosted Windows build (win0-test)"
 
 # Fork-exclusive. Native x86_64 build, test and packaging on the GDH WIN-NODE-0
 # box.
@@ -23,6 +23,12 @@ name: "Self-hosted Windows build (win0)"
 # CMakeLists.txt already supports this layout: stage_windows_qt_platform_runtime
 # falls back from the vcpkg <prefix>/Qt6/plugins layout to Qt::Core's imported
 # location, which is where an official Qt keeps its plugins.
+#
+# It runs on win0-test, win0's dedicated test runner, so the main win0 runner
+# stays free for the deploy's install and for other repositories. Unlike Linux
+# and macOS it is one job, not a test/package split: its ctest takes seconds,
+# and a deploy-driven build must package anyway, because the deploy installs
+# the artifact this job uploads.
 #
 # The rest is dictated by what win0 actually is:
 #
@@ -98,7 +104,8 @@ permissions:
 
 concurrency:
   # Not machine-scoped by itself: the key includes the workflow and the ref.
-  # What actually serialises win0's jobs is that it has exactly one runner.
+  # What serialises tbc-tools' Windows builds is that only the win0-test
+  # runner takes them.
   # github.workflow resolves to the CALLER's name under workflow_call, so a
   # deploy-driven build lands in its own group and can never be cancelled by
   # a PR run.
@@ -133,8 +140,11 @@ env:
 
 jobs:
   build:
-    name: Build, test and package tbc-tools (x86_64, win0)
-    runs-on: [self-hosted, Windows, X64, win0]
+    name: Build, test and package tbc-tools (x86_64, win0-test)
+    # win0's dedicated test runner: registered with --no-default-labels, so its
+    # only labels are self-hosted and win0-test. Same box and account as win0,
+    # so C:\ci-tools and its caches are shared.
+    runs-on: [self-hosted, win0-test]
     timeout-minutes: 240
     defaults:
       run:
@@ -318,11 +328,17 @@ jobs:
           Remove-Item -Recurse -Force build, release -ErrorAction SilentlyContinue
 
       - uses: actions/checkout@v5
+        # Full history and tags -- git describe and gdh_version.py need them --
+        # but a partial clone: file contents only for what is checked out. A
+        # fresh runner's full clone is 6.8 GB of mostly old blobs (40 minutes
+        # on air0's link). The ref every platform builds, so a moving merge ref
+        # cannot change the tree mid-run.
         with:
           fetch-depth: 0
           fetch-tags: true
+          filter: blob:none
           submodules: true
-          ref: ${{ inputs.checkout_ref || github.ref }}
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Record the source tree
         # Artifacts and the release stamp are named for the tree they were built
@@ -468,8 +484,10 @@ jobs:
         # objects unusable or the cache inconsistent: the Qt, vcpkg, CMake and
         # MSVC toolset versions, plus the workspace path that CMakeCache.txt
         # records. So a toolchain bump starts a fresh directory instead of mixing
-        # ABIs. Only the current key's directory is kept. This box has one
-        # runner, so no two jobs ever share it at once.
+        # ABIs, and each runner's workspace gets its own. Each run marks its
+        # directory as in use; other keys are removed once unused for a day, so
+        # a run on the other runner of this box (win0 and win0-test share
+        # C:\ci-tools) never has its directory deleted mid-build.
         run: |
           $ErrorActionPreference = 'Stop'
           $toolsetFile = Join-Path $env:VS_INSTALL_PATH 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
@@ -481,7 +499,9 @@ jobs:
           $root = Join-Path $env:TOOLS_ROOT 'build'
           $dir  = Join-Path $root $hash.Substring(0, 16)
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Get-ChildItem -Path $root -Directory | Where-Object { $_.FullName -ne $dir } | ForEach-Object {
+          (Get-Item $dir).LastWriteTime = Get-Date
+          $cutoff = (Get-Date).AddDays(-1)
+          Get-ChildItem -Path $root -Directory | Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt $cutoff } | ForEach-Object {
             Write-Host "Removing stale build directory $($_.FullName)"
             Remove-Item -Recurse -Force $_.FullName
           }
@@ -785,13 +805,11 @@ jobs:
           Write-Host "All required Windows runtime files present."
 
       - name: Stamp the source tree
-        # self-hosted-deploy.yml's win0 job installs straight out of this
-        # workspace when it can, rather than round-tripping a few hundred MB
-        # through the artifact store. This stamp is how it proves the release it
-        # found was built from the tree being deployed. It is the tree, not the
-        # commit: a PR run builds refs/pull/N/merge, whose commit differs from
-        # the merge commit on main while its tree is identical. When the stamp
-        # does not match, that job downloads the tree-named artifact below.
+        # self-hosted-deploy.yml's win0 job installs the artifact uploaded
+        # below, and this stamp is how it proves that artifact was built from
+        # the tree being deployed. It is the tree, not the commit: a PR run
+        # builds refs/pull/N/merge, whose commit differs from the merge commit
+        # on main while its tree is identical.
         run: |
           $env:SOURCE_TREE | Out-File -FilePath release\.build-tree -Encoding ascii -NoNewline
 
@@ -802,5 +820,8 @@ jobs:
           # build of exactly this source by name.
           name: selfhosted_tbc-tools_windows_x86_64-${{ env.SOURCE_TREE }}
           path: release
+          # The .build-tree stamp is a dot-file, which upload-artifact drops by
+          # default -- and without it the deploy refuses every install.
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
