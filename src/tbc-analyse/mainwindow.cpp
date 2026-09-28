@@ -36,7 +36,6 @@
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QStyle>
-#include <QStyleFactory>
 #include <QStyleOptionSlider>
 #include <QSvgRenderer>
 #include <QStringList>
@@ -1277,9 +1276,10 @@ QString chooseFileViaAppleScript(const QString &startPath)
 #endif
 } // namespace
 
-MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidget *parent) :
+MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QString themeChoiceParam, QWidget *parent) :
     QMainWindow(parent),
-    ui(new Ui::MainWindow)
+    ui(new Ui::MainWindow),
+    themeChoice(themeChoiceParam)
 {
     ui->setupUi(this);
 
@@ -1708,10 +1708,6 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     resizeFrameWithWindow = configuration.getResizeFrameWithWindow();
     ui->actionResizeFrameWithWindow->setChecked(resizeFrameWithWindow);
 
-    // Store the current button palette for the show dropouts button
-    // Use application palette to ensure it respects theme settings
-    buttonPalette = QApplication::palette();
-
     // Initialize playback timer
     playbackTimer = new QTimer(this);
     playbackTimer->setSingleShot(true);
@@ -1857,153 +1853,58 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
+// Qt's own Fusion palette in the chosen colour scheme. The choice is saved;
+// the --light-theme/--force-dark-theme options only override it for one
+// session. Qt repaints every widget itself on the resulting palette change.
+// There is deliberately no "follow the desktop" choice: with Nix's Qt on GNOME
+// the platform theme reports the GTK theme's scheme rather than GNOME's
+// color-scheme setting, so it would not follow the desktop anyway.
 void MainWindow::populateThemesMenu()
 {
-    if (!ui || !ui->menuThemes) {
-        return;
-    }
+    themesActionGroup = new QActionGroup(this);
+    themesActionGroup->setExclusive(true);
 
-    if (!themesActionGroup) {
-        themesActionGroup = new QActionGroup(this);
-        themesActionGroup->setExclusive(true);
-    }
-
-    const QList<QAction *> existingActions = themesActionGroup->actions();
-    for (QAction *action : existingActions) {
-        themesActionGroup->removeAction(action);
-    }
-    ui->menuThemes->clear();
-
-    QStringList availableThemes = QStyleFactory::keys();
-    availableThemes.removeDuplicates();
-    availableThemes.sort(Qt::CaseInsensitive);
-
-    // Dedicated stock theme presets at the top of the dropdown. Dark is the
-    // standard default; Light is a manual opt-in. Both drive the absolute
-    // Fusion palette via ThemedApplication and are re-asserted across macOS
-    // appearance switches. Exclusive with the Qt-style actions below.
-    QAction *darkAction = ui->menuThemes->addAction(tr("Dark"));
-    darkAction->setCheckable(true);
-    darkAction->setData(QStringLiteral("stock-dark"));
-    themesActionGroup->addAction(darkAction);
-    connect(darkAction, &QAction::triggered, this, [this, darkAction](bool checked) {
-        if (!checked) {
-            return;
-        }
-        tbc::ui::applyStockDarkThemeToApp();
-        refreshThemeDependentUi();
-        // Mirror the user's successful "second press" behavior: re-apply once
-        // on a short delay so late-resolving widgets (cached scope renders,
-        // scene-backed controls) settle fully in one user click.
-        QTimer::singleShot(24, this, [this, darkAction]() {
-            if (!darkAction->isChecked()) {
-                return;
-            }
-            tbc::ui::applyStockDarkThemeToApp();
-            refreshThemeDependentUi();
-        });
-    });
-
-    QAction *lightAction = ui->menuThemes->addAction(tr("Light"));
-    lightAction->setCheckable(true);
-    lightAction->setData(QStringLiteral("stock-light"));
-    themesActionGroup->addAction(lightAction);
-    connect(lightAction, &QAction::triggered, this, [this, lightAction](bool checked) {
-        if (!checked) {
-            return;
-        }
-        tbc::ui::applyStockLightThemeToApp();
-        refreshThemeDependentUi();
-        QTimer::singleShot(24, this, [this, lightAction]() {
-            if (!lightAction->isChecked()) {
-                return;
-            }
-            tbc::ui::applyStockLightThemeToApp();
-            refreshThemeDependentUi();
-        });
-    });
-
-    ui->menuThemes->addSeparator();
-
-    if (availableThemes.isEmpty()) {
-        QAction *placeholderAction = ui->menuThemes->addAction(tr("No Qt themes available"));
-        placeholderAction->setEnabled(false);
-        darkAction->setChecked(true);
-        return;
-    }
-
-    const QString currentStyleName = QApplication::style() ? QApplication::style()->objectName() : QString();
-
-    for (const QString &styleName : availableThemes) {
-        QAction *themeAction = ui->menuThemes->addAction(styleName);
-        themeAction->setCheckable(true);
-        themeAction->setData(styleName);
-        themesActionGroup->addAction(themeAction);
-
-        if (!currentStyleName.isEmpty() &&
-            styleName.compare(currentStyleName, Qt::CaseInsensitive) == 0) {
-            themeAction->setChecked(true);
-        }
-
-        connect(themeAction, &QAction::triggered, this, [this, themeAction](bool checked) {
-            if (!checked) {
-                return;
-            }
-            applyThemeStyle(themeAction->data().toString());
+    const QList<QPair<QString, QString>> choices = {
+        {tr("Dark"), QStringLiteral("dark")},
+        {tr("Light"), QStringLiteral("light")},
+    };
+    for (const auto &choice : choices) {
+        QAction *action = ui->menuThemes->addAction(choice.first);
+        action->setCheckable(true);
+        action->setChecked(choice.second == themeChoice);
+        themesActionGroup->addAction(action);
+        const QString value = choice.second;
+        connect(action, &QAction::triggered, this, [this, value]() {
+            themeChoice = value;
+            tbc::ui::applyFusionTheme(value == QLatin1String("light") ? Qt::ColorScheme::Light
+                                                                      : Qt::ColorScheme::Dark);
+            configuration.setTheme(value);
+            configuration.writeConfiguration();
         });
     }
-
-    // Dark is the stock default; ensure it is checked. This unchecks any Qt
-    // style action the loop above may have auto-checked (the stock preset
-    // owns the active palette; style actions below are advanced overrides).
-    darkAction->setChecked(true);
 }
 
-void MainWindow::applyThemeStyle(const QString &styleName)
+// Highlight the dropouts button while the frame has dropouts. Only Button and
+// ButtonText are set, from the application palette's accent roles, so every
+// other role still follows the application palette. Rerun on each palette
+// change (refreshThemeDependentUi) so the tint follows the colour scheme.
+void MainWindow::updateDropoutsButtonTint()
 {
-    if (styleName.isEmpty()) {
-        return;
+    QPalette tint;
+    if (tbcSource.getIsDropoutPresent()) {
+        const QPalette appPalette = QApplication::palette();
+        tint.setColor(QPalette::Button, appPalette.color(QPalette::Accent));
+        tint.setColor(QPalette::ButtonText, appPalette.color(QPalette::HighlightedText));
     }
-
-    const QString currentStyleName = QApplication::style() ? QApplication::style()->objectName() : QString();
-    if (!currentStyleName.isEmpty() &&
-        styleName.compare(currentStyleName, Qt::CaseInsensitive) == 0) {
-        return;
-    }
-
-    QStyle *style = QStyleFactory::create(styleName);
-    if (!style) {
-        return;
-    }
-
-    QApplication::setStyle(style);
-    buttonPalette = QApplication::palette();
-
-    const QString activeStyleName = QApplication::style() ? QApplication::style()->objectName() : styleName;
-    if (themesActionGroup) {
-        for (QAction *action : themesActionGroup->actions()) {
-            action->setChecked(action->data().toString().compare(activeStyleName, Qt::CaseInsensitive) == 0);
-        }
-    }
-    refreshThemeDependentUi();
+    ui->dropoutsPushButton->setPalette(tint);
 }
 
+// Re-render the images MainWindow draws from source data (the viewer and the
+// scopes) after a palette or style change. Custom-painted widgets repaint
+// themselves on QEvent::PaletteChange.
 void MainWindow::refreshThemeDependentUi()
 {
-    buttonPalette = QApplication::palette();
-
-    if (ui && ui->dropoutsPushButton) {
-        if (tbcSource.getIsDropoutPresent()) {
-            QPalette tempPalette = buttonPalette;
-            tempPalette.setColor(QPalette::Button, QColor(Qt::lightGray));
-            ui->dropoutsPushButton->setAutoFillBackground(true);
-            ui->dropoutsPushButton->setPalette(tempPalette);
-        } else {
-            ui->dropoutsPushButton->setAutoFillBackground(true);
-            ui->dropoutsPushButton->setPalette(buttonPalette);
-        }
-        ui->dropoutsPushButton->update();
-    }
+    updateDropoutsButtonTint();
 
     if (!tbcSource.getIsSourceLoaded()) {
         return;
@@ -2027,18 +1928,6 @@ void MainWindow::refreshThemeDependentUi()
     }
     if (fieldTimingDialog && fieldTimingDialog->isVisible()) {
         updateFieldTimingDialogue();
-    }
-    if (blackSnrAnalysisDialog && blackSnrAnalysisDialog->isVisible()) {
-        blackSnrAnalysisDialog->update();
-    }
-    if (whiteSnrAnalysisDialog && whiteSnrAnalysisDialog->isVisible()) {
-        whiteSnrAnalysisDialog->update();
-    }
-    if (dropoutAnalysisDialog && dropoutAnalysisDialog->isVisible()) {
-        dropoutAnalysisDialog->update();
-    }
-    if (visibleDropoutAnalysisDialog && visibleDropoutAnalysisDialog->isVisible()) {
-        visibleDropoutAnalysisDialog->update();
     }
 }
 
@@ -2901,17 +2790,7 @@ void MainWindow::showImage()
     }
 
     // If there are dropouts in the frame, highlight the show dropouts button
-    if (tbcSource.getIsDropoutPresent()) {
-        QPalette tempPalette = buttonPalette;
-        tempPalette.setColor(QPalette::Button, QColor(Qt::lightGray));
-        ui->dropoutsPushButton->setAutoFillBackground(true);
-        ui->dropoutsPushButton->setPalette(tempPalette);
-        ui->dropoutsPushButton->update();
-    } else {
-        ui->dropoutsPushButton->setAutoFillBackground(true);
-        ui->dropoutsPushButton->setPalette(buttonPalette);
-        ui->dropoutsPushButton->update();
-    }
+    updateDropoutsButtonTint();
 
     // Update the VBI dialogue
     if (vbiDialog->isVisible()) {

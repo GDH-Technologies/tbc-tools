@@ -10,6 +10,7 @@
 
 #include "whitesnranalysisdialog.h"
 #include "ui_whitesnranalysisdialog.h"
+#include "theme_color_tokens.h"
 
 #include <QTimer>
 #include <QShortcut>
@@ -31,18 +32,28 @@ WhiteSnrAnalysisDialog::WhiteSnrAnalysisDialog(QWidget *parent) :
 
     // Set up series and marker
     whiteSeries = plot->addSeries("White SNR");
-    whiteSeries->setPen(QPen(Qt::black, 1));
-    
+
     trendSeries = plot->addSeries("Trend line");
     trendSeries->setPen(QPen(Qt::red, 2));
 
     // Use the red trend line as the Y zoom anchor so zoom stays on the real
     // SNR band instead of the outlier-inflated geometric centre.
     plot->setZoomAnchorSeries(trendSeries);
-    
+
     plotMarker = plot->addMarker();
     plotMarker->setStyle(PlotMarker::VLine);
-    plotMarker->setPen(QPen(Qt::blue, 2));
+
+    // Palette-dependent pens (the data a mid tone between canvas and text so
+    // the red trend line stands out, the current-frame marker in the accent),
+    // re-applied whenever the colour scheme changes.
+    const auto applyThemePens = [this]() {
+        const QPalette palette = plot->palette();
+        whiteSeries->setPen(QPen(theme_tokens::blend(palette.color(QPalette::Base),
+                                                     palette.color(QPalette::Text), 0.6), 1));
+        plotMarker->setPen(QPen(palette.color(QPalette::Accent), 2));
+    };
+    applyThemePens();
+    connect(plot, &PlotWidget::themeChanged, this, applyThemePens);
 
     // Enable hover readout: snap a crosshair to the nearest data point and show
     // its exact value (formatter produces "Frame N: M.M dB").
@@ -157,8 +168,7 @@ void WhiteSnrAnalysisDialog::finishUpdate(qint32 _currentFrameNumber)
     maxY = std::min(maxY, 76.0);
     plot->setAxisRange(Qt::Vertical, 13.0, maxY);
 
-    // Set the white series data (change color to dark gray)
-    whiteSeries->setPen(QPen(Qt::darkGray, 1));
+    // Set the white series data
     whiteSeries->setData(whitePoints);
 
     // Generate and set the trend line

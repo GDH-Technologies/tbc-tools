@@ -44,11 +44,19 @@ inline QColor mutedText(const QPalette &palette)
     return palette.color(QPalette::Disabled, QPalette::WindowText);
 }
 
+// Grid lines sit on a Base-filled canvas, so they are a step from Base toward
+// Text. Not QPalette::Mid: that is a bevel role, and in Qt's dark Fusion
+// palette it is almost exactly Base (38 on 36), so the grid would vanish.
 inline QColor gridLine(const QPalette &palette)
 {
-    QColor color = palette.color(QPalette::Mid);
-    color.setAlpha(160);
-    return color;
+    return blend(palette.color(QPalette::Base), palette.color(QPalette::Text), 0.2);
+}
+
+// Whether a palette is a dark one: its window background is darker than the
+// text drawn on it. For when QStyleHints::colorScheme() is Unknown.
+inline bool isDarkPalette(const QPalette &palette)
+{
+    return palette.color(QPalette::Window).lightnessF() < palette.color(QPalette::WindowText).lightnessF();
 }
 
 inline QColor neutralLine(const QPalette &palette, qreal emphasis)
@@ -72,12 +80,12 @@ inline QColor plotColor(PlotColorToken token, bool darkTheme)
     case PlotColorToken::CompositeSecondary:
         return darkTheme ? QColor(255, 255, 100) : QColor(200, 180, 0);
     case PlotColorToken::RegionBurst:
-        return QColor(0, 255, 255);
+        return darkTheme ? QColor(0, 255, 255) : QColor(0, 140, 160);
     case PlotColorToken::RegionActiveVideo:
     case PlotColorToken::FieldBoundary:
         return plotColor(PlotColorToken::LumaPrimary, darkTheme);
     case PlotColorToken::MarkerSelection:
-        return QColor(0, 255, 0);
+        return darkTheme ? QColor(0, 255, 0) : QColor(0, 150, 0);
     }
 
     return darkTheme ? QColor(255, 255, 255) : QColor(0, 0, 0);

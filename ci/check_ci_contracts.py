@@ -555,6 +555,33 @@ FLAKE_QT_FORBIDDEN_SNIPPETS = (
     "pkgs = if isLinux then legacyPkgs else pkgsUnstable;",
 )
 
+# The GUIs use Qt's own Fusion theme (tbc::ui::applyFusionTheme): the Fusion
+# style and a colour-scheme request, with Qt's palette unmodified. The fork
+# replaced upstream's hand-built partial palettes, the input contrast guard
+# (an app stylesheet that made disabled inputs look enabled) and the palette
+# re-assert machinery; a sync must not bring them back. Upstream AGENTS.md
+# rules 136-138 (contrast guard, legacy Window/Base, guard limits) are
+# overridden in the fork.
+THEME_SOURCES = (
+    ROOT / "src/library/tbc/uistyle.h",
+    ROOT / "src/tbc-analyse/main.cpp",
+    ROOT / "src/tbc-analyse/efmhandler-main.cpp",
+    ROOT / "src/tbc-analyse/mainwindow.cpp",
+    ROOT / "src/audio-align/main.cpp",
+    ROOT / "src/tbc-process-vbi/main.cpp",
+    ROOT / "src/tbc-export-metadata/main.cpp",
+    ROOT / "src/tbc-metadata-converter/main.cpp",
+    ROOT / "src/ld-lds-converter/main.cpp",
+)
+THEME_FORBIDDEN_SNIPPETS = (
+    "setDesktopSettingsAware(false)",
+    "enforceInputWidgetContrast",
+    "ThemedApplication",
+    "stockDarkPalette",
+    "stockLightPalette",
+    "QApplication::setPalette(",
+)
+
 
 # Tree-verified reuse. The deploy may install a build it did not make itself
 # only under all of these conditions:
@@ -849,6 +876,9 @@ def main() -> int:
         check_contains(FLAKE_NIX, snippet, errors)
     for snippet in FLAKE_QT_FORBIDDEN_SNIPPETS:
         check_not_contains(FLAKE_NIX, snippet, errors)
+    for path in THEME_SOURCES:
+        for snippet in THEME_FORBIDDEN_SNIPPETS:
+            check_not_contains(path, snippet, errors)
     for snippet in SELF_HOSTED_DEPLOY_REUSE_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_DEPLOY_WORKFLOW, snippet, errors)
     for workflow, snippet in SELF_HOSTED_TREE_NAMED_ARTIFACTS:

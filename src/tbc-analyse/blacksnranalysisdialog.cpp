@@ -33,20 +33,25 @@ BlackSnrAnalysisDialog::BlackSnrAnalysisDialog(QWidget *parent) :
 
     // Set up series and marker
     blackSeries = plot->addSeries("Black SNR");
-    // Theme-aware color: white in dark mode, black in light mode
-    QColor dataColor = PlotWidget::isDarkTheme() ? Qt::white : Qt::black;
-    blackSeries->setPen(QPen(dataColor, 2));
-    
+
     trendSeries = plot->addSeries("Trend line");
     trendSeries->setPen(QPen(Qt::red, 2));
 
     // Use the red trend line as the Y zoom anchor so zoom stays on the real
     // SNR band instead of the outlier-inflated geometric centre.
     plot->setZoomAnchorSeries(trendSeries);
-    
+
     plotMarker = plot->addMarker();
     plotMarker->setStyle(PlotMarker::VLine);
-    plotMarker->setPen(QPen(Qt::blue, 2));
+
+    // Palette-dependent pens (the data in the text colour, the current-frame
+    // marker in the accent), re-applied whenever the colour scheme changes.
+    const auto applyThemePens = [this]() {
+        blackSeries->setPen(QPen(plot->palette().color(QPalette::Text), 2));
+        plotMarker->setPen(QPen(plot->palette().color(QPalette::Accent), 2));
+    };
+    applyThemePens();
+    connect(plot, &PlotWidget::themeChanged, this, applyThemePens);
 
     // Enable hover readout: snap a crosshair to the nearest data point and show
     // its exact value (formatter produces "Frame N: M.M dB").

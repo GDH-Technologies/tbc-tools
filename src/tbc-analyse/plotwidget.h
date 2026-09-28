@@ -105,7 +105,8 @@ public:
     // Canvas
     void setCanvasBackground(const QColor &color);
     
-    // Theme
+    // Theme. isDarkTheme() is Qt's colour scheme (the palette decides only
+    // when the platform reports none).
     void updateTheme();
     static bool isDarkTheme();
     
@@ -123,6 +124,9 @@ signals:
     void plotClicked(const QPointF &dataPoint);  // Emitted when plot area is clicked, in data coordinates
     void plotDragged(const QPointF &dataPoint);  // Emitted continuously during drag, in data coordinates
     void plotHovered(const QPointF &dataPoint, const PlotSeries *series);  // Nearest data point under the cursor
+    // The palette changed (e.g. a colour-scheme switch). Owners re-pen their
+    // series and markers here; a replot follows.
+    void themeChanged();
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -157,7 +161,6 @@ private:
     bool m_xAutoScale;
     bool m_yAutoScale;
     bool m_yIntegerLabels;
-    bool m_isDarkTheme;
     bool m_secondaryYAxisEnabled;
     double m_xAxisTickStep;
     double m_xAxisTickOrigin;
@@ -307,7 +310,7 @@ public:
     QRectF boundingRect() const override;
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
     
-    void updateGrid(const QRectF &plotRect, const QRectF &dataRect, bool isDarkTheme = false,
+    void updateGrid(const QRectF &plotRect, const QRectF &dataRect,
                     double xMin = 0, double xMax = 100, double yMin = 0, double yMax = 100,
                     bool xUseCustomTicks = false, double xTickStep = 0, double xTickOrigin = 0,
                     bool yUseCustomTicks = false, double yTickStep = 0, double yTickOrigin = 0,
@@ -318,7 +321,6 @@ private:
     QPen m_pen;
     bool m_usePalettePen;
     bool m_enabled;
-    bool m_isDarkTheme;
     QRectF m_plotRect;
     QRectF m_dataRect;
     double m_xMin, m_xMax, m_yMin, m_yMax;
@@ -391,7 +393,7 @@ public:
     void updateLabels(const QRectF &plotRect, const QRectF &dataRect, 
                      const QString &xTitle, const QString &yTitle,
                      double xMin, double xMax, double yMin, double yMax,
-                     bool yIntegerLabels = false, bool isDarkTheme = false,
+                     bool yIntegerLabels = false,
                      bool secondaryYEnabled = false, const QString &secondaryYTitle = QString(),
                      double secondaryYMin = 0, double secondaryYMax = 100,
                      bool xUseCustomTicks = false, double xTickStep = 0, double xTickOrigin = 0,
@@ -408,7 +410,6 @@ private:
     QString m_yTitle;
     QString m_secondaryYTitle;
     bool m_yIntegerLabels;
-    bool m_isDarkTheme;
     bool m_secondaryYEnabled;
     double m_xMin, m_xMax, m_yMin, m_yMax;
     double m_secondaryYMin, m_secondaryYMax;

@@ -33,12 +33,19 @@ DropoutAnalysisDialog::DropoutAnalysisDialog(QWidget *parent) :
 
     // Set up series and marker
     series = plot->addSeries("Dropout Length");
-    series->setPen(QPen(Qt::red, 1));
     series->setStyle(PlotSeries::Bars);
-    
+
     plotMarker = plot->addMarker();
     plotMarker->setStyle(PlotMarker::VLine);
-    plotMarker->setPen(QPen(Qt::blue, 2));
+
+    // Palette-dependent pens (yellow data on dark, dark magenta on light; the
+    // current-frame marker in the accent), re-applied on colour-scheme changes.
+    const auto applyThemePens = [this]() {
+        series->setPen(QPen(PlotWidget::isDarkTheme() ? Qt::yellow : Qt::darkMagenta, 2));
+        plotMarker->setPen(QPen(plot->palette().color(QPalette::Accent), 2));
+    };
+    applyThemePens();
+    connect(plot, &PlotWidget::themeChanged, this, applyThemePens);
 
     // Enable hover readout: snap a crosshair to the nearest data point and show
     // its exact value (formatter produces "Frame N: M dots").
@@ -129,9 +136,7 @@ void DropoutAnalysisDialog::finishUpdate(qint32 _currentFrameNumber)
     double yMax = (maxY < 10) ? 10 : ceil(maxY + (maxY * 0.1)); // Add 10% padding and round up
     plot->setAxisRange(Qt::Vertical, 0, yMax);
 
-    // Set the dropout curve data with theme-aware color
-    QColor dataColor = PlotWidget::isDarkTheme() ? Qt::yellow : Qt::darkMagenta;
-    series->setPen(QPen(dataColor, 2));
+    // Set the dropout curve data
     series->setData(points);
 
     // Set the frame marker position

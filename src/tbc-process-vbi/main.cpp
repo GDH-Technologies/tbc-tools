@@ -364,9 +364,7 @@ static int runCli(int argc, char *argv[])
 
 static int runGui(int argc, char *argv[])
 {
-    tbc::ui::prepareStockThemeEnvironment();
-
-    tbc::ui::ThemedApplication app(argc, argv);
+    QApplication app(argc, argv);
 
     QCoreApplication::setApplicationName("tbc-process-vbi");
     QCoreApplication::setApplicationVersion(
@@ -411,9 +409,9 @@ static int runGui(int argc, char *argv[])
     parser.addOption(outputMetadataOption);
 
     parser.addOption(QCommandLineOption("force-dark-theme",
-                                        QCoreApplication::translate("main", "Force dark theme regardless of system settings (default; no-op)")));
+                                        QCoreApplication::translate("main", "Use the dark theme (default)")));
     parser.addOption(QCommandLineOption("light-theme",
-                                        QCoreApplication::translate("main", "Use the light Fusion theme instead of the stock dark theme")));
+                                        QCoreApplication::translate("main", "Use the light theme")));
 
     parser.addPositionalArgument(
         "input",
@@ -424,12 +422,9 @@ static int runGui(int argc, char *argv[])
     parser.process(app);
     processStandardDebugOptions(parser);
 
-    // Apply the stock theme (dark by default, light via --light-theme).
-    if (parser.isSet(QStringLiteral("light-theme"))) {
-        app.applyStockLightTheme();
-    } else {
-        app.applyStockDarkTheme();
-    }
+    // Qt's own Fusion theme, dark by default
+    tbc::ui::applyFusionTheme(parser.isSet(QStringLiteral("light-theme")) ? Qt::ColorScheme::Light
+                                                                         : Qt::ColorScheme::Dark);
 
     ProcessVbiDialog dialog;
 
