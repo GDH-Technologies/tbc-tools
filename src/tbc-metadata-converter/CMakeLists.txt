@@ -23,4 +23,20 @@ if(BUILD_TESTING)
     target_include_directories(testmetadataconverterutil PRIVATE ${CMAKE_SOURCE_DIR}/src/library)
     target_link_libraries(testmetadataconverterutil PRIVATE Qt::Core Qt::Gui Qt::Widgets)
     add_test(NAME testmetadataconverterutil COMMAND testmetadataconverterutil)
+
+    add_executable(testmetadataconversiondialog
+        testmetadataconversiondialog.cpp
+        metadataconversiondialog.cpp
+        metadataconversiondialog.ui
+        metadataconverterutil.cpp
+        ../library/gui/processprogressrunner.cpp
+    )
+    target_include_directories(testmetadataconversiondialog PRIVATE ${CMAKE_SOURCE_DIR}/src/library)
+    target_link_libraries(testmetadataconversiondialog PRIVATE Qt::Core Qt::Gui Qt::Widgets)
+    add_test(NAME testmetadataconversiondialog COMMAND testmetadataconversiondialog)
+    # It builds a QApplication (not on Windows; see
+    # testmetadataconversiondialog.cpp); no display is needed or wanted.
+    set_tests_properties(testmetadataconversiondialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60)
 endif()

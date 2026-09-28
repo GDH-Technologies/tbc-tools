@@ -109,6 +109,20 @@ if(BUILD_TESTING)
     )
     set_tests_properties(aaa-headless-runtime PROPERTIES SKIP_RETURN_CODE 77)
 
+    add_executable(testaudioalignmentdialog
+        testaudioalignmentdialog.cpp
+        audioalignmentdialog.cpp
+        audioalignmentdialog.ui
+        audioalignmentutil.cpp
+    )
+    target_link_libraries(testaudioalignmentdialog PRIVATE Qt::Core Qt::Gui Qt::Widgets tbc-library)
+    add_test(NAME testaudioalignmentdialog COMMAND testaudioalignmentdialog)
+    # It builds a QApplication (not on Windows; see testaudioalignmentdialog.cpp);
+    # no display is needed or wanted.
+    set_tests_properties(testaudioalignmentdialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60)
+
     # The GUI's --help and --version answer without a display: no display
     # variables and no platform override, so a QApplication would abort.
     add_test(NAME aaa-help-no-display COMMAND tbc-audio-align --help)

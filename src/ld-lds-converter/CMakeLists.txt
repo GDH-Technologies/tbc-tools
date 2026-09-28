@@ -26,6 +26,24 @@ target_link_libraries(ld-lds-converter PRIVATE
 install(TARGETS ld-lds-converter)
 
 if(BUILD_TESTING)
+    add_executable(testconverterdialog
+        testconverterdialog.cpp
+        converterdialog.cpp
+        converterdialog.ui
+        dataconverter.cpp
+    )
+    target_link_libraries(testconverterdialog PRIVATE
+        Qt::Core Qt::Gui Qt::Widgets
+        tbc-library
+        ${_ld_lds_converter_flac_target}
+    )
+    add_test(NAME testconverterdialog COMMAND testconverterdialog)
+    # It builds a QApplication (not on Windows; see testconverterdialog.cpp);
+    # no display is needed or wanted.
+    set_tests_properties(testconverterdialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60)
+
     add_test(
         NAME ld-lds-converter-help
         COMMAND ld-lds-converter --help

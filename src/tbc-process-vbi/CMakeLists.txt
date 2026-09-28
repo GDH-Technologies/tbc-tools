@@ -33,6 +33,23 @@ install(TARGETS tbc-process-vbi)
 install(DIRECTORY "${_teletext_vendor_dir}/" DESTINATION ${CMAKE_INSTALL_BINDIR}/vendor/vhs-teletext)
 
 if(BUILD_TESTING)
+    # The dialog runs its own binary, so the test binary is also the fake tool
+    add_executable(testprocessvbidialog
+        testprocessvbidialog.cpp
+        processvbidialog.cpp
+        processvbidialog.h
+    )
+    target_link_libraries(testprocessvbidialog PRIVATE
+        Qt::Core Qt::Gui Qt::Widgets
+        tbc-library
+    )
+    add_test(NAME testprocessvbidialog COMMAND testprocessvbidialog)
+    # It builds a QApplication (not on Windows; see testprocessvbidialog.cpp);
+    # no display is needed or wanted.
+    set_tests_properties(testprocessvbidialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60)
+
     add_test(
         NAME tbc-process-vbi-teletext-help
         COMMAND $<TARGET_FILE:tbc-process-vbi> --help
