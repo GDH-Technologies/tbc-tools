@@ -38,9 +38,10 @@ on:
       - "vcpkg.json"
       - "flake.nix"
       - "flake.lock"
-      # A version bump is a commit whose only changed file is this one. Without
-      # it here the deploy that matters most for a release is the one that gets
-      # skipped, and the fleet keeps reporting the previous version.
+      # A release is a committed .gdh-version, and a bump-only PR changes
+      # nothing else. Without it here the deploy that matters most for a
+      # release is the one that gets skipped, and the fleet keeps reporting the
+      # previous version.
       - ".gdh-version"
       - ".github/workflows/self-hosted-*.yml"
   workflow_dispatch:
@@ -138,10 +139,10 @@ jobs:
               - *common
               - 'vcpkg.json'
               - 'CMakePresets.json'
-              # .gdh-version is deliberately absent: with .git present, CMake's
-              # git-describe tier sets the Windows version from the tag, not the
-              # file. A version bump arrives as a dispatch, which selects its
-              # platforms explicitly.
+              # CMake stamps win0's version from git, where a committed
+              # .gdh-version newer than the tags is the version: a bump changes
+              # this artifact too, and the PR's own Windows build carries it.
+              - '.gdh-version'
               - '.github/workflows/self-hosted-windows.yml'
       - name: Probe hosts
         id: probe
@@ -242,9 +243,9 @@ jobs:
           # On a push, the diff decides whether a platform is affected at all. An
           # affected platform reuses a matching build when one exists, and
           # otherwise builds. On a dispatch, the named platforms rebuild and the
-          # rest skip: a dispatch is an explicit request, and the version bump's
-          # tree is new anyway. All three are named by default, which the bump
-          # relies on.
+          # rest skip: a dispatch is an explicit request. All three are named by
+          # default. A release needs no dispatch: it is a PR carrying
+          # .gdh-version, so its merge deploys, and reuses, like any other.
           plan() {
             local platform="$1" filtered="$2" artifact="$3" run
             if [ "$EVENT" = "workflow_dispatch" ]; then

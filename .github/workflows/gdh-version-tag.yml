@@ -1,0 +1,74 @@
+name: "GDH version tag"
+
+# Record a merged release: put the annotated tag v<version> on the commit that
+# introduced .gdh-version = <version> on main's first-parent line -- the PR's
+# merge commit.
+#
+# A record, not an input. Builds are already exact without it: a committed
+# .gdh-version newer than every gdh tag is the version (scripts/gdh_version.py,
+# CMakeLists.txt). The tag cannot be made any sooner, because the merge button
+# creates the commit that lands on main. `gdh_version.py tag` finds that commit
+# itself (never HEAD: main may have moved), does nothing if the tag is already
+# there, refuses a tag that exists elsewhere, and pushes only the tag.
+#
+# Every push to main, no paths filter: a push that changed nothing tags nothing,
+# and a tag missed for any reason is made on the next merge. Before tagging it
+# re-checks the pushed range with `check-pr`, so two PRs that bumped to the
+# same number -- identical edits, which merge cleanly -- turn main red here
+# rather than passing silently.
+#
+# A tag pushed with GITHUB_TOKEN starts no workflow runs, and release.yml
+# excludes v*-gdh-* tags anyway: this never publishes a GitHub Release.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  # The tag push. Nothing else is pushed.
+  contents: write
+
+concurrency:
+  group: tbc-tools-gdh-version-tag
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  tag:
+    name: Tag the release commit
+    # wm-light: wm's second runner, for short jobs.
+    runs-on: [self-hosted, Linux, X64, wm-light]
+    timeout-minutes: 10
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The anchor search and describe need full history and every tag.
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: false
+          ref: ${{ github.sha }}
+
+      - name: Refresh tags
+        # The workspace persists between runs, so a tag deleted or moved on the
+        # remote can linger locally and poison `git describe`.
+        run: git fetch --tags --prune --prune-tags --force origin
+
+      - name: Check the version change this push made
+        # Catches two PRs that took the same number: the second merge shows no
+        # change to .gdh-version, but its own commits set it.
+        if: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: python3 scripts/gdh_version.py check-pr --base "$BEFORE" --rev HEAD
+
+      - name: Tag the commit that introduced .gdh-version
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/gdh_version.py tag --push | tee -a "$GITHUB_STEP_SUMMARY"

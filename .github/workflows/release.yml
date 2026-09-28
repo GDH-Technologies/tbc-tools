@@ -9,7 +9,7 @@ on:
       - "v*"
       # GDH fork tags (v<upstream>-gdh-<major>.<minor>) are not upstream releases:
       # they carry no vcpkg.json/flake.nix bump and would fail the SemVer check in
-      # "Resolve and validate release tag". They are cut by gdh-version-bump.yml.
+      # "Resolve and validate release tag". gdh-version-tag.yml records them.
       - "!v*-gdh-*"
   workflow_call:
     inputs:

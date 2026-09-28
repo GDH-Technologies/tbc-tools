@@ -748,6 +748,8 @@ class ContractCoverageTests(unittest.TestCase):
             # The one suite the parity script does not itself run.
             "python3 -m unittest -v ci.tests.test_gdh_version",
             "nix build nixpkgs#actionlint",
+            # The PR's .gdh-version must be a valid next step.
+            "python3 scripts/gdh_version.py check-pr",
         }
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS))
@@ -757,14 +759,20 @@ class ContractCoverageTests(unittest.TestCase):
             "self-hosted-guardrails.yml is a required contract file",
         )
 
-    def test_version_bump_contract_requires_the_deploy_dispatch(self) -> None:
-        # Silent failure mode: a bump pushes the tag and .gdh-version, reports
-        # success, and the fleet quietly stays on the old version, because
-        # GitHub does not create runs for GITHUB_TOKEN pushes. The dispatch is
-        # the only thing that closes that gap, and workflow_dispatch is exempt
-        # from the rule -- so it has to stay, along with actions: write.
+    def test_version_bump_opens_a_pr_and_dispatches_its_ci(self) -> None:
+        # A standalone release goes through a PR like any other bump, so its
+        # builds exist before the merge and the merge deploy reuses them. A PR
+        # opened with GITHUB_TOKEN triggers no pull_request runs, so the
+        # workflow dispatches the PR's CI itself (workflow_dispatch is exempt).
         expected = {
-            "gh workflow run self-hosted-deploy.yml",
+            "python3 scripts/gdh_version.py bump",
+            "python3 scripts/gdh_version.py check-pr",
+            "gh pr create",
+            "gh workflow run self-hosted-guardrails.yml",
+            "gh workflow run self-hosted-linux.yml",
+            "gh workflow run self-hosted-macos.yml",
+            "gh workflow run self-hosted-windows.yml",
+            "pull-requests: write",
             "actions: write",
         }
         self.assertTrue(
@@ -773,6 +781,90 @@ class ContractCoverageTests(unittest.TestCase):
         self.assertTrue(
             check_ci_contracts.GDH_VERSION_BUMP_WORKFLOW.exists(),
             "gdh-version-bump.yml is a required contract file",
+        )
+
+    def test_version_bump_never_pushes_main_or_deploys(self) -> None:
+        for snippet in (
+            "--branch main",
+            "HEAD:refs/heads/main",
+            "gh workflow run self-hosted-deploy.yml",
+        ):
+            self.assertIn(snippet, check_ci_contracts.GDH_VERSION_BUMP_FORBIDDEN_SNIPPETS)
+
+    def test_version_tag_workflow_tags_the_anchor_idempotently(self) -> None:
+        # The tag is a record of a merged .gdh-version, put on the commit that
+        # introduced it by the script (never a hand-rolled `git tag -a`), on
+        # every push to main (no paths:, so a missed tag heals next time), and
+        # nothing but the tag is ever pushed.
+        self.assertTrue(
+            check_ci_contracts.GDH_VERSION_TAG_WORKFLOW.exists(),
+            "gdh-version-tag.yml is a required contract file",
+        )
+        expected = {
+            check_ci_contracts.WM_LIGHT_RUNS_ON,
+            "branches: [main]",
+            "fetch-depth: 0",
+            "git fetch --tags --prune --prune-tags --force origin",
+            "python3 scripts/gdh_version.py check-pr",
+            "python3 scripts/gdh_version.py tag --push",
+            "cancel-in-progress: false",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.GDH_VERSION_TAG_REQUIRED_SNIPPETS))
+        )
+        for snippet in ("paths:", "git tag -a", "HEAD:refs/heads"):
+            self.assertIn(snippet, check_ci_contracts.GDH_VERSION_TAG_FORBIDDEN_SNIPPETS)
+
+    def test_only_the_bump_workflow_may_write_pull_requests(self) -> None:
+        # "Allow GitHub Actions to create and approve pull requests" is on for
+        # the bump workflow. It must stay the only holder of pull-requests:
+        # write, and no workflow may run fork code with a write token.
+        self.assertEqual(
+            check_ci_contracts.PULL_REQUEST_WRITE_ALLOWED,
+            (check_ci_contracts.GDH_VERSION_BUMP_WORKFLOW,),
+        )
+        for trigger in ("pull_request_target:", "workflow_run:"):
+            self.assertIn(trigger, check_ci_contracts.FORBIDDEN_WORKFLOW_TRIGGERS)
+        workflows = sorted((check_ci_contracts.ROOT / ".github/workflows").glob("*.yml"))
+        self.assertTrue(workflows)
+        for workflow in workflows:
+            text = workflow.read_text(encoding="utf-8")
+            if workflow not in check_ci_contracts.PULL_REQUEST_WRITE_ALLOWED:
+                self.assertNotIn("pull-requests: write", text, workflow.name)
+            for trigger in check_ci_contracts.FORBIDDEN_WORKFLOW_TRIGGERS:
+                self.assertNotIn(trigger, text, workflow.name)
+
+    def test_deploy_windows_gate_includes_the_version_file(self) -> None:
+        # A bump changes what win0 stamps (CMake reads a newer .gdh-version),
+        # so a bump-only merge must deploy Windows too.
+        content = check_ci_contracts.SELF_HOSTED_DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        windows = content.split("            windows:\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("- '.gdh-version'", windows)
+
+    def test_app_version_is_resolved_every_configure(self) -> None:
+        # Caching APP_VERSION froze win0's reused build directory on its first
+        # configure's version.
+        self.assertIn(
+            'set(APP_VERSION "${APP_VERSION}" CACHE',
+            check_ci_contracts.TOP_CMAKELISTS_FORBIDDEN_SNIPPETS,
+        )
+        self.assertIn(
+            "get_property(_GDH_APP_VERSION_HELP CACHE APP_VERSION PROPERTY HELPSTRING)",
+            check_ci_contracts.TOP_CMAKELISTS_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
+            "Verify the stamped version",
+            check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS,
+        )
+
+    def test_macos_bundle_version_comes_from_the_gdh_resolver(self) -> None:
+        self.assertIn(
+            "scripts/gdh_version.py show",
+            check_ci_contracts.SELF_HOSTED_MACOS_REQUIRED_SNIPPETS,
+        )
+        self.assertIn(
+            "git describe --tags --always --dirty",
+            check_ci_contracts.SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS,
         )
 
     def test_light_jobs_are_pinned_to_wm_light(self) -> None:
@@ -785,6 +877,7 @@ class ContractCoverageTests(unittest.TestCase):
         )
         for snippets in (
             check_ci_contracts.GDH_VERSION_BUMP_REQUIRED_SNIPPETS,
+            check_ci_contracts.GDH_VERSION_TAG_REQUIRED_SNIPPETS,
             check_ci_contracts.SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS,
             check_ci_contracts.SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS,
         ):

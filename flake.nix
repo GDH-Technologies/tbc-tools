@@ -119,12 +119,13 @@
         runtimeLibraryPath = pkgs.lib.optionalString isLinux (pkgs.lib.makeLibraryPath ([ onnxruntimePackage ] ++ cudaRuntimeDependencies));
       in
       let
-        # The GDH fork version. A Nix build never sees git tags -- flakes expose
-        # rev/revCount only, and .git is filtered out of src below -- so
-        # .gdh-version (written and committed by scripts/gdh_version.py at bump
-        # time) is the only thing here that knows it. Before the first bump the
-        # file does not exist and this falls back to upstream's own declared
-        # version, which is exactly what CMakeLists.txt would resolve anyway.
+        # The GDH fork version. A release IS a committed .gdh-version (written
+        # by `scripts/gdh_version.py bump` on the PR that carries it), and a
+        # Nix build never sees git anyway -- .git is filtered out of src below
+        # -- so the file is the only input here. Nix has no history, so later
+        # commits get the bare release version rather than the +N.g<sha> a git
+        # checkout reports. Without the file this falls back to upstream's own
+        # declared version, which is exactly what CMakeLists.txt resolves too.
         #
         # Same rule as CMakeLists.txt's gdh-version block: a file naming a
         # different upstream base is stale (upstream moved, so the GDH counters

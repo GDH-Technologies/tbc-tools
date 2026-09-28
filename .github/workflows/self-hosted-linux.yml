@@ -149,10 +149,10 @@ jobs:
         # Which build that matters to is worth being precise about: the
         # in-tree configure below (ci/run_local_ci_parity.sh runs
         # `cmake -S . -B build`, so .git is present) does reach CMakeLists.txt's
-        # git-describe tier, and that is the binary ctest exercises. The shipped
-        # AppImage does not -- it comes from `nix build .#`, whose sandbox has
-        # no .git at all, which is why Nix-built artifacts fall through to the
-        # version in vcpkg.json.
+        # git tier (the nearest gdh tag, or a committed .gdh-version newer than
+        # it), and that is the binary ctest exercises. The shipped AppImage does
+        # not -- it comes from `nix build .#`, whose sandbox has no .git at all
+        # -- so it takes .gdh-version from the flake. The two agree.
         run: git fetch --tags --prune --prune-tags --force origin
 
       - name: Report toolchain and version
@@ -161,6 +161,7 @@ jobs:
           git --version
           git describe --tags --long --abbrev=8 --match "v*-gdh-*" \
             || echo "no gdh tag in range yet"
+          echo "gdh version: $(python3 scripts/gdh_version.py show)"
           df -h "$GITHUB_WORKSPACE" /nix | cat
 
       - name: Provision packaging tools from nixpkgs

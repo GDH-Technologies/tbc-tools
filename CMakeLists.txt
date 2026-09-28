@@ -344,27 +344,36 @@ endfunction()
 # Build metadata (set by Nix or other build systems)
 set(APP_BRANCH "nix" CACHE STRING "Build source identifier")
 set(APP_COMMIT "0.0.0" CACHE STRING "Build version identifier")
-# Release version. The GDH fork carries its version in a git tag of the form
-# v<upstream>-gdh-<major>.<minor>; the tag is the only input, and .gdh-version
-# is a cache of it for consumers that cannot see tags.
+# Release version: <upstream>-gdh-<major>.<minor>, with +<N>.g<sha>[.dirty]
+# after the release commit. A release is a committed .gdh-version; it rides in a
+# PR, and gdh-version-tag.yml tags the commit that introduced it on main once the
+# PR merges (the merge button creates that commit, so nothing can tag it sooner).
 # Resolution order:
-#   1. an explicit -DAPP_VERSION=            (CI, packagers, the Nix flake)
-#   2. the nearest gdh tag, via git describe (any git checkout)
-#   3. the .gdh-version file                 (no .git: tarball, Nix sandbox)
-#   4. the "version" field of vcpkg.json     (upstream's own, pre-first-bump)
-#
-# Tier 3 exists because a Nix build gets only the tracked tree -- flakes expose
-# rev/revCount but never tags, and .git is filtered out of the flake source --
-# so without it a Nix build silently reports upstream's version. The file is
-# written and committed by scripts/gdh_version.py at bump time, and the tag is
-# placed on that commit, so the two agree by construction.
+#   1. an explicit -DAPP_VERSION=               (packagers, the Nix flake)
+#   2. in a git checkout, the newer of the nearest gdh tag (git describe) and
+#      the committed .gdh-version -- the file exact on the first-parent commit
+#      that introduced it, so a PR's builds and its merge carry the new version
+#      before any tag exists
+#   3. the .gdh-version file                    (no .git: tarball, Nix sandbox)
+#   4. the "version" field of vcpkg.json        (upstream's own, pre-first-bump)
 #
 # scripts/gdh_version.py implements this same rule for the tooling side, and
 # ci/tests/test_gdh_version.py holds the two in agreement. Change one, change both.
 #
-# This resolves at CONFIGURE time: creating a tag after configuring leaves the
-# built binary reporting the older version until you re-configure.
+# This resolves on EVERY configure. It used to be written back to the cache,
+# which made a reused build directory keep its first version forever (win0's
+# reported 3.2.9-gdh-2.0+10.gf41224ca long after that commit).
 # --- gdh-version block: begin (extracted verbatim by ci/tests/test_gdh_version.py) ---
+# Drop our own stale cache entry from a build directory configured before the
+# fix above. An explicit -DAPP_VERSION carries a different helpstring and stays.
+if(NOT CMAKE_SCRIPT_MODE_FILE AND DEFINED CACHE{APP_VERSION})
+    get_property(_GDH_APP_VERSION_HELP CACHE APP_VERSION PROPERTY HELPSTRING)
+    if(_GDH_APP_VERSION_HELP STREQUAL "Release version identifier")
+        unset(APP_VERSION CACHE)
+    endif()
+    unset(_GDH_APP_VERSION_HELP)
+endif()
+
 if(NOT APP_VERSION)
     set(_APP_VERSION_DEFAULT "0.0.0")
     if(EXISTS "${CMAKE_SOURCE_DIR}/vcpkg.json")
@@ -380,11 +389,10 @@ if(NOT APP_VERSION)
     # Upstream's own declared version, and the last-resort fallback.
     set(_GDH_UPSTREAM "${_APP_VERSION_DEFAULT}")
 
-    # The committed cache of the tag, for builds with no .git to describe. A
-    # file naming a different upstream base is stale for the same reason a
-    # stale tag is -- upstream moved and the GDH counters reset -- so it is
-    # ignored rather than trusted. The git block below overwrites this whenever
-    # it can resolve, because only describe carries distance and dirty state.
+    # For builds with no .git. A file naming a different upstream base is stale
+    # -- upstream moved and the GDH counters reset -- so it is ignored rather
+    # than trusted. The git block below overwrites this whenever it can
+    # resolve, because only git knows distance and dirty state.
     if(EXISTS "${CMAKE_SOURCE_DIR}/.gdh-version")
         file(READ "${CMAKE_SOURCE_DIR}/.gdh-version" _GDH_VERSION_FILE)
         string(STRIP "${_GDH_VERSION_FILE}" _GDH_VERSION_FILE)
@@ -475,6 +483,80 @@ if(NOT APP_VERSION)
             unset(_GDH_COUNT_RANGE)
         endif()
 
+        # A committed .gdh-version newer than the nearest gdh tag is the release
+        # (see above): exact on the first-parent commit that introduced it --
+        # --first-parent so that on main it is the PR's merge commit -- with the
+        # distance counted over all ancestors, as describe counts, so nothing
+        # moves when the tag later lands there. The committed value, not the
+        # working tree: an uncommitted edit is reported as dirty instead.
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" show "HEAD:.gdh-version"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE _GDH_FILE
+            RESULT_VARIABLE _GDH_FILE_RESULT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_GDH_FILE_RESULT EQUAL 0)
+            string(STRIP "${_GDH_FILE}" _GDH_FILE)
+            string(REGEX MATCH "^([0-9]+(\\.[0-9]+)*)-gdh-([0-9]+)\\.([0-9]+)$"
+                _GDH_FILE_MATCH "${_GDH_FILE}")
+            set(_GDH_FILE_UPSTREAM "${CMAKE_MATCH_1}")
+            set(_GDH_FILE_MAJOR "${CMAKE_MATCH_3}")
+            set(_GDH_FILE_MINOR "${CMAKE_MATCH_4}")
+            if(_GDH_FILE_MATCH AND _GDH_FILE_UPSTREAM STREQUAL "${_GDH_UPSTREAM}"
+               AND "${_GDH_FILE_MAJOR}.${_GDH_FILE_MINOR}" VERSION_GREATER "${_GDH_MAJOR}.${_GDH_MINOR}")
+                execute_process(
+                    COMMAND "${GIT_EXECUTABLE}" log --first-parent -1 "--format=%H" HEAD -- .gdh-version
+                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                    OUTPUT_VARIABLE _GDH_ANCHOR
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                )
+                if(NOT _GDH_ANCHOR STREQUAL "")
+                    execute_process(
+                        COMMAND "${GIT_EXECUTABLE}" rev-list --count "${_GDH_ANCHOR}..HEAD"
+                        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                        OUTPUT_VARIABLE _GDH_DISTANCE
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET
+                    )
+                    execute_process(
+                        COMMAND "${GIT_EXECUTABLE}" rev-parse "--short=8" HEAD
+                        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                        OUTPUT_VARIABLE _GDH_HEAD
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET
+                    )
+                    set(_GDH_NODE "g${_GDH_HEAD}")
+                    set(_GDH_MAJOR "${_GDH_FILE_MAJOR}")
+                    set(_GDH_MINOR "${_GDH_FILE_MINOR}")
+                    # A shallow clone's grafted root looks like the commit that
+                    # introduced the file, so the file cannot make it exact.
+                    execute_process(
+                        COMMAND "${GIT_EXECUTABLE}" rev-parse --is-shallow-repository
+                        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                        OUTPUT_VARIABLE _GDH_SHALLOW
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET
+                    )
+                    set(_GDH_MATCHED TRUE)
+                    if(_GDH_SHALLOW STREQUAL "true")
+                        set(_GDH_MATCHED FALSE)
+                    endif()
+                    unset(_GDH_HEAD)
+                    unset(_GDH_SHALLOW)
+                endif()
+                unset(_GDH_ANCHOR)
+            endif()
+            unset(_GDH_FILE_MATCH)
+            unset(_GDH_FILE_UPSTREAM)
+            unset(_GDH_FILE_MAJOR)
+            unset(_GDH_FILE_MINOR)
+        endif()
+        unset(_GDH_FILE)
+        unset(_GDH_FILE_RESULT)
+
         if(_GDH_NODE AND NOT _GDH_DISTANCE STREQUAL "")
             # gdh-0.0 is a sentinel, never a release, so it always shows its distance.
             set(_APP_VERSION_DEFAULT "${_GDH_UPSTREAM}-gdh-${_GDH_MAJOR}.${_GDH_MINOR}")
@@ -497,12 +579,40 @@ if(NOT APP_VERSION)
         unset(_GDH_NODE)
     endif()
 
+    # A normal variable, resolved on every configure (see above).
     set(APP_VERSION "${_APP_VERSION_DEFAULT}")
     unset(_APP_VERSION_DEFAULT)
     unset(_GDH_UPSTREAM)
 endif()
+
+# Build identity for a CMake build from a git checkout. "nix" and "0.0.0" are
+# placeholders that only the flake overrides, so every other build (win0's, a
+# developer's) reported "Branch: nix / Commit: 0.0.0". Anything else was passed
+# explicitly and wins. The tree, not the commit: the deploy reuses a PR's build
+# of an identical tree, whose commit (refs/pull/N/merge) never lands on main --
+# the same reason the flake stamps src-<tree>.
+if(DEFINED APP_BRANCH AND DEFINED APP_COMMIT
+   AND APP_BRANCH STREQUAL "nix" AND APP_COMMIT STREQUAL "0.0.0")
+    find_package(Git QUIET)
+    if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" rev-parse "HEAD^{tree}"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE _GDH_TREE
+            RESULT_VARIABLE _GDH_TREE_RESULT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_GDH_TREE_RESULT EQUAL 0)
+            string(SUBSTRING "${_GDH_TREE}" 0 12 _GDH_TREE)
+            set(APP_BRANCH "git")
+            set(APP_COMMIT "tree-${_GDH_TREE}")
+        endif()
+        unset(_GDH_TREE)
+        unset(_GDH_TREE_RESULT)
+    endif()
+endif()
 # --- gdh-version block: end ---
-set(APP_VERSION "${APP_VERSION}" CACHE STRING "Release version identifier")
 
 # APP_BRANCH, APP_COMMIT and APP_VERSION are NOT global compile definitions.
 # Only src/library/tbc/buildinfo.cpp receives them (see src/library/CMakeLists.txt),
@@ -554,6 +664,15 @@ if(BUILD_TESTING)
 
     set(SCRIPTS_DIR ${CMAKE_SOURCE_DIR}/scripts)
     set(TESTDATA_DIR ${CMAKE_SOURCE_DIR}/testdata)
+
+    # --version must name the version this build resolved. It used to print
+    # only branch and commit, so no host could be checked after a release, and
+    # win0's then showed the "nix" / "0.0.0" placeholders.
+    string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" _APP_VERSION_REGEX "${APP_VERSION}")
+    add_test(NAME version-line COMMAND tbc-chroma-decoder --version)
+    set_tests_properties(version-line PROPERTIES
+        PASS_REGULAR_EXPRESSION "tbc-tools ${_APP_VERSION_REGEX} - Branch: [^ ]+ / Commit: [^ ]+")
+    unset(_APP_VERSION_REGEX)
 
     add_test(
         NAME chroma-ntsc-rgb

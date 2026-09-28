@@ -41,8 +41,9 @@ QString version();
 QString branch();
 QString commit();
 
-// "tbc-tools - Branch: <branch> / Commit: <commit>", the string every CLI tool
-// reports through QCoreApplication::setApplicationVersion().
+// "tbc-tools <version> - Branch: <branch> / Commit: <commit>", the string every
+// CLI tool reports through QCoreApplication::setApplicationVersion(), so
+// `<tool> --version` shows which release each host runs.
 QString versionLine();
 
 } // namespace TbcBuildInfo

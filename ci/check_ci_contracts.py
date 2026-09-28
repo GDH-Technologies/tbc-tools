@@ -22,6 +22,7 @@ SELF_HOSTED_DEPLOY_WORKFLOW = ROOT / ".github/workflows/self-hosted-deploy.yml"
 FLEET_DEPLOY_HOST_SCRIPT = ROOT / "ci/deploy_fleet_host.sh"
 ACTIONLINT_CONFIG = ROOT / ".github/actionlint.yaml"
 GDH_VERSION_BUMP_WORKFLOW = ROOT / ".github/workflows/gdh-version-bump.yml"
+GDH_VERSION_TAG_WORKFLOW = ROOT / ".github/workflows/gdh-version-tag.yml"
 SELF_HOSTED_GUARDRAILS_WORKFLOW = ROOT / ".github/workflows/self-hosted-guardrails.yml"
 CUDA_PLUGIN_PACKAGE_SCRIPT = ROOT / "scripts/cuda-plugin-package.sh"
 WINDOWS_REQUIREMENTS = ROOT / "src/tbc-video-export/pyinstaller/requirements-build-windows.txt"
@@ -222,11 +223,11 @@ SELF_HOSTED_LINUX_REQUIRED_SNIPPETS = (
     # occupy it. "src/**" appears only inside those paths: blocks.
     '"src/**"',
     # .gdh-version belongs in every platform gate too, not just the deploy's.
-    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
-    # so changing it changes the artifact; on Windows the version comes from the
-    # tag instead, but a bump commit still changes what that build stamps.
-    # Without this the "PR build set == redeploy set" claim in each file's own
-    # trigger comment is merely stated, not enforced.
+    # A bump rides in a PR, and every platform stamps it from that PR's own
+    # build: the flake feeds the file into -DAPP_VERSION on Linux and macOS, and
+    # CMake reads a committed file newer than the tags on Windows. Without this
+    # the "PR build set == redeploy set" claim in each file's own trigger
+    # comment is merely stated, not enforced.
     '".gdh-version"',
     "runs-on: [self-hosted, Linux, X64, wm]",
     "workflow_call:",
@@ -255,11 +256,11 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # occupy it. "src/**" appears only inside those paths: blocks.
     '"src/**"',
     # .gdh-version belongs in every platform gate too, not just the deploy's.
-    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
-    # so changing it changes the artifact; on Windows the version comes from the
-    # tag instead, but a bump commit still changes what that build stamps.
-    # Without this the "PR build set == redeploy set" claim in each file's own
-    # trigger comment is merely stated, not enforced.
+    # A bump rides in a PR, and every platform stamps it from that PR's own
+    # build: the flake feeds the file into -DAPP_VERSION on Linux and macOS, and
+    # CMake reads a committed file newer than the tags on Windows. Without this
+    # the "PR build set == redeploy set" claim in each file's own trigger
+    # comment is merely stated, not enforced.
     '".gdh-version"',
     "runs-on: [self-hosted, macOS, ARM64, air0]",
     "workflow_call:",
@@ -293,11 +294,16 @@ SELF_HOSTED_MACOS_REQUIRED_SNIPPETS = (
     # The bundle rewrite lives in a script the guardrails can parse-check
     # (bash 3.2 safe: macOS /bin/bash).
     "bash ci/macos_bundle_dependencies.sh dist/tbc-tools.app",
+    # The Info.plist and DMG volume version: the gdh resolver, not a describe.
+    "scripts/gdh_version.py show",
 )
 # The dev-shell CMake build compiled everything a second time just to run
 # ctest; it must not come back into the macOS workflow.
 SELF_HOSTED_MACOS_FORBIDDEN_SNIPPETS = (
     "run_local_ci_parity.sh",
+    # The bundle version comes from the gdh resolver: a bare describe matched
+    # upstream's tags too and never saw .gdh-version.
+    "git describe --tags --always --dirty",
     # Two jobs checking out the moving merge ref can build different trees.
     "inputs.checkout_ref || github.ref",
     # The persistent venv never upgraded these once installed; a weekly
@@ -309,14 +315,17 @@ SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS = (
     # occupy it. "src/**" appears only inside those paths: blocks.
     '"src/**"',
     # .gdh-version belongs in every platform gate too, not just the deploy's.
-    # On Linux and macOS the flake feeds that file straight into -DAPP_VERSION,
-    # so changing it changes the artifact; on Windows the version comes from the
-    # tag instead, but a bump commit still changes what that build stamps.
-    # Without this the "PR build set == redeploy set" claim in each file's own
-    # trigger comment is merely stated, not enforced.
+    # A bump rides in a PR, and every platform stamps it from that PR's own
+    # build: the flake feeds the file into -DAPP_VERSION on Linux and macOS, and
+    # CMake reads a committed file newer than the tags on Windows. Without this
+    # the "PR build set == redeploy set" claim in each file's own trigger
+    # comment is merely stated, not enforced.
     '".gdh-version"',
     "runs-on: [self-hosted, Windows, X64, win0]",
     "workflow_call:",
+    # The freeze regression test: the built binary must report the version
+    # the checkout resolves (the reused build directory once kept its first).
+    "Verify the stamped version",
     "permissions:\n  contents: read",
     "git fetch --tags --prune --prune-tags --force origin",
     'VCPKG_COMMIT: "d30fdf55cfca16e12bc3ad99cbc615997014b61b"',
@@ -390,8 +399,9 @@ SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS = (
     # registers nothing with XDG.
     "decode-desktop-sync",
     "github:GDH-Technologies/tbc-tools",
-    # A version bump touches only .gdh-version. If it falls out of the gates,
-    # the release deploy is the one deploy that silently does not happen.
+    # A bump-only PR touches only .gdh-version. If it falls out of the gates,
+    # the release deploy is the one deploy that silently does not happen; the
+    # windows filter must list it too (checked by count in main()).
     '".gdh-version"',
     "'.gdh-version'",
     # Resolve the smoke-test binaries from the store path just installed, not
@@ -484,17 +494,57 @@ WM_LIGHT_RUNS_ON = "runs-on: [self-hosted, Linux, X64, wm-light]"
 AIR0_LIGHT_RUNS_ON = "runs-on: [self-hosted, macOS, ARM64, air0-light]"
 
 
-# A version bump must ask for the deploy, not rely on its push to cause one.
-# GitHub does not create workflow runs for pushes made with GITHUB_TOKEN, so
-# although .gdh-version sits in self-hosted-deploy.yml's paths filter, the
-# bump's own push can never trigger it -- cutting v3.2.8-gdh-1.0 produced zero
-# runs and left the fleet on the previous version, with the bump reporting
-# success. workflow_dispatch is one of the documented exceptions to that rule.
-# The failure mode is silent, so pin the dispatch and the permission it needs.
+# A release is a committed .gdh-version carried in a PR (scripts/gdh_version.py).
+# For a standalone release the bump workflow opens that PR itself: it commits
+# the bump on chore/version-<v>, never main, and opens the PR. A PR opened with
+# GITHUB_TOKEN triggers no pull_request runs, so the workflow dispatches the
+# PR's CI (workflow_dispatch is exempt); the merge's own push then deploys and
+# reuses those builds, so nothing dispatches the deploy any more.
 GDH_VERSION_BUMP_REQUIRED_SNIPPETS = (
     WM_LIGHT_RUNS_ON,
-    "gh workflow run self-hosted-deploy.yml",
+    "python3 scripts/gdh_version.py bump",
+    "python3 scripts/gdh_version.py check-pr",
+    "gh pr create",
+    "gh workflow run self-hosted-guardrails.yml",
+    "gh workflow run self-hosted-linux.yml",
+    "gh workflow run self-hosted-macos.yml",
+    "gh workflow run self-hosted-windows.yml",
+    "pull-requests: write",
     "actions: write",
+)
+GDH_VERSION_BUMP_FORBIDDEN_SNIPPETS = (
+    "--branch main",
+    "HEAD:refs/heads/main",
+    "gh workflow run self-hosted-deploy.yml",
+)
+# The tag records a merged release. The script puts it on the commit that
+# introduced .gdh-version (the PR's merge commit, never a later HEAD), refuses a
+# tag that exists elsewhere, and pushes nothing but the tag. It runs on every
+# push to main with no paths filter, so a missed tag heals on the next merge, and
+# first re-checks the pushed range so two PRs that took the same number turn
+# main red instead of passing silently.
+GDH_VERSION_TAG_REQUIRED_SNIPPETS = (
+    WM_LIGHT_RUNS_ON,
+    "branches: [main]",
+    "fetch-depth: 0",
+    "git fetch --tags --prune --prune-tags --force origin",
+    "python3 scripts/gdh_version.py check-pr",
+    "python3 scripts/gdh_version.py tag --push",
+    "cancel-in-progress: false",
+)
+GDH_VERSION_TAG_FORBIDDEN_SNIPPETS = (
+    "paths:",
+    "git tag -a",
+    "HEAD:refs/heads",
+)
+# "Allow GitHub Actions to create and approve pull requests" is enabled for the
+# bump workflow alone. Keep it the only workflow holding pull-requests: write,
+# and never run fork code with a write token (pull_request_target, or
+# workflow_run chained off a fork's run).
+PULL_REQUEST_WRITE_ALLOWED = (GDH_VERSION_BUMP_WORKFLOW,)
+FORBIDDEN_WORKFLOW_TRIGGERS = (
+    "pull_request_target:",
+    "workflow_run:",
 )
 
 
@@ -509,6 +559,8 @@ SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS = (
     WM_LIGHT_RUNS_ON,
     "bash ci/run_local_ci_parity.sh --guardrails-only",
     "python3 -m unittest -v ci.tests.test_gdh_version",
+    # A PR's .gdh-version must be unchanged or exactly the next minor/major.
+    "python3 scripts/gdh_version.py check-pr",
     "nix build nixpkgs#actionlint",
     "git fetch --tags --prune --prune-tags --force origin",
 )
@@ -530,9 +582,8 @@ SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS = (
 )
 # A dispatch selects its platforms from the input: through env, never
 # interpolated into the script, and matched as whole comma-separated names (so
-# "linux" never matches a hypothetical "linux-arm64"). The version bump depends
-# on the default selecting all three. detect and the Linux install run on
-# wm-light.
+# "linux" never matches a hypothetical "linux-arm64"). A hand dispatch with the
+# default redeploys all three. detect and the Linux install run on wm-light.
 SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS = (
     'default: "linux,macos,windows"',
     "PLATFORMS: ${{ inputs.platforms }}",
@@ -553,6 +604,14 @@ LIBRARY_CMAKELISTS = ROOT / "src/library/CMakeLists.txt"
 FLAKE_NIX = ROOT / "flake.nix"
 TOP_CMAKELISTS_FORBIDDEN_SNIPPETS = (
     "add_compile_definitions(APP_",
+    # Written back to the cache, APP_VERSION won every later configure, so a
+    # reused build directory (win0's) kept its first version for good.
+    'set(APP_VERSION "${APP_VERSION}" CACHE',
+)
+# ...and a build directory configured before that fix is healed, by dropping
+# the stale entry that carries our old helpstring.
+TOP_CMAKELISTS_REQUIRED_SNIPPETS = (
+    "get_property(_GDH_APP_VERSION_HELP CACHE APP_VERSION PROPERTY HELPSTRING)",
 )
 LIBRARY_CMAKELISTS_REQUIRED_SNIPPETS = (
     "tbc/buildinfo.cpp",
@@ -866,6 +925,7 @@ def main() -> int:
         SELF_HOSTED_DEPLOY_WORKFLOW,
         ACTIONLINT_CONFIG,
         GDH_VERSION_BUMP_WORKFLOW,
+        GDH_VERSION_TAG_WORKFLOW,
         SELF_HOSTED_GUARDRAILS_WORKFLOW,
         FLEET_DEPLOY_HOST_SCRIPT,
     ):
@@ -951,6 +1011,21 @@ def main() -> int:
         check_contains(ACTIONLINT_CONFIG, snippet, errors)
     for snippet in GDH_VERSION_BUMP_REQUIRED_SNIPPETS:
         check_contains(GDH_VERSION_BUMP_WORKFLOW, snippet, errors)
+    for snippet in GDH_VERSION_BUMP_FORBIDDEN_SNIPPETS:
+        check_not_contains(GDH_VERSION_BUMP_WORKFLOW, snippet, errors)
+    for snippet in GDH_VERSION_TAG_REQUIRED_SNIPPETS:
+        check_contains(GDH_VERSION_TAG_WORKFLOW, snippet, errors)
+    for snippet in GDH_VERSION_TAG_FORBIDDEN_SNIPPETS:
+        check_not_contains(GDH_VERSION_TAG_WORKFLOW, snippet, errors)
+    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        if workflow not in PULL_REQUEST_WRITE_ALLOWED:
+            check_not_contains(workflow, "pull-requests: write", errors)
+        for trigger in FORBIDDEN_WORKFLOW_TRIGGERS:
+            check_not_contains(workflow, trigger, errors)
+    # linux, macos and windows filters all list the version file.
+    check_count_at_least(SELF_HOSTED_DEPLOY_WORKFLOW, "- '.gdh-version'", 3, errors)
+    for snippet in TOP_CMAKELISTS_REQUIRED_SNIPPETS:
+        check_contains(TOP_CMAKELISTS, snippet, errors)
     for snippet in SELF_HOSTED_GUARDRAILS_REQUIRED_SNIPPETS:
         check_contains(SELF_HOSTED_GUARDRAILS_WORKFLOW, snippet, errors)
     for snippet in SELF_HOSTED_GUARDRAILS_FORBIDDEN_SNIPPETS:

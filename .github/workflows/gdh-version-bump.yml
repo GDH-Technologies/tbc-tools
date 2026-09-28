@@ -1,87 +1,77 @@
 name: "GDH version bump"
 
-# Cut a GDH fork version tag: v<upstream>-gdh-<major>.<minor>.
+# Open a PR that releases the next GDH version: v<upstream>-gdh-<major>.<minor>.
 #
-# The tag is the only INPUT for the GDH version: scripts/gdh_version.py scans
-# Conventional Commits since the last gdh tag to pick the level, and this
-# workflow just runs it somewhere with a trustworthy set of tags.
+# A release is a committed .gdh-version, and it normally rides inside whichever
+# PR you choose: run `python3 scripts/gdh_version.py bump --level minor` on that
+# branch. The PR's builds then carry the new version on every platform, the
+# merge deploy reuses them, and gdh-version-tag.yml tags the merge commit.
 #
-# The bump also commits .gdh-version to main and tags that commit. That file is
-# the version for consumers that cannot see tags -- a Nix build gets only the
-# tracked tree -- so it has to be pushed with the tag, not after it. This needs
-# main to accept a push from github-actions[bot]; if main is protected, grant
-# the bot an exception or the bump step will fail at the push.
+# This workflow is for a release with no code PR to carry it. It commits the
+# bump on chore/version-<v> (never on main), opens the PR, and dispatches the
+# PR's CI: GitHub does not create pull_request runs for a PR opened with
+# GITHUB_TOKEN, but workflow_dispatch is exempt from that rule, and dispatched
+# runs attach their checks to the branch head. Merging the PR deploys like any
+# other merge.
 #
-# GDH tags are excluded from release.yml's trigger, so cutting one here does NOT
-# publish a GitHub Release or touch harrypm's release path.
+# It needs "Allow GitHub Actions to create and approve pull requests" enabled
+# for this repository (Settings -> Actions -> General). This job is the only
+# holder of pull-requests: write; check_ci_contracts.py keeps it that way.
 #
-# The bump ends by dispatching self-hosted-deploy.yml explicitly. It has to:
-# GitHub does not create workflow runs for pushes made with GITHUB_TOKEN, so
-# although .gdh-version is in that workflow's paths filter, the push above can
-# never trigger it -- cutting v3.2.8-gdh-1.0 produced zero runs and left the
-# fleet reporting the previous version. workflow_dispatch is one of the
-# documented exceptions to that rule, so asking for the run directly works
-# where the push does not.
-#
-# That dispatch is optional (input `deploy`). The version is compiled into every
-# binary and .gdh-version is part of the Nix source, so a bump-only commit is a
-# new derivation on every platform with no PR build to reuse: deploying it
-# recompiles tbc-tools on wm, air0 and win0 just to change the number. With
-# deploy=false the tag and .gdh-version still land on main, and the fleet picks
-# the new version up with the next real code deploy, whose rebuild happens
-# anyway. Until then hosts report the previous version plus the source hash,
-# and the code is identical -- only .gdh-version differs.
+# GDH tags are excluded from release.yml's trigger, so the tag this leads to
+# does NOT publish a GitHub Release or touch harrypm's release path.
 
 permissions:
-  contents: write
-  # For the deploy dispatch at the end of the job, not for the tag push.
-  actions: write
+  contents: read
 
 on:
   workflow_dispatch:
     inputs:
       level:
-        description: "Bump level (auto scans Conventional Commits since the last gdh tag)"
+        description: "Bump level (auto scans Conventional Commits since the last release)"
         required: false
         default: "auto"
         type: choice
         options: ["auto", "minor", "major"]
       dry_run:
-        description: "Only print the proposal; do not create or push a tag"
-        required: false
-        default: true
-        type: boolean
-      deploy:
-        description: "Dispatch the fleet deploy after tagging (a full rebuild on every platform); false ships the version with the next code deploy"
+        description: "Only print the proposal; do not push a branch or open a PR"
         required: false
         default: true
         type: boolean
 
 jobs:
   bump:
-    name: Propose and tag
+    name: Propose and open the bump PR
     # Self-hosted: GitHub-hosted minutes are billable, and the fleet runner
-    # already has everything this needs (git + python3). wm-light is wm's
+    # already has everything this needs (git + python3 + gh). wm-light is wm's
     # second runner for short jobs, so a bump never waits behind a build.
     runs-on: [self-hosted, Linux, X64, wm-light]
+    permissions:
+      # Push the chore/version-<v> branch (never main).
+      contents: write
+      # Open its PR. Only this job may hold it.
+      pull-requests: write
+      # Dispatch the PR's CI.
+      actions: write
     steps:
-      - name: Refuse to tag from anywhere but main
+      - name: Refuse to run from anywhere but main
         env:
           REF: ${{ github.ref }}
         run: |
           if [ "$REF" != "refs/heads/main" ]; then
-            echo "GDH version tags are only cut from refs/heads/main (current: $REF)." >&2
+            echo "GDH version bumps are proposed from refs/heads/main (current: $REF)." >&2
             exit 1
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        # Pinned to v5's commit: this job holds write tokens.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # Both are mandatory: the resolver walks tags and counts commits, and
           # a shallow checkout silently resolves the wrong base.
           fetch-depth: 0
           fetch-tags: true
-          submodules: true
+          submodules: false
 
       - name: Refresh tags
         # The self-hosted workspace persists between runs, so a tag deleted or
@@ -106,6 +96,7 @@ jobs:
             printf '%s\n' "$OUTPUT"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$OUTPUT" > "$RUNNER_TEMP/proposal.txt"
 
           if [ "$STATUS" -eq 2 ]; then
             echo "proceed=false" >> "$GITHUB_OUTPUT"
@@ -118,51 +109,66 @@ jobs:
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Commit the version file and push the tag
+      - name: Commit the bump and push its branch
+        id: branch
         if: ${{ inputs.dry_run == false && steps.propose.outputs.proceed == 'true' }}
         env:
           LEVEL: ${{ inputs.level }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # --branch is mandatory here: actions/checkout leaves HEAD detached,
-          # so the script cannot work out where the version commit belongs. The
-          # first step of this job has already refused anything but main.
-          python3 scripts/gdh_version.py bump --level "$LEVEL" --push --branch main \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/gdh_version.py bump --level "$LEVEL" | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/gdh_version.py check-pr --base origin/main
+          VERSION="$(tr -d '\n' < .gdh-version)"
+          BRANCH="chore/version-$VERSION"
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "A bump branch for $VERSION already exists: $BRANCH. Merge or delete its PR first." >&2
+            exit 1
+          fi
+          # A new branch, never main: the release lands through its PR.
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy the new version to the fleet
-        # Only after a real bump that actually pushed. `gh workflow run` with
-        # GITHUB_TOKEN does create a run -- workflow_dispatch is exempt from
-        # the rule that blocks token-driven events -- which is the whole reason
-        # this step exists instead of relying on the push.
-        #
-        # Not fatal if it fails: the tag and .gdh-version are already pushed at
-        # this point, and a missed deploy is recoverable by dispatching the
-        # workflow by hand, whereas failing here would report a version cut
-        # that in fact succeeded.
-        if: ${{ inputs.dry_run == false && inputs.deploy && steps.propose.outputs.proceed == 'true' }}
-        continue-on-error: true
+      - name: Open the pull request
+        if: ${{ steps.branch.outputs.branch != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          VERSION: ${{ steps.branch.outputs.version }}
         run: |
-          if gh workflow run self-hosted-deploy.yml --repo "$GITHUB_REPOSITORY" --ref main; then
-            echo "Dispatched self-hosted-deploy.yml; the fleet will pick up the new version." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Could not dispatch self-hosted-deploy.yml. The version is cut and pushed;" \
-                 "run that workflow by hand to update the fleet." | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Note that the deploy was deferred
-        if: ${{ inputs.dry_run == false && !inputs.deploy && steps.propose.outputs.proceed == 'true' }}
-        run: |
-          echo "Deploy not dispatched (deploy=false): the fleet picks up the new version" \
-               "with the next code deploy, or dispatch self-hosted-deploy.yml by hand." \
+          set -euo pipefail
+          {
+            echo "Release **$VERSION**: \`.gdh-version\` = \`$VERSION\`."
+            echo
+            echo "Merging deploys the fleet with this PR's own builds, and gdh-version-tag.yml then tags the merge commit \`v$VERSION\`. Merge with a merge commit (or squash), not a rebase: a rebase merge tags the rebased bump commit."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/proposal.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "chore(version): $VERSION" --body-file "$RUNNER_TEMP/body.md" \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Run the pull request's CI
+        # A PR opened with GITHUB_TOKEN gets no pull_request runs. Dispatched
+        # runs on the branch attach their checks to its head commit instead.
+        if: ${{ steps.branch.outputs.branch != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+          gh workflow run self-hosted-guardrails.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          gh workflow run self-hosted-linux.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          gh workflow run self-hosted-macos.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          gh workflow run self-hosted-windows.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "Dispatched guardrails, Linux, macOS and Windows CI on $BRANCH." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Note that this was a dry run
         if: ${{ inputs.dry_run == true && steps.propose.outputs.proceed == 'true' }}
         run: |
-          echo "Dry run: no tag was created. Re-run with dry_run=false to cut it." \
+          echo "Dry run: no branch or PR was created. Re-run with dry_run=false to open the bump PR." \
             | tee -a "$GITHUB_STEP_SUMMARY"
