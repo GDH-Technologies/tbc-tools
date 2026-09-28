@@ -12,6 +12,7 @@
 #include "teletextviewerdialog.h"
 #include "teletextnativeviewwidget.h"
 #include "configuration.h"
+#include "gui/processprogressrunner.h"
 #ifdef emit
 #undef emit
 #endif
@@ -281,28 +282,33 @@ bool runPythonStep(const QString &pythonExecutable,
                    const QProcessEnvironment &environment,
                    QString *errorMessage)
 {
-    QProcess process;
-    process.setProcessEnvironment(environment);
-    process.start(pythonExecutable, arguments);
+    // Through ProcessProgressRunner, so the GUI keeps its event loop during a
+    // conversion that can take tens of seconds (a progress dialog with Cancel
+    // appears after half a second)
+    ProcessProgressRunner::Options options;
+    options.environment = environment;
+    const ProcessProgressRunner::Result result = ProcessProgressRunner::run(
+        pythonExecutable, arguments, QApplication::activeWindow(),
+        QObject::tr("Converting the teletext stream..."), options);
 
-    if (!process.waitForStarted(5000)) {
+    if (result.status == ProcessProgressRunner::Result::FailedToStart) {
         if (errorMessage) {
             *errorMessage = QObject::tr("Could not start Python teletext converter.");
         }
         return false;
     }
-    if (!process.waitForFinished(120000)) {
-        process.kill();
-        process.waitForFinished(3000);
+    if (result.status != ProcessProgressRunner::Result::Finished) {
         if (errorMessage) {
-            *errorMessage = QObject::tr("Teletext conversion timed out.");
+            *errorMessage = result.status == ProcessProgressRunner::Result::Cancelled
+                                ? QObject::tr("Teletext conversion cancelled.")
+                                : QObject::tr("Teletext conversion did not finish.");
         }
         return false;
     }
 
-    const QString stdoutText = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
-    const QString stderrText = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    const QString stdoutText = QString::fromLocal8Bit(result.standardOutput).trimmed();
+    const QString stderrText = QString::fromLocal8Bit(result.standardError).trimmed();
+    if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
         QString details = stderrText;
         if (details.isEmpty()) {
             details = stdoutText;

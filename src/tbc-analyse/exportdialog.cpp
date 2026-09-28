@@ -4,6 +4,7 @@
 
 #include "tbcsource.h"
 #include "configuration.h"
+#include "gui/processprogressrunner.h"
 
 #include "tbc/uistyle.h"
 
@@ -1122,15 +1123,18 @@ bool executableSupportsOption(const QString &program, const QString &option)
         return supportCache.value(cacheKey);
     }
 
-    QProcess helpProcess;
-    helpProcess.setProcessChannelMode(QProcess::MergedChannels);
-    helpProcess.start(program, QStringList() << QStringLiteral("--help"));
-
-    bool supportsOption = false;
-    if (helpProcess.waitForStarted(3000) && helpProcess.waitForFinished(5000)) {
-        const QString helpOutput = QString::fromLocal8Bit(helpProcess.readAllStandardOutput());
-        supportsOption = helpOutput.contains(option);
-    }
+    // Through ProcessProgressRunner, so the GUI keeps its event loop while the
+    // probe runs (a slow one gets a progress dialog with Cancel)
+    QString helpOutput;
+    ProcessProgressRunner::Options options;
+    options.onLine = [&helpOutput](const QString &line, int *, QString *) {
+        helpOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result result = ProcessProgressRunner::run(
+        program, {QStringLiteral("--help")}, QApplication::activeWindow(),
+        ExportDialog::tr("Checking %1...").arg(QFileInfo(program).fileName()), options);
+    const bool supportsOption = result.status == ProcessProgressRunner::Result::Finished
+                                && helpOutput.contains(option);
 
     supportCache.insert(cacheKey, supportsOption);
     return supportsOption;
@@ -2616,22 +2620,26 @@ void ExportDialog::refreshProfiles()
     }
     QStringList availableProfiles;
 
-    QProcess listProcess;
-    listProcess.setProcessChannelMode(QProcess::MergedChannels);
     QStringList listArguments;
     if (!selectedProfileConfigPath.isEmpty()) {
         listArguments << QStringLiteral("--config-file") << selectedProfileConfigPath;
     }
     listArguments << QStringLiteral("--list-profiles");
-    listProcess.start(exportPath, listArguments);
-    if (!listProcess.waitForStarted(3000)) {
+    // Through ProcessProgressRunner so the dialog keeps its event loop; a slow
+    // listing gets a progress dialog with Cancel
+    QString profileOutput;
+    ProcessProgressRunner::Options listOptions;
+    listOptions.onLine = [&profileOutput](const QString &line, int *, QString *) {
+        profileOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result listResult = ProcessProgressRunner::run(
+        exportPath, listArguments, this, tr("Listing export profiles..."), listOptions);
+    if (listResult.status == ProcessProgressRunner::Result::FailedToStart) {
         appendLog(tr("Failed to start profile listing; using built-in condensed profile options."));
-    } else if (!listProcess.waitForFinished(10000)) {
-        listProcess.kill();
-        appendLog(tr("Profile list timed out; using built-in condensed profile options."));
+    } else if (listResult.status != ProcessProgressRunner::Result::Finished) {
+        appendLog(tr("Profile listing did not finish; using built-in condensed profile options."));
     } else {
-        const QString profileOutput = QString::fromLocal8Bit(listProcess.readAllStandardOutput());
-        if (listProcess.exitStatus() == QProcess::NormalExit && listProcess.exitCode() == 0) {
+        if (listResult.exitStatus == QProcess::NormalExit && listResult.exitCode == 0) {
             QString ignoredDefault;
             availableProfiles = parseProfiles(profileOutput, &ignoredDefault);
         } else {
@@ -3017,11 +3025,17 @@ void ExportDialog::on_exportProfileConfigEjectButton_clicked()
         return;
     }
 
-    QProcess dumpProcess;
-    dumpProcess.setProcessChannelMode(QProcess::MergedChannels);
-    dumpProcess.setWorkingDirectory(dumpDirPath);
-    dumpProcess.start(exportPath, QStringList() << QStringLiteral("--dump-default-config"));
-    if (!dumpProcess.waitForStarted(3000)) {
+    // Through ProcessProgressRunner so the dialog keeps its event loop
+    QString dumpOutput;
+    ProcessProgressRunner::Options dumpOptions;
+    dumpOptions.workingDirectory = dumpDirPath;
+    dumpOptions.onLine = [&dumpOutput](const QString &line, int *, QString *) {
+        dumpOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result dumpResult = ProcessProgressRunner::run(
+        exportPath, {QStringLiteral("--dump-default-config")}, this,
+        tr("Ejecting the default profile set..."), dumpOptions);
+    if (dumpResult.status == ProcessProgressRunner::Result::FailedToStart) {
         cleanupDumpDir();
         const QString errorText = tr("Failed to start default profile ejection.");
         appendStatus(errorText);
@@ -3029,17 +3043,16 @@ void ExportDialog::on_exportProfileConfigEjectButton_clicked()
         QMessageBox::warning(this, tr("Error"), errorText);
         return;
     }
-    if (!dumpProcess.waitForFinished(15000)) {
-        dumpProcess.kill();
+    if (dumpResult.status != ProcessProgressRunner::Result::Finished) {
         cleanupDumpDir();
-        const QString errorText = tr("Default profile ejection timed out.");
+        const QString errorText = tr("Default profile ejection did not finish.");
         appendStatus(errorText);
         appendLog(errorText);
         QMessageBox::warning(this, tr("Error"), errorText);
         return;
     }
-    const QString dumpOutput = QString::fromLocal8Bit(dumpProcess.readAllStandardOutput()).trimmed();
-    if (dumpProcess.exitStatus() != QProcess::NormalExit || dumpProcess.exitCode() != 0) {
+    dumpOutput = dumpOutput.trimmed();
+    if (dumpResult.exitStatus != QProcess::NormalExit || dumpResult.exitCode != 0) {
         cleanupDumpDir();
         const QString errorText = dumpOutput.isEmpty()
                                       ? tr("Failed to eject default profile set.")
@@ -5429,27 +5442,32 @@ QString ExportDialog::createTemporaryExportConfig(QString *errorMessage,
             return QString();
         }
 
-        QProcess dumpProcess;
-        dumpProcess.setProcessChannelMode(QProcess::MergedChannels);
-        dumpProcess.setWorkingDirectory(dumpDirPath);
-        dumpProcess.start(exportPath, QStringList() << QStringLiteral("--dump-default-config"));
-        if (!dumpProcess.waitForStarted(3000)) {
+        // Through ProcessProgressRunner so the dialog keeps its event loop
+        QString dumpOutput;
+        ProcessProgressRunner::Options dumpOptions;
+        dumpOptions.workingDirectory = dumpDirPath;
+        dumpOptions.onLine = [&dumpOutput](const QString &line, int *, QString *) {
+            dumpOutput += line + QLatin1Char('\n');
+        };
+        const ProcessProgressRunner::Result dumpResult = ProcessProgressRunner::run(
+            exportPath, {QStringLiteral("--dump-default-config")}, this,
+            tr("Generating the export configuration..."), dumpOptions);
+        if (dumpResult.status == ProcessProgressRunner::Result::FailedToStart) {
             cleanupDumpDir();
             if (errorMessage) {
                 *errorMessage = tr("Failed to start export config generation.");
             }
             return QString();
         }
-        if (!dumpProcess.waitForFinished(15000)) {
-            dumpProcess.kill();
+        if (dumpResult.status != ProcessProgressRunner::Result::Finished) {
             cleanupDumpDir();
             if (errorMessage) {
-                *errorMessage = tr("Export config generation timed out.");
+                *errorMessage = tr("Export config generation did not finish.");
             }
             return QString();
         }
-        const QString dumpOutput = QString::fromLocal8Bit(dumpProcess.readAllStandardOutput()).trimmed();
-        if (dumpProcess.exitStatus() != QProcess::NormalExit || dumpProcess.exitCode() != 0) {
+        dumpOutput = dumpOutput.trimmed();
+        if (dumpResult.exitStatus != QProcess::NormalExit || dumpResult.exitCode != 0) {
             cleanupDumpDir();
             if (errorMessage) {
                 *errorMessage = dumpOutput.isEmpty()

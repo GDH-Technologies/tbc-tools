@@ -319,20 +319,20 @@ bool toolHelpListsOption(const QString &toolPath, const QString &optionName)
         return supportCache.value(cacheKey);
     }
 
-    QProcess probeProcess;
-    probeProcess.setProcessChannelMode(QProcess::MergedChannels);
-    probeProcess.start(toolPath, {QStringLiteral("--help")});
-
-    bool supportsOption = false;
-    if (probeProcess.waitForStarted(2000)) {
-        if (!probeProcess.waitForFinished(6000)) {
-            probeProcess.kill();
-            probeProcess.waitForFinished(1000);
-        } else {
-            const QString helpOutput = QString::fromLocal8Bit(probeProcess.readAllStandardOutput());
-            supportsOption = helpOutput.contains(optionName);
-        }
-    }
+    // Run through ProcessProgressRunner so the GUI keeps its event loop: a
+    // probe slower than half a second gets a progress dialog with Cancel
+    // instead of a frozen window
+    QString helpOutput;
+    ProcessProgressRunner::Options options;
+    options.onLine = [&helpOutput](const QString &line, int *, QString *) {
+        helpOutput += line + QLatin1Char('\n');
+    };
+    const ProcessProgressRunner::Result result = ProcessProgressRunner::run(
+        toolPath, {QStringLiteral("--help")}, QApplication::activeWindow(),
+        QCoreApplication::translate("MainWindow", "Checking %1...").arg(QFileInfo(toolPath).fileName()),
+        options);
+    const bool supportsOption = result.status == ProcessProgressRunner::Result::Finished
+                                && helpOutput.contains(optionName);
 
     supportCache.insert(cacheKey, supportsOption);
     return supportsOption;
