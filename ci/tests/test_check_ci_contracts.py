@@ -548,7 +548,7 @@ class ContractCoverageTests(unittest.TestCase):
             check_ci_contracts.SELF_HOSTED_LINUX_REQUIRED_SNIPPETS,
         )
         self.assertIn(
-            "runs-on: [self-hosted, Windows, X64, win0]",
+            "runs-on: [self-hosted, win0-test]",
             check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS,
         )
 
@@ -665,7 +665,7 @@ class ContractCoverageTests(unittest.TestCase):
         # actionlint knows only the GitHub-hosted labels plus the generic
         # self-hosted ones, so an undeclared fleet label fails the guardrails
         # job for every workflow that uses it.
-        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- wm-test", "- air0", "- air0-light", "- air0-test", "- win0"}
+        expected = {"self-hosted-runner:", "- wm", "- wm-light", "- wm-test", "- air0", "- air0-light", "- air0-test", "- win0", "- win0-test"}
         self.assertTrue(
             expected.issubset(set(check_ci_contracts.ACTIONLINT_CONFIG_REQUIRED_SNIPPETS))
         )
@@ -1022,6 +1022,38 @@ class ContractCoverageTests(unittest.TestCase):
             self.assertIn(snippet, flake)
         for snippet in check_ci_contracts.FLAKE_QT_FORBIDDEN_SNIPPETS:
             self.assertNotIn(snippet, flake)
+
+    def test_windows_ci_runs_on_the_test_runner_and_ships_its_stamp(self) -> None:
+        # The whole Windows job runs on win0's dedicated test runner. A
+        # deploy-driven build must still package, stamp and upload (the deploy
+        # installs that artifact), the stamp must survive the upload (dot-files
+        # are dropped by default), and a partial clone keeps history and tags
+        # without fetching 6.8 GB of old blobs.
+        for snippet in (
+            "runs-on: [self-hosted, win0-test]",
+            "include-hidden-files: true",
+            "filter: blob:none",
+            "ref: ${{ inputs.checkout_ref || github.sha }}",
+        ):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_WINDOWS_REQUIRED_SNIPPETS)
+        for snippet in (
+            "runs-on: [self-hosted, Windows, X64, win0]",
+            "inputs.checkout_ref || github.ref",
+            "if: ${{ !inputs.from_deploy }}",
+        ):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_WINDOWS_FORBIDDEN_SNIPPETS)
+
+    def test_deploy_windows_installs_only_a_stamped_artifact(self) -> None:
+        # No Windows build runs in win0's workspace any more, so the deploy
+        # always installs the tree-named artifact, into a cleared directory,
+        # and still refuses anything not stamped with the deployed tree.
+        for snippet in (
+            "runs-on: [self-hosted, Windows, X64, win0]",
+            "Remove-Item -Recurse -Force incoming",
+            "Refusing to deploy: $src was not built from tree",
+        ):
+            self.assertIn(snippet, check_ci_contracts.SELF_HOSTED_DEPLOY_REQUIRED_SNIPPETS)
+        self.assertIn("source=workspace", check_ci_contracts.SELF_HOSTED_DEPLOY_FORBIDDEN_SNIPPETS)
 
     def test_deploy_reuse_is_tree_verified_and_same_repo_only(self) -> None:
         # Installing a build the deploy did not make is safe only if it is of
