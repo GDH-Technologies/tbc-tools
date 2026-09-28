@@ -12,7 +12,12 @@
 #define EFMHANDLERDIALOG_H
 
 #include <QDialog>
+#include <QPointer>
+#include <QProcess>
 #include <QStringList>
+#include <QTemporaryDir>
+
+#include <memory>
 
 class Configuration;
 class QCheckBox;
@@ -45,6 +50,11 @@ public:
 signals:
     void exportTracksPrepared(const QStringList &trackFiles, const QStringList &trackNames);
 
+protected:
+    // Escape and the title-bar close go through here; refused while a run is
+    // in progress (Stop first)
+    void reject() override;
+
 private slots:
     void onAddEfmInputClicked();
     void onRemoveEfmInputClicked();
@@ -74,11 +84,12 @@ private:
     void appendLog(const QString &text);
     QString formatCommand(const QString &program, const QStringList &arguments) const;
     QString resolveExternalExecutable(const QStringList &toolNames) const;
-    bool runProcessStep(const CommandStep &step,
-                        int stepNumberOneBased,
-                        int totalSteps,
-                        QString *errorMessage);
-    bool runSelectedWorkflows(QString *errorMessage, QStringList *generatedAudioTracks);
+    // A run: prepareRun() checks the inputs and builds runSteps; the steps then
+    // run one QProcess at a time on the event loop (startNextStep), and
+    // finishRun() reports the outcome
+    bool prepareRun(QString *errorMessage);
+    void startNextStep();
+    void finishRun(bool success, const QString &errorMessage);
 
     // Where an EFM picker should open, and how a chosen path is remembered.
     // Both fall back to the seeded source directory when no configuration is set.
@@ -89,6 +100,13 @@ private:
     QString sourceDirectory;
     bool runInProgress = false;
     bool cancelRequested = false;
+    QList<CommandStep> runSteps;
+    int runStepIndex = 0;
+    QPointer<QProcess> runProcess;
+    std::unique_ptr<QTemporaryDir> runTempDirectory;  // intermediate files of the run
+    QStringList runAudioTracks;                       // decoded audio to offer for export
+    QByteArray runOutputBuffer;                       // the step's unterminated output
+    QString runLastOutputLine;
     bool userEditedOutputBase = false;
     bool userEditedAudioOutput = false;
     bool userEditedDataOutput = false;

@@ -12,12 +12,30 @@
 
 #include <QByteArray>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
+
+#include <functional>
 
 class QWidget;
 
 namespace ProcessProgressRunner {
+
+struct Options {
+    // Called for each line of the child's output (stdout and stderr merged)
+    // as it arrives. A line ends at \n or \r, so a tqdm-style progress bar
+    // that rewrites itself counts; a final unterminated line is passed too.
+    // The callback may set *percent (0-100) for a determinate progress bar and
+    // *label to change the dialog text; both start at their current values.
+    // Unset, output is only collected (merged into standardOutput when set).
+    std::function<void(const QString &line, int *percent, QString *label)> onLine;
+    // Unix: Cancel first sends SIGINT, as Ctrl+C would, so a tool can stop
+    // cleanly; terminate() is the fallback elsewhere
+    bool interruptFirst = false;
+    QString workingDirectory;               // empty: the caller's
+    QProcessEnvironment environment;        // empty: inherit
+};
 
 struct Result {
     enum Status {
@@ -47,7 +65,8 @@ struct Result {
 Result run(const QString &program,
            const QStringList &arguments,
            QWidget *parent,
-           const QString &labelText);
+           const QString &labelText,
+           const Options &options = {});
 
 } // namespace ProcessProgressRunner
 

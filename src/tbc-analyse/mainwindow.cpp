@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include "ui_mainwindow.h"
+#include "gui/processprogressrunner.h"
 #include "tbc/logging.h"
 
 #include <QAbstractButton>
@@ -4512,65 +4513,11 @@ void MainWindow::sanitizeCurrentPosition()
 bool MainWindow::runExternalToolWithProgress(const QString &program, const QStringList &arguments,
                                              const QString &toolDisplayName, QString *errorMessage)
 {
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(program, arguments);
-    QDialog progressDialog(this);
-    progressDialog.setWindowTitle(toolDisplayName);
-    progressDialog.setWindowModality(Qt::ApplicationModal);
-    progressDialog.setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::CustomizeWindowHint);
-    progressDialog.setMinimumWidth(540);
-
-    auto *dialogLayout = new QVBoxLayout(&progressDialog);
-    dialogLayout->setContentsMargins(14, 12, 14, 12);
-    dialogLayout->setSpacing(8);
-
-    auto *stageLabel = new QLabel(&progressDialog);
-    stageLabel->setWordWrap(true);
-    dialogLayout->addWidget(stageLabel);
-
-    auto *countsLabel = new QLabel(&progressDialog);
-    countsLabel->setWordWrap(true);
-    QFont countsFont = countsLabel->font();
-    countsFont.setStyleHint(QFont::TypeWriter);
-    countsLabel->setFont(countsFont);
-    dialogLayout->addWidget(countsLabel);
-
-    auto *percentLabel = new QLabel(&progressDialog);
-    percentLabel->setWordWrap(true);
-    dialogLayout->addWidget(percentLabel);
-
-    auto *progressBar = new QProgressBar(&progressDialog);
-    progressBar->setRange(0, 0);
-    progressBar->setTextVisible(true);
-    progressBar->setFormat(tr("Working..."));
-    dialogLayout->addWidget(progressBar);
-
-    auto *buttonRowLayout = new QHBoxLayout();
-    buttonRowLayout->addStretch(1);
-    auto *cancelButton = new QPushButton(tr("Cancel"), &progressDialog);
-    buttonRowLayout->addWidget(cancelButton);
-    dialogLayout->addLayout(buttonRowLayout);
-
     ExternalToolStage stage = ExternalToolStage::Starting;
     qint32 totalFields = 0;
     qint32 processedFields = 0;
     qint32 teletextProgressPercent = -1;
     QString lastOutputLine;
-    bool cancelRequested = false;
-    bool terminateSent = false;
-    QElapsedTimer cancelTimer;
-
-    connect(cancelButton, &QPushButton::clicked, &progressDialog, [&]() {
-        if (cancelRequested) {
-            return;
-        }
-        cancelRequested = true;
-        cancelButton->setEnabled(false);
-        stageLabel->setText(tr("%1: Cancel requested...").arg(toolDisplayName));
-        percentLabel->setText(tr("Cancelling..."));
-        QCoreApplication::processEvents();
-    });
 
     const QRegularExpression totalFieldsExpression(
         QStringLiteral("Using\\s+\\d+\\s+threads\\s+to\\s+process\\s+([0-9,]+)\\s+fields"),
@@ -4591,42 +4538,24 @@ bool MainWindow::runExternalToolWithProgress(const QString &program, const QStri
     const QRegularExpression ansiEscapeExpression(QStringLiteral("\\x1B\\[[0-9;]*[A-Za-z]"));
     const QRegularExpression teletextTqdmPercentExpression(QStringLiteral("(\\d{1,3})%\\|"));
 
-    auto updateProgressDialog = [&]() {
+    // The progress dialog's text and percentage for the current stage and counts
+    const auto describeProgress = [&](int *percent, QString *label) {
         const bool teletextStage = externalToolStageIsTeletext(stage);
-        int percent = 0;
-        bool hasDeterminateProgress = false;
-
         if (teletextStage && teletextProgressPercent >= 0) {
-            percent = qBound<qint32>(0, teletextProgressPercent, 100);
-            hasDeterminateProgress = true;
+            *percent = qBound<qint32>(0, teletextProgressPercent, 100);
         } else if (!teletextStage && totalFields > 0) {
-            percent = externalToolProgressPercent(processedFields, totalFields);
-            hasDeterminateProgress = true;
+            *percent = externalToolProgressPercent(processedFields, totalFields);
         }
-
-        if (hasDeterminateProgress) {
-            progressBar->setRange(0, 100);
-            progressBar->setValue(percent);
-            progressBar->setFormat(QStringLiteral("%p%"));
-        } else {
-            progressBar->setRange(0, 0);
-            progressBar->setFormat(tr("Working..."));
-        }
-        const QString progressLine = hasDeterminateProgress
-            ? tr("Progress: %1%").arg(percent)
-            : tr("Progress: --");
-        stageLabel->setText(externalToolStageLabel(toolDisplayName, stage));
+        QString counts = externalToolProgressSummary(processedFields, totalFields);
         if (teletextStage) {
-            countsLabel->setText(tr("%1\n%2")
-                                     .arg(externalToolProgressSummary(processedFields, totalFields),
-                                          externalToolTeletextProgressSummary(teletextProgressPercent)));
-        } else {
-            countsLabel->setText(externalToolProgressSummary(processedFields, totalFields));
+            counts += QLatin1Char('\n') + externalToolTeletextProgressSummary(teletextProgressPercent);
         }
-        percentLabel->setText(progressLine);
+        *label = externalToolStageLabel(toolDisplayName, stage) + QLatin1Char('\n') + counts;
     };
 
-    auto processOutputLine = [&](const QString &line) {
+    // Follow tbc-process-vbi's output: the stage it is in and its field counts
+    // (or, for the teletext export, tqdm's percentage)
+    const auto processOutputLine = [&](const QString &line, int *percent, QString *label) {
         QString normalizedLine = line;
         normalizedLine.remove(ansiEscapeExpression);
         const QString trimmedLine = normalizedLine.trimmed();
@@ -4742,105 +4671,47 @@ bool MainWindow::runExternalToolWithProgress(const QString &program, const QStri
             }
         }
 
-        updateProgressDialog();
+        describeProgress(percent, label);
     };
 
-    auto processOutputChunk = [&](const QByteArray &chunk, QByteArray &buffer) {
-        QByteArray normalizedChunk = chunk;
-        normalizedChunk.replace('\r', '\n');
-        buffer.append(normalizedChunk);
-        qsizetype newLineIndex = -1;
-        while ((newLineIndex = buffer.indexOf('\n')) != -1) {
-            QByteArray lineBytes = buffer.left(newLineIndex);
-            buffer.remove(0, newLineIndex + 1);
-            if (!lineBytes.isEmpty() && lineBytes.endsWith('\r')) {
-                lineBytes.chop(1);
-            }
-            processOutputLine(QString::fromLocal8Bit(lineBytes));
-        }
-    };
+    // A load or save must not start underneath the reprocessing; a file opened
+    // meanwhile is queued (requestSourceOpen)
+    sourceOperationInProgress = true;
+    ProcessProgressRunner::Options options;
+    options.onLine = processOutputLine;
+    options.interruptFirst = true; // tbc-process-vbi stops cleanly on SIGINT
+    int initialPercent = -1;
+    QString initialLabel;
+    describeProgress(&initialPercent, &initialLabel);
+    const ProcessProgressRunner::Result result =
+        ProcessProgressRunner::run(program, arguments, this, initialLabel, options);
+    sourceOperationInProgress = false;
 
-    updateProgressDialog();
-    progressDialog.show();
-    progressDialog.raise();
-    progressDialog.activateWindow();
-    QElapsedTimer progressVisibleTimer;
-    progressVisibleTimer.start();
-    QCoreApplication::processEvents();
-
-    if (!process.waitForStarted(5000)) {
-        progressDialog.close();
+    switch (result.status) {
+    case ProcessProgressRunner::Result::FailedToStart:
         if (errorMessage) {
             *errorMessage = tr("Unable to start %1.").arg(toolDisplayName.toLower());
         }
         return false;
-    }
-
-    QByteArray outputBuffer;
-    while (process.state() != QProcess::NotRunning) {
-        if (cancelRequested) {
-            if (!terminateSent) {
-#if defined(Q_OS_UNIX)
-                const qint64 processId = process.processId();
-                if (processId > 0) {
-                    ::kill(static_cast<pid_t>(processId), SIGINT);
-                } else {
-                    process.terminate();
-                }
-#else
-                process.terminate();
-#endif
-                terminateSent = true;
-                cancelTimer.start();
-            } else if (cancelTimer.isValid() && cancelTimer.elapsed() > 2000) {
-                process.kill();
-            }
-        }
-        process.waitForReadyRead(100);
-        const QByteArray outputChunk = process.readAllStandardOutput();
-        if (!outputChunk.isEmpty()) {
-            processOutputChunk(outputChunk, outputBuffer);
-        }
-        QCoreApplication::processEvents();
-    }
-
-    const QByteArray trailingChunk = process.readAllStandardOutput();
-    if (!trailingChunk.isEmpty()) {
-        processOutputChunk(trailingChunk, outputBuffer);
-    }
-    if (!outputBuffer.trimmed().isEmpty()) {
-        processOutputLine(QString::fromLocal8Bit(outputBuffer));
-    }
-
-    stage = ExternalToolStage::Finishing;
-    if (totalFields > 0) {
-        processedFields = totalFields;
-    }
-    teletextProgressPercent = qMax<qint32>(teletextProgressPercent, 100);
-    updateProgressDialog();
-    QCoreApplication::processEvents();
-    constexpr qint64 minimumVisibleMilliseconds = 700;
-    const qint64 visibleMilliseconds = progressVisibleTimer.elapsed();
-    if (visibleMilliseconds < minimumVisibleMilliseconds) {
-        QEventLoop delayLoop;
-        QTimer::singleShot(static_cast<int>(minimumVisibleMilliseconds - visibleMilliseconds),
-                           &delayLoop, &QEventLoop::quit);
-        delayLoop.exec();
-    }
-    progressDialog.close();
-
-    if (cancelRequested) {
+    case ProcessProgressRunner::Result::Cancelled:
         if (errorMessage) {
             *errorMessage = tr("%1 cancelled by user.").arg(toolDisplayName);
         }
         return false;
+    case ProcessProgressRunner::Result::DidNotFinish:
+        if (errorMessage) {
+            *errorMessage = tr("%1 did not finish.").arg(toolDisplayName);
+        }
+        return false;
+    case ProcessProgressRunner::Result::Finished:
+        break;
     }
 
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
         if (errorMessage) {
             *errorMessage = !lastOutputLine.isEmpty()
                 ? lastOutputLine
-                : tr("%1 failed with exit code %2.").arg(toolDisplayName).arg(process.exitCode());
+                : tr("%1 failed with exit code %2.").arg(toolDisplayName).arg(result.exitCode);
         }
         return false;
     }

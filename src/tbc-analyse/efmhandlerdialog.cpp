@@ -18,7 +18,8 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
-#include <QElapsedTimer>
+#include <QFontDatabase>
+#include <QTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
@@ -372,9 +373,9 @@ void EfmHandlerDialog::buildUi()
     logTextEdit->setReadOnly(true);
     logTextEdit->setMinimumHeight(96);
     logTextEdit->setMaximumHeight(140);
-    QFont logFont = logTextEdit->font();
-    logFont.setStyleHint(QFont::TypeWriter);
-    logTextEdit->setFont(logFont);
+    // The system's fixed-pitch font (a style hint on the default family does
+    // not make it monospaced)
+    logTextEdit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     mainLayout->addWidget(logTextEdit);
 
     QHBoxLayout *buttonLayout = new QHBoxLayout();
@@ -682,110 +683,133 @@ QString EfmHandlerDialog::resolveExternalExecutable(const QStringList &toolNames
     return QString();
 }
 
-bool EfmHandlerDialog::runProcessStep(const CommandStep &step,
-                                      int stepNumberOneBased,
-                                      int totalSteps,
-                                      QString *errorMessage)
+// Start the next step of the run, or finish it once every step has succeeded.
+// Each step's output is logged line by line as it arrives; the dialog stays
+// responsive throughout.
+void EfmHandlerDialog::startNextStep()
 {
-    if (errorMessage) {
-        errorMessage->clear();
+    if (runStepIndex >= runSteps.size()) {
+        finishRun(true, QString());
+        return;
     }
 
-    appendStatus(tr("Running step %1/%2: %3").arg(stepNumberOneBased).arg(totalSteps).arg(step.title));
-    appendLog(tr("----- Step %1/%2: %3 -----").arg(stepNumberOneBased).arg(totalSteps).arg(step.title));
+    const CommandStep &step = runSteps.at(runStepIndex);
+    appendStatus(tr("Running step %1/%2: %3").arg(runStepIndex + 1).arg(runSteps.size()).arg(step.title));
+    appendLog(tr("----- Step %1/%2: %3 -----").arg(runStepIndex + 1).arg(runSteps.size()).arg(step.title));
     appendLog(QStringLiteral("$ %1").arg(formatCommand(step.program, step.arguments)));
 
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(step.program, step.arguments);
+    runOutputBuffer.clear();
+    runLastOutputLine.clear();
+    runProcess = new QProcess(this);
+    runProcess->setProcessChannelMode(QProcess::MergedChannels);
 
-    if (!process.waitForStarted(5000)) {
-        if (errorMessage) {
-            *errorMessage = tr("Unable to start tool: %1").arg(step.program);
+    connect(runProcess, &QProcess::readyReadStandardOutput, this, [this]() {
+        QByteArray normalized = runProcess->readAllStandardOutput();
+        normalized.replace('\r', '\n');
+        runOutputBuffer.append(normalized);
+        qsizetype lineBreakIndex = -1;
+        while ((lineBreakIndex = runOutputBuffer.indexOf('\n')) >= 0) {
+            const QString lineText = QString::fromLocal8Bit(runOutputBuffer.left(lineBreakIndex)).trimmed();
+            runOutputBuffer.remove(0, lineBreakIndex + 1);
+            if (!lineText.isEmpty()) {
+                runLastOutputLine = lineText;
+                appendLog(lineText);
+            }
         }
-        return false;
-    }
+    });
+    connect(runProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            const QString program = runProcess->program();
+            runProcess->deleteLater();
+            finishRun(false, tr("Unable to start tool: %1").arg(program));
+        }
+    });
+    connect(runProcess, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        const QString trailingLine = QString::fromLocal8Bit(runOutputBuffer).trimmed();
+        if (!trailingLine.isEmpty()) {
+            runLastOutputLine = trailingLine;
+            appendLog(trailingLine);
+        }
+        runProcess->deleteLater();
 
-    QByteArray pendingOutputBuffer;
-    QString lastOutputLine;
-    bool terminateSent = false;
-    QElapsedTimer cancelTimer;
-
-    auto consumeOutputChunk = [&](const QByteArray &chunk) {
-        if (chunk.isEmpty()) {
+        const CommandStep &finishedStep = runSteps.at(runStepIndex);
+        if (cancelRequested) {
+            finishRun(false, QString());
+            return;
+        }
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            finishRun(false, !runLastOutputLine.isEmpty()
+                                 ? runLastOutputLine
+                                 : tr("%1 failed with exit code %2.").arg(finishedStep.title).arg(exitCode));
             return;
         }
 
-        QByteArray normalized = chunk;
-        normalized.replace('\r', '\n');
-        pendingOutputBuffer.append(normalized);
-
-        qsizetype lineBreakIndex = -1;
-        while ((lineBreakIndex = pendingOutputBuffer.indexOf('\n')) >= 0) {
-            QByteArray lineBytes = pendingOutputBuffer.left(lineBreakIndex);
-            pendingOutputBuffer.remove(0, lineBreakIndex + 1);
-            const QString lineText = QString::fromLocal8Bit(lineBytes).trimmed();
-            if (lineText.isEmpty()) {
-                continue;
-            }
-            lastOutputLine = lineText;
-            appendLog(lineText);
+        appendLog(tr("Completed: %1").arg(finishedStep.title));
+        ++runStepIndex;
+        if (progressBar) {
+            progressBar->setValue(runStepIndex);
         }
-    };
+        startNextStep();
+    });
 
-    while (process.state() != QProcess::NotRunning) {
-        if (cancelRequested) {
-            if (!terminateSent) {
-                process.terminate();
-                terminateSent = true;
-                cancelTimer.start();
-            } else if (cancelTimer.isValid() && cancelTimer.elapsed() > 2000) {
-                process.kill();
-            }
-        }
-
-        process.waitForReadyRead(100);
-        consumeOutputChunk(process.readAllStandardOutput());
-        QCoreApplication::processEvents();
-    }
-
-    consumeOutputChunk(process.readAllStandardOutput());
-    if (!pendingOutputBuffer.trimmed().isEmpty()) {
-        const QString trailingLine = QString::fromLocal8Bit(pendingOutputBuffer).trimmed();
-        if (!trailingLine.isEmpty()) {
-            lastOutputLine = trailingLine;
-            appendLog(trailingLine);
-        }
-    }
-
-    if (cancelRequested) {
-        if (errorMessage) {
-            *errorMessage = tr("Cancelled by user.");
-        }
-        return false;
-    }
-
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        if (errorMessage) {
-            *errorMessage = !lastOutputLine.isEmpty()
-                                ? lastOutputLine
-                                : tr("%1 failed with exit code %2.").arg(step.title).arg(process.exitCode());
-        }
-        return false;
-    }
-
-    appendLog(tr("Completed: %1").arg(step.title));
-    return true;
+    runProcess->start(step.program, step.arguments);
 }
 
-bool EfmHandlerDialog::runSelectedWorkflows(QString *errorMessage, QStringList *generatedAudioTracks)
+// Report how the run ended: cancelled, failed with errorMessage, or complete
+void EfmHandlerDialog::finishRun(bool success, const QString &errorMessage)
+{
+    setBusy(false);
+    runTempDirectory.reset();
+
+    if (cancelRequested) {
+        appendStatus(tr("Run cancelled."));
+        appendLog(tr("Run cancelled by user."));
+        return;
+    }
+    if (!success) {
+        appendStatus(tr("Run failed."));
+        QMessageBox::warning(this,
+                             tr("EFM-Handler"),
+                             errorMessage.isEmpty() ? tr("Run failed.") : errorMessage);
+        return;
+    }
+
+    appendStatus(tr("Run complete."));
+    appendLog(tr("Run complete."));
+
+    if (!runAudioTracks.isEmpty()
+        && loadDecodedAudioForExportCheckBox
+        && loadDecodedAudioForExportCheckBox->isChecked()) {
+        QStringList trackNames;
+        trackNames.reserve(runAudioTracks.size());
+        for (int index = 0; index < runAudioTracks.size(); ++index) {
+            trackNames << tr("EFM Audio");
+        }
+        emit exportTracksPrepared(runAudioTracks, trackNames);
+    }
+
+    QMessageBox::information(this,
+                             tr("EFM-Handler"),
+                             tr("Selected workflows completed successfully."));
+}
+
+void EfmHandlerDialog::reject()
+{
+    if (runInProgress) {
+        appendStatus(tr("A run is in progress; stop it before closing."));
+        return;
+    }
+    QDialog::reject();
+}
+
+bool EfmHandlerDialog::prepareRun(QString *errorMessage)
 {
     if (errorMessage) {
         errorMessage->clear();
     }
-    if (generatedAudioTracks) {
-        generatedAudioTracks->clear();
-    }
+    runSteps.clear();
+    runStepIndex = 0;
+    runAudioTracks.clear();
 
     const bool runAc3 = decodeAc3CheckBox && decodeAc3CheckBox->isChecked();
     const bool hasEfmInputs = efmInputListWidget && efmInputListWidget->count() > 0;
@@ -936,7 +960,9 @@ bool EfmHandlerDialog::runSelectedWorkflows(QString *errorMessage, QStringList *
         }
     }
 
-    QTemporaryDir tempDirectory;
+    // Kept for the whole (asynchronous) run: it holds the intermediate files
+    runTempDirectory = std::make_unique<QTemporaryDir>();
+    const QTemporaryDir &tempDirectory = *runTempDirectory;
     if (!efmInputs.isEmpty() && !tempDirectory.isValid()) {
         if (errorMessage) {
             *errorMessage = tr("Unable to create a temporary directory for EFM intermediate files.");
@@ -1011,23 +1037,10 @@ bool EfmHandlerDialog::runSelectedWorkflows(QString *errorMessage, QStringList *
         progressBar->setValue(0);
     }
 
-    for (int commandIndex = 0; commandIndex < commandSteps.size(); ++commandIndex) {
-        QString stepError;
-        if (!runProcessStep(commandSteps.at(commandIndex), commandIndex + 1, commandSteps.size(), &stepError)) {
-            if (errorMessage) {
-                *errorMessage = stepError;
-            }
-            return false;
-        }
-        if (progressBar) {
-            progressBar->setValue(commandIndex + 1);
-        }
+    runSteps = commandSteps;
+    if (runEfmAudio) {
+        runAudioTracks.append(QFileInfo(audioOutputPath).absoluteFilePath());
     }
-
-    if (generatedAudioTracks && runEfmAudio) {
-        generatedAudioTracks->append(QFileInfo(audioOutputPath).absoluteFilePath());
-    }
-
     return true;
 }
 
@@ -1226,21 +1239,10 @@ void EfmHandlerDialog::onRunClicked()
     }
 
     cancelRequested = false;
-    QStringList generatedAudioTracks;
-    QString runError;
-
     appendLog(tr("Starting EFM-Handler run"));
-    setBusy(true);
 
-    const bool success = runSelectedWorkflows(&runError, &generatedAudioTracks);
-    setBusy(false);
-
-    if (!success) {
-        if (runError.contains(tr("cancelled"), Qt::CaseInsensitive)) {
-            appendStatus(tr("Run cancelled."));
-            appendLog(tr("Run cancelled by user."));
-            return;
-        }
+    QString runError;
+    if (!prepareRun(&runError)) {
         appendStatus(tr("Run failed."));
         QMessageBox::warning(this,
                              tr("EFM-Handler"),
@@ -1248,23 +1250,9 @@ void EfmHandlerDialog::onRunClicked()
         return;
     }
 
-    appendStatus(tr("Run complete."));
-    appendLog(tr("Run complete."));
-
-    if (!generatedAudioTracks.isEmpty()
-        && loadDecodedAudioForExportCheckBox
-        && loadDecodedAudioForExportCheckBox->isChecked()) {
-        QStringList trackNames;
-        trackNames.reserve(generatedAudioTracks.size());
-        for (int index = 0; index < generatedAudioTracks.size(); ++index) {
-            trackNames << tr("EFM Audio");
-        }
-        emit exportTracksPrepared(generatedAudioTracks, trackNames);
-    }
-
-    QMessageBox::information(this,
-                             tr("EFM-Handler"),
-                             tr("Selected workflows completed successfully."));
+    // The steps run on the event loop; finishRun() reports the outcome
+    setBusy(true);
+    startNextStep();
 }
 
 void EfmHandlerDialog::onCancelClicked()
@@ -1273,6 +1261,15 @@ void EfmHandlerDialog::onCancelClicked()
         cancelRequested = true;
         appendStatus(tr("Cancelling..."));
         appendLog(tr("Cancellation requested..."));
+        if (runProcess && runProcess->state() != QProcess::NotRunning) {
+            runProcess->terminate();
+            // A tool that ignores terminate() is killed after a grace period
+            QTimer::singleShot(2000, runProcess, [process = runProcess]() {
+                if (process && process->state() != QProcess::NotRunning) {
+                    process->kill();
+                }
+            });
+        }
         return;
     }
     close();
