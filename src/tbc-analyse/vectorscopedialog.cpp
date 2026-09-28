@@ -683,13 +683,13 @@ void VectorscopeDialog::on_fieldSelectButtonGroup_buttonClicked(QAbstractButton 
     emit scopeChanged();
 }
 
-void VectorscopeDialog::on_renderModeButtonGroup_buttonClicked(QAbstractButton *button)
+void VectorscopeDialog::onRenderModeClicked(QAbstractButton *button)
 {
     (void) button;
     emit scopeChanged();
 }
 
-void VectorscopeDialog::on_areaModeButtonGroup_buttonClicked(QAbstractButton *button)
+void VectorscopeDialog::onAreaModeClicked(QAbstractButton *button)
 {
     if (button == areaModeActiveRadioButton || button == areaModeFullRadioButton) {
         applyAreaPreset();
@@ -719,7 +719,7 @@ void VectorscopeDialog::initialiseAdvancedControls()
     connect(renderModeButtonGroup,
             &QButtonGroup::buttonClicked,
             this,
-            &VectorscopeDialog::on_renderModeButtonGroup_buttonClicked);
+            &VectorscopeDialog::onRenderModeClicked);
 
     QGroupBox *areaGroup = new QGroupBox(tr("Scope area"), ui->frame);
     QVBoxLayout *areaLayout = new QVBoxLayout(areaGroup);
@@ -738,7 +738,7 @@ void VectorscopeDialog::initialiseAdvancedControls()
     connect(areaModeButtonGroup,
             &QButtonGroup::buttonClicked,
             this,
-            &VectorscopeDialog::on_areaModeButtonGroup_buttonClicked);
+            &VectorscopeDialog::onAreaModeClicked);
     QLabel *customAreaHintLabel = new QLabel(tr("Custom is set from the main-view selection tool."), areaGroup);
     customAreaHintLabel->setWordWrap(true);
     areaLayout->addWidget(customAreaHintLabel);

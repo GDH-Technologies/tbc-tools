@@ -77,6 +77,9 @@ endif()
 
 target_include_directories(tbc-analyse PRIVATE
     ${FFTW_INCLUDE_DIR}
+    # For headers of custom widgets promoted in .ui files (uic's generated
+    # ui_*.h include them by name)
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(tbc-analyse PRIVATE

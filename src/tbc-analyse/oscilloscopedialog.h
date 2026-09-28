@@ -47,7 +47,7 @@ signals:
 private slots:
     void on_previousPushButton_clicked();
     void on_nextPushButton_clicked();
-    void on_fieldToggleButton_clicked();
+    void onFieldToggleClicked();
     void on_xCoordSpinBox_valueChanged(int arg1);
     void on_yCoordSpinBox_valueChanged(int arg1);
     void on_YCcheckBox_clicked();

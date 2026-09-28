@@ -1283,42 +1283,6 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
 {
     ui->setupUi(this);
 
-    if (ui->posHorizontalSlider && ui->mediaControl_frame) {
-        QSlider *existingSlider = ui->posHorizontalSlider;
-        auto *replacementSlider = new TimelineMarkerSlider(ui->mediaControl_frame);
-        replacementSlider->setObjectName(existingSlider->objectName());
-        replacementSlider->setOrientation(existingSlider->orientation());
-        replacementSlider->setMinimum(existingSlider->minimum());
-        replacementSlider->setMaximum(existingSlider->maximum());
-        replacementSlider->setSingleStep(existingSlider->singleStep());
-        replacementSlider->setPageStep(existingSlider->pageStep());
-        replacementSlider->setTracking(existingSlider->hasTracking());
-        replacementSlider->setValue(existingSlider->value());
-        replacementSlider->setEnabled(existingSlider->isEnabled());
-        replacementSlider->setMinimumSize(existingSlider->minimumSize());
-        replacementSlider->setMaximumSize(existingSlider->maximumSize());
-        replacementSlider->setSizePolicy(existingSlider->sizePolicy());
-        replacementSlider->setInvertedAppearance(existingSlider->invertedAppearance());
-        replacementSlider->setInvertedControls(existingSlider->invertedControls());
-        replacementSlider->setContextMenuPolicy(existingSlider->contextMenuPolicy());
-
-        if (QLayout *sliderLayout = ui->mediaControl_frame->layout()) {
-            sliderLayout->replaceWidget(existingSlider, replacementSlider);
-        }
-
-        existingSlider->deleteLater();
-        ui->posHorizontalSlider = replacementSlider;
-        timelineMarkerSlider = replacementSlider;
-
-        connect(timelineMarkerSlider, &QSlider::valueChanged,
-                this, &MainWindow::on_posHorizontalSlider_valueChanged);
-        connect(timelineMarkerSlider, &QSlider::sliderPressed,
-                this, &MainWindow::on_posHorizontalSlider_sliderPressed);
-        connect(timelineMarkerSlider, &QSlider::sliderReleased,
-                this, &MainWindow::on_posHorizontalSlider_sliderReleased);
-        connect(timelineMarkerSlider, &QWidget::customContextMenuRequested,
-                this, &MainWindow::on_posHorizontalSlider_customContextMenuRequested);
-    }
     if (ui->posHorizontalSlider) {
         ui->posHorizontalSlider->setToolTip(tr("Use [ & ] keys to set in & out points at the current frame\n"
                                                "M — add/edit a marker comment at the current frame\n"
@@ -1328,12 +1292,12 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     copyCurrentDisplayAction->setShortcut(QKeySequence::Copy);
     copyCurrentDisplayAction->setShortcutContext(Qt::WindowShortcut);
     connect(copyCurrentDisplayAction, &QAction::triggered,
-            this, &MainWindow::on_actionCopy_current_display_to_clipboard_triggered);
+            this, &MainWindow::copyCurrentDisplayToClipboard);
     addAction(copyCurrentDisplayAction);
 
     saveAllModesPngAction = new QAction(tr("Save all mode views as PNGs..."), this);
     connect(saveAllModesPngAction, &QAction::triggered,
-            this, &MainWindow::on_actionSave_all_modes_as_PNGs_triggered);
+            this, &MainWindow::saveAllModesAsPngs);
     if (ui->menuFile) {
         if (ui->actionExit) {
             ui->menuFile->insertAction(ui->actionExit, saveAllModesPngAction);
@@ -1431,7 +1395,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
         }
     }
     connect(vectorscopeSelectionPushButton, &QPushButton::toggled,
-            this, &MainWindow::on_vectorscopeSelectionPushButton_toggled);
+            this, &MainWindow::onVectorscopeSelectionToggled);
     populateThemesMenu();
 
     // Set up dialogues
@@ -1466,7 +1430,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     });
     // Apply: save the metadata to disk. TbcSource::saveSourceMetadata() writes
     // to a .new file, backs up the original to .bup (timestamped fallback),
-    // renames .new to the target, then on_finishedSaving reloads the source
+    // renames .new to the target, then onSourceSaved reloads the source
     // with the new metadata.
     connect(metadataEditorDialog, &MetadataEditorDialog::refreshRequested,
             this, [this]() {
@@ -1674,11 +1638,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     connect(chromaDecoderConfigDialog, &ChromaDecoderConfigDialog::videoLevelsChanged, this, &MainWindow::videoLevelsChangedSignalHandler);
 
     // Connect to the TbcSource signals (busy and finished loading)
-    connect(&tbcSource, &TbcSource::busy, this, &MainWindow::on_busy);
-    connect(&tbcSource, &TbcSource::finishedLoading, this, &MainWindow::on_finishedLoading);
-    connect(&tbcSource, &TbcSource::finishedSaving, this, &MainWindow::on_finishedSaving);
+    connect(&tbcSource, &TbcSource::busy, this, &MainWindow::onSourceBusy);
+    connect(&tbcSource, &TbcSource::finishedLoading, this, &MainWindow::onSourceLoaded);
+    connect(&tbcSource, &TbcSource::finishedSaving, this, &MainWindow::onSourceSaved);
     connect(&asyncFrameRenderWatcher, &QFutureWatcher<QImage>::finished,
-            this, &MainWindow::on_asyncFrameRenderFinished);
+            this, &MainWindow::onAsyncFrameRenderFinished);
 
     // Load the window geometry and settings from the configuration
     const QByteArray savedMainGeometry = configuration.getMainWindowGeometry();
@@ -2676,7 +2640,7 @@ void MainWindow::startAsyncFrameRender()
     }
 }
 
-void MainWindow::on_asyncFrameRenderFinished()
+void MainWindow::onAsyncFrameRenderFinished()
 {
     asyncFrameRenderInProgress = false;
     if (!tbcSource.getIsSourceLoaded() || tbcSource.getIsMetadataOnly()) {
@@ -4112,12 +4076,8 @@ qint32 MainWindow::frameForSliderPosition(qint32 sliderPosition) const
 
 void MainWindow::updateTimelineMarkers()
 {
-    if (!timelineMarkerSlider) {
-        return;
-    }
-
     if (!tbcSource.getIsSourceLoaded()) {
-        timelineMarkerSlider->setMarkerFrames(-1, -1, {});
+        ui->posHorizontalSlider->setMarkerFrames(-1, -1, {});
         return;
     }
     const qint32 totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
@@ -4134,7 +4094,7 @@ void MainWindow::updateTimelineMarkers()
             notePositions.append(markerPosition);
         }
     }
-    timelineMarkerSlider->setMarkerFrames(inPosition, outPosition, notePositions);
+    ui->posHorizontalSlider->setMarkerFrames(inPosition, outPosition, notePositions);
 
     // Recording segments: a tick per boundary (with a tooltip), a tint over
     // noise, blank and disabled spans
@@ -4169,7 +4129,7 @@ void MainWindow::updateTimelineMarkers()
             }
         }
     }
-    timelineMarkerSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
+    ui->posHorizontalSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
 }
 
 qint32 MainWindow::sliderPositionForField(qint32 field) const
@@ -6397,7 +6357,7 @@ void MainWindow::copyCurrentFrameToClipboard()
     statusBar()->showMessage(tr("Copied current frame to clipboard."), 3000);
 }
 
-void MainWindow::on_actionCopy_current_display_to_clipboard_triggered()
+void MainWindow::copyCurrentDisplayToClipboard()
 {
     if (!tbcSource.getIsSourceLoaded()) {
         statusBar()->showMessage(tr("No source loaded to copy."), 3000);
@@ -6421,7 +6381,7 @@ void MainWindow::on_actionCopy_current_display_to_clipboard_triggered()
     copyCurrentFrameToClipboard();
 }
 
-void MainWindow::on_actionSave_all_modes_as_PNGs_triggered()
+void MainWindow::saveAllModesAsPngs()
 {
     if (!tbcSource.getIsSourceLoaded()) {
         QMessageBox::warning(this, tr("Warning"), tr("No source file loaded."));
@@ -7915,7 +7875,7 @@ void MainWindow::on_mouseModePushButton_clicked()
     updateImageViewer();
 }
 
-void MainWindow::on_vectorscopeSelectionPushButton_toggled(bool checked)
+void MainWindow::onVectorscopeSelectionToggled(bool checked)
 {
     vectorscopeSelectionDragging = false;
     if (checked) {
@@ -8444,10 +8404,10 @@ void MainWindow::chromaDecoderConfigChangedSignalHandler()
 // TbcSource class signal handlers ------------------------------------------------------------------------------------
 
 // Signal handler for busy signal from TbcSource class
-void MainWindow::on_busy(QString infoMessage)
+void MainWindow::onSourceBusy(QString infoMessage)
 {
     setPlaybackRunning(false);
-    tbcDebugStream() << "MainWindow::on_busy(): Got signal with message" << infoMessage;
+    tbcDebugStream() << "MainWindow::onSourceBusy(): Got signal with message" << infoMessage;
     sourceOperationInProgress = true;
     // Set the busy message and centre the dialog in the parent window
     busyDialog->setMessage(infoMessage);
@@ -8463,9 +8423,9 @@ void MainWindow::on_busy(QString infoMessage)
 }
 
 // Signal handler for finishedLoading signal from TbcSource class
-void MainWindow::on_finishedLoading(bool success)
+void MainWindow::onSourceLoaded(bool success)
 {
-    tbcDebugStream() << "MainWindow::on_finishedLoading(): Called";
+    tbcDebugStream() << "MainWindow::onSourceLoaded(): Called";
     setPlaybackRunning(false);
     sourceOperationInProgress = false;
 
@@ -8537,9 +8497,9 @@ void MainWindow::on_finishedLoading(bool success)
 }
 
 // Signal handler for finishedSaving signal from TbcSource class
-void MainWindow::on_finishedSaving(bool success)
+void MainWindow::onSourceSaved(bool success)
 {
-    tbcDebugStream() << "MainWindow::on_finishedSaving(): Called";
+    tbcDebugStream() << "MainWindow::onSourceSaved(): Called";
     sourceOperationInProgress = false;
 
     // Hide the busy dialogue

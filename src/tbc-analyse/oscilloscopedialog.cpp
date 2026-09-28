@@ -151,7 +151,7 @@ void OscilloscopeDialog::setupAdvancedScopeTab()
                 fieldToggleButton->setMaximumSize(ui->previousPushButton->maximumSize());
             }
             fieldToggleButton->setFocusPolicy(Qt::NoFocus);
-            connect(fieldToggleButton, &QPushButton::clicked, this, &OscilloscopeDialog::on_fieldToggleButton_clicked);
+            connect(fieldToggleButton, &QPushButton::clicked, this, &OscilloscopeDialog::onFieldToggleClicked);
             ui->verticalLayout->insertWidget(2, fieldToggleButton);
         }
         if (ui->verticalSpacer) {
@@ -740,7 +740,7 @@ void OscilloscopeDialog::on_nextPushButton_clicked()
     }
 }
 
-void OscilloscopeDialog::on_fieldToggleButton_clicked()
+void OscilloscopeDialog::onFieldToggleClicked()
 {
     if (!ui || !ui->yCoordSpinBox) {
         return;
