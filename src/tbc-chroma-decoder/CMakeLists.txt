@@ -25,6 +25,10 @@ if(LDCHROMA_ENABLE_CUDA)
         # host compiler's runtime search paths into non-CUDA executable links. This causes
         # libstdc++/libgcc symbol ABI mismatches when the rest of the project uses a newer C++ toolchain.
         # Keep CUDA-specific paths while stripping GCC 11 runtime directories from implicit CUDA link paths.
+        # The host compiler's glibc goes too: under Nix a legacy gcc11 brings its own glibc, and that
+        # directory in an executable's RUNPATH makes the newer ld.so load the older libc.so.6
+        # ("undefined symbol: __nptl_change_stack_perm, version GLIBC_PRIVATE"). The C++ compiler
+        # already links the right glibc.
         function(_sanitize_cuda_implicit_link_dirs input_var output_var)
             set(_sanitized)
             foreach(_entry IN LISTS ${input_var})
@@ -41,7 +45,8 @@ if(LDCHROMA_ENABLE_CUDA)
                     endif()
                     if(_expanded_entry MATCHES "([/-])gcc-11(\\.|-)" OR
                        _expanded_entry MATCHES "([/-])gcc-wrapper-11(\\.|-)" OR
-                       _expanded_entry MATCHES "/lib/gcc/.*/11\\.")
+                       _expanded_entry MATCHES "/lib/gcc/.*/11\\." OR
+                       _expanded_entry MATCHES "/nix/store/[^/]*-glibc-[0-9]")
                         continue()
                     endif()
                     if(NOT _expanded_entry IN_LIST _sanitized)

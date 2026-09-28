@@ -26,8 +26,14 @@
         isDarwin = pkgsUnstable.stdenv.hostPlatform.isDarwin;
         isLinuxX86_64 = isLinux && pkgsUnstable.stdenv.hostPlatform.isx86_64;
         enableCuda = isLinuxX86_64;
-        pkgs = if isLinux then legacyPkgs else pkgsUnstable;
-        flacPackage = if isLinux then pkgsUnstable.flac else pkgs.flac;
+        # Every platform builds from the locked nixpkgs (Qt 6.10.1). The
+        # nixpkgsLegacy pin (nixos-24.11) is kept only for what unstable has
+        # removed: the CUDA 11.8 / cuDNN 8.9 / gcc11 toolchain for GTX-1000
+        # (Pascal) support, and so packages.cuda, cuda-plugin-linux-deps and
+        # the Linux devShell's Python/OpenCL. Don't `nix flake update` the
+        # nixpkgs input casually: it sets the Qt version on Linux and macOS.
+        pkgs = pkgsUnstable;
+        flacPackage = pkgsUnstable.flac;
         # Vendor older CUDA package sets from legacy nixpkgs for Pascal/GTX 1000 support.
         # Keep both sets available; default to CUDA 11.8 for pre-Volta compatibility.
         vendoredCudaPackages11 = if enableCuda then legacyPkgs.cudaPackages_11_8 else null;
@@ -217,12 +223,18 @@
             { name = "LapSRN_x4.pb"; url = "https://raw.githubusercontent.com/fannymonori/TF-LapSRN/fc51c90af1b5801a357abc919160d7ff4f24b997/export/LapSRN_x4.pb"; hash = "sha256-0+lck8r65c5ajtV86avwfy3ljajF1tZWt2Z3SWmDXuI="; }
           ]);
         mkTbcTools = { withCuda }:
-          pkgs.stdenv.mkDerivation {
+          # The CUDA build stays entirely on nixpkgsLegacy (gcc13 + Qt 6.8.3),
+          # beside its gcc11 CUDA host compiler, exactly as before the move to
+          # unstable. That also makes `nix build .#cuda` the local check that
+          # the code still compiles on Qt 6.8.3, which the upstream-hosted
+          # vcpkg Windows job builds against.
+          let p = if withCuda then legacyPkgs else pkgs; in
+          p.stdenv.mkDerivation {
             pname = "tbc-tools";
             version = packageVersion;
             src = tbcSrc;
 
-            nativeBuildInputs = with pkgs; [
+            nativeBuildInputs = with p; [
               cmake
               ninja
               pkg-config
@@ -231,7 +243,7 @@
               cudaPackages.cuda_nvcc
             ];
 
-            buildInputs = with pkgs; [
+            buildInputs = with p; [
               qt6.qtbase
               qt6.qtsvg
               fftw
@@ -316,7 +328,7 @@
         # CUDA EP provider .so is fetched separately (from the ORT GPU prebuilt).
         packages.cuda-plugin-linux-deps =
           if enableCuda
-          then pkgs.runCommand "cuda-plugin-linux-deps" { } ''
+          then legacyPkgs.runCommand "cuda-plugin-linux-deps" { } ''
             mkdir -p $out
             cp ${cudaPackages.cuda_cudart.lib}/lib/libcudart.so.11.0 $out/
             cp ${cudaPackages.libcublas.lib}/lib/libcublas.so.11 $out/
@@ -329,7 +341,12 @@
           ''
           else null;
 
-        devShells.default = pkgs.mkShell {
+        devShells.default =
+          # The Linux devShell's Python and OpenCL stay on nixpkgsLegacy:
+          # pycuda/pyopencl there build against the pinned CUDA 11.8, and one
+          # package set keeps a single python3 interpreter and site-packages.
+          let pyPkgs = if isLinux then legacyPkgs else pkgs; in
+          pkgs.mkShell {
           packages = with pkgs; [
             cmake
             ninja
@@ -354,15 +371,15 @@
             ffmpeg
             sqlite
             libGL
-            python3
-            python3Packages.numpy
-            python3Packages.scipy
-            python3Packages.matplotlib
-            python3Packages.click
-            python3Packages.tqdm
-            python3Packages.pyzmq
-            python3Packages.watchdog
-            python3Packages.pyserial
+            pyPkgs.python3
+            pyPkgs.python3Packages.numpy
+            pyPkgs.python3Packages.scipy
+            pyPkgs.python3Packages.matplotlib
+            pyPkgs.python3Packages.click
+            pyPkgs.python3Packages.tqdm
+            pyPkgs.python3Packages.pyzmq
+            pyPkgs.python3Packages.watchdog
+            pyPkgs.python3Packages.pyserial
             onnxruntimePackage
             opencv
           ] ++ pkgs.lib.optionals enableCuda [
@@ -373,11 +390,11 @@
             cudaPackages.libcurand
             cudaPackages.libcublas
             cudaCudnnPackage
-            python3Packages.pycuda
-            python3Packages.pyopencl
-            ocl-icd
-            pocl
-            clinfo
+            legacyPkgs.python3Packages.pycuda
+            legacyPkgs.python3Packages.pyopencl
+            legacyPkgs.ocl-icd
+            legacyPkgs.pocl
+            legacyPkgs.clinfo
           ];
           EZPWD_DIR = "${ezpwdSrc}/c++";
           ONNXRUNTIME_ROOT = "${onnxruntimePackage}";
@@ -408,7 +425,7 @@
               fi
             fi
             export OZ_OPENCL_VENDOR_DIR="$(mktemp -d -t tbc-opencl-vendors-XXXXXX)"
-            for icdFile in "${pkgs.pocl}/etc/OpenCL/vendors/"*.icd; do
+            for icdFile in "${legacyPkgs.pocl}/etc/OpenCL/vendors/"*.icd; do
               [ -f "$icdFile" ] && cp -f "$icdFile" "$OZ_OPENCL_VENDOR_DIR/"
             done
             for nvidiaOpenclLib in \
@@ -422,7 +439,7 @@
             done
             export OCL_ICD_VENDORS="$OZ_OPENCL_VENDOR_DIR"
             export OPENCL_VENDOR_PATH="$OCL_ICD_VENDORS"
-            export LD_LIBRARY_PATH="${pkgs.ocl-icd}/lib:${runtimeLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            export LD_LIBRARY_PATH="${legacyPkgs.ocl-icd}/lib:${runtimeLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           '';
         };
       }
