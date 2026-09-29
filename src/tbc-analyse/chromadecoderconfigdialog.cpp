@@ -134,8 +134,7 @@ ChromaDecoderConfigDialog::~ChromaDecoderConfigDialog()
 void ChromaDecoderConfigDialog::setConfiguration(VideoSystem _system, const PalColour::Configuration &_palConfiguration,
                                                  const Comb::Configuration &_ntscConfiguration,
                                                  const MonoDecoder::MonoConfiguration &_monoConfiguration,
-												 const TbcSource::SourceMode &_mode,
-												 const bool _isInit)
+												 const TbcSource::SourceMode &_mode)
 {
     const double configuredYNRLevel = _system == NTSC ? _ntscConfiguration.yNRLevel : _palConfiguration.yNRLevel;
     system = _system;
@@ -168,10 +167,12 @@ void ChromaDecoderConfigDialog::setConfiguration(VideoSystem _system, const PalC
     } else {
         ui->standardTabs->setCurrentWidget(ui->palTab);
     }
-	
-	isInit = _isInit;
+
+    // This only shows the source's configuration (the decoder TbcSource took
+    // from the metadata, or its default), so it emits nothing: a change signal
+    // here would write the display back into the metadata and mark it edited.
+    ui->enableYCCombineCheckBox->setChecked(combine);
     updateDialog();
-    emit chromaDecoderConfigChanged();
 }
 
 const PalColour::Configuration &ChromaDecoderConfigDialog::getPalConfiguration()
@@ -277,35 +278,17 @@ void ChromaDecoderConfigDialog::updateDialog()
 {
     const bool isSourcePal = system == PAL || system == PAL_M;
     const bool isSourceNtsc = system == NTSC;
-	
-	if(!isInit)
-	{
-		if(sourceMode == TbcSource::ONE_SOURCE)
-		{
-			palConfiguration.chromaFilter = PalColour::transform3DFilter;
-			ntscConfiguration.dimensions = 3;
-            ntscConfiguration.nnTransform3D = false;
-		}
-		else
-		{
-			palConfiguration.chromaFilter = PalColour::transform2DFilter;
-			ntscConfiguration.dimensions = 2;
-            ntscConfiguration.nnTransform3D = false;
-		}
-        if (tbcSource) {
-            const auto &videoParameters = tbcSource->getVideoParameters();
-            if (videoParameters.ntscPhaseCompensation >= 0) {
-                ntscConfiguration.phaseCompensation = (videoParameters.ntscPhaseCompensation != 0);
-            } else {
-                ntscConfiguration.phaseCompensation = true;
-            }
-        } else {
-            ntscConfiguration.phaseCompensation = true;
-        }
-		ui->enableYCCombineCheckBox->setChecked(combine);
-		
-		isInit = true;
-	}
+
+    // Showing the configuration must not feed it back: the sliders' valueChanged
+    // slots would round it to slider steps and emit chromaDecoderConfigChanged.
+    // The value labels are set here directly.
+    const QSignalBlocker chromaGainBlocker(ui->chromaGainHorizontalSlider);
+    const QSignalBlocker chromaPhaseBlocker(ui->chromaPhaseHorizontalSlider);
+    const QSignalBlocker yNRBlocker(ui->yNRHorizontalSlider);
+    const QSignalBlocker thresholdBlocker(ui->thresholdHorizontalSlider);
+    const QSignalBlocker adaptThresholdBlocker(ui->adaptThresholdHorizontalSlider);
+    const QSignalBlocker chromaWeightBlocker(ui->chromaWeightHorizontalSlider);
+    const QSignalBlocker cNRBlocker(ui->cNRHorizontalSlider);
 
     // Shared settings
 

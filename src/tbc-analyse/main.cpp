@@ -133,9 +133,6 @@ bool loadHeadless(TbcSource &tbcSource, const QString &inputFileName, QString *e
         *error = QStringLiteral("Could not load %1: %2").arg(inputFileName, tbcSource.getLastIOError());
         return false;
     }
-    // MainWindow configures the chroma decoder by handing the loaded source's
-    // configuration back through the Chroma Decoder dialog; do the same here.
-    tbcSource.setChromaConfiguration(tbcSource.getPalConfiguration(), tbcSource.getNtscConfiguration());
     return true;
 }
 

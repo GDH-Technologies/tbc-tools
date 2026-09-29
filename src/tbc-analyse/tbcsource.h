@@ -187,6 +187,10 @@ public:
     const Comb::Configuration &getNtscConfiguration() const;
     const MonoDecoder::MonoConfiguration &getMonoConfiguration() const;
     const OutputWriter::Configuration &getOutputConfiguration() const;
+    static QString chromaDecoderName(VideoSystem system, const PalColour::Configuration &palConfig,
+                                     const Comb::Configuration &ntscConfig);
+    QString getChromaDecoderName() const;
+    TbcMetaData::VideoParameters getVideoParametersWithViewChroma() const;
     bool hasChapterMap() const;
 
     qint32 startOfNextChapter(qint32 currentFrameNumber);
