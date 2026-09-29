@@ -230,18 +230,36 @@ The Export tab includes two selectors for dropout-correction behavior:
 
 If the selected mode is not supported by the detected `tbc-video-export`/tool versions, tbc-analyse falls back to tool defaults and reports this in the Export log.
 
+## Exit
+
+This option quits tbc-analyse and closes all windows.
+
+# The Frame Capture menu
+
+The Frame Capture menu holds everything that saves pictures: single frames, every view mode at once, and all the stills of a slideshow tape.
+
 ## Save frame as PNG
 
-This option saves the currently selected frame as a PNG image.  The image saved contains both the visible and non-visible frame image.  The option saves the currently displayed image (however, drop-out highlighting is not included).
+**Save frame as PNG** (Ctrl+F) saves the current frame with the options last chosen in **Save frame as PNG (options)** (Ctrl+Shift+F), which asks for them first:
+
+* **Framing**: the full frame (blanking and sync included), the active picture area, or a rectangle dragged on the preview, each with trims in samples and frame lines (the bottom 12 lines, where VHS head switching tears the picture, are trimmed by default).
+* **Still picture**: **This frame**, **Cleanest nearby** or **Average nearby**. For a picture held on tape, the last two look at the frames around this one that show the same picture (the *search* or *averaging window*, ± frames), leave out those with dropouts or tears, and save the most typical one or their mean.
+* **Aspect ratio**: **Exact** (square pixels from the sample rate) or **Viewer DAR** (the viewer's display stretch).
+* **Resize**: an optional 2×–4× upscale, and the resampling method used for it and for the aspect correction.
+
+Drop-out highlighting is never included. **Save all mode views as PNGs** saves the current frame once per view mode.
 
 ## Extract slideshow stills
 
 For a tape (or a stretch of one) that is a slideshow of photos, this option finds every photo held on it and saves each one as a PNG in a folder.
 
-1. Choose the frames to scan. The dialog starts on the Export tab's In/Out selection if one is set, otherwise from the current frame to the end. **Whole tape** scans everything.
+1. Choose the frames to scan. The dialog starts on the Export tab's In/Out selection if one is set, otherwise from the current frame to the end. Scrub the slider under the picture and press **Set start** (`[`) and **Set end** (`]`), type the frame numbers, or press **Whole tape**. While you scrub, the picture is the frame's luma read straight from the TBC; when you stop, it turns to the chroma decoder's colour render. The main viewer does not move.
 2. Press **Scan**. The scan reads only the TBC's luma, so it is quick (about half a minute for a 20,000-frame tape) and the viewer stays usable meanwhile.
-3. Review the list. Photos are ticked. Slow pans and zooms, and stretches that keep breaking up (tracking or tape damage), are listed unticked. Black and blank stretches, dissolves and anything held for less than **Shortest photo** (1 s by default) are not listed. Select a row to preview it; double-click to show it in the viewer.
-4. Press **Save**. Each photo is saved as the average of its frames (frames with dropouts or tears are left out, repeated frames count once, and slightly misaligned frames are realigned first), or as its cleanest frame. Framing, aspect ratio and upscaling work as in **Save frame as PNG (options)**. Saving needs the Frame view.
+3. Review the list. Photos are ticked, and tinted on the scrubber. Slow pans and zooms, and stretches that keep breaking up (tracking or tape damage), are listed unticked. Black and blank stretches, dissolves and anything held for less than **Shortest photo** (1 s by default) are not listed. Select a row to put the scrubber on that photo; double-click to show it in the main viewer.
+4. Choose the **Extraction mode**: **Average** saves the mean of each photo's frames (frames with dropouts or tears are left out, repeated frames count once, and slightly misaligned frames are realigned first) within its **averaging window**; **Cleanest frame** saves the one real frame closest to the photo's median within its **search window**. Framing, aspect ratio and upscaling work as in **Save frame as PNG (options)**.
+5. Press **Save**. Saving needs the Frame view.
+
+The picture, the list and the settings are on splitters: drag the dividers to give the picture more room. Their positions and the dialog's size are remembered.
 
 Files are named `<tape>_still_001_f<frame>[_avg<frames>].png`, and `<tape>_stills.csv` next to them lists each still's frames, timecode and length, so every picture can be traced back to the tape.
 
@@ -253,10 +271,6 @@ tbc-analyse --extract-stills 1000-5000 -o <folder> --best-of 60 --upscale 2 inpu
 ```
 
 `--extract-stills` takes `all` or `FIRST-LAST`, and the `--save-frame` options `--crop`, `--margins`, `--aspect`, `--best-of`/`--average-of` (default `--average-of 60`), `--upscale` and `--upscale-method`. `--min-hold <seconds>` sets the shortest photo, `--include-moving` also saves pans, zooms and unsteady stretches, and `--overwrite` replaces stills already in the folder. `--scan-report <file.csv>` writes the scan's per-frame figures; given without `-o`, the scan is all it does.
-
-## Exit
-
-This option quits tbc-analyse and closes all windows.
 
 # The View Menu
 

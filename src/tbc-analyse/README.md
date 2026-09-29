@@ -39,7 +39,7 @@ tbc-analyse [options] <input.tbc>
    - Tools menu: Process VBI, Fix JSON SNR, Auto Audio Align, EFM Handler, LDS Converter, Metadata Status/Editor/Conversion/Export
 5. **Save/Export**:
    - File → Save Metadata
-   - File → Save frame as PNG
+   - Frame Capture → Save frame as PNG
    - Export tab for `tbc-video-export`
 
 ## Options
