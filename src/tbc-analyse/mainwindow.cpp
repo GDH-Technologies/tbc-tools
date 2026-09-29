@@ -87,60 +87,6 @@
 #include "tbc/uistyle.h"
 #include "tbc/buildinfo.h"
 namespace {
-QString chromaDecoderNameFromConfig(VideoSystem system,
-                                    const PalColour::Configuration &palConfig,
-                                    const Comb::Configuration &ntscConfig)
-{
-    const bool isPal = (system == PAL || system == PAL_M);
-    const bool isSecam = (system == SECAM || system == MESECAM);
-    if (isPal) {
-        switch (palConfig.chromaFilter) {
-        case PalColour::palColourFilter:
-            return QStringLiteral("pal2d");
-        case PalColour::transform2DFilter:
-            return QStringLiteral("transform2d");
-        case PalColour::transform3DFilter:
-            return QStringLiteral("transform3d");
-        case PalColour::mono:
-            return QStringLiteral("mono");
-        default:
-            break;
-        }
-    } else if (isSecam) {
-        // SECAM is its own system: only SECAM decoders (and mono) are named here.
-        switch (palConfig.chromaFilter) {
-        case PalColour::secam:
-            return QStringLiteral("secam");
-        case PalColour::secamPredemod:
-            return QStringLiteral("secam-predemod");
-        case PalColour::mono:
-            return QStringLiteral("mono");
-        default:
-            break;
-        }
-    }
-
-    if (system == NTSC) {
-        if (ntscConfig.dimensions <= 0) {
-            return QStringLiteral("mono");
-        }
-        switch (ntscConfig.dimensions) {
-        case 1:
-            return QStringLiteral("ntsc1d");
-        case 2:
-            return QStringLiteral("ntsc2d");
-        case 3:
-            return ntscConfig.nnTransform3D ? QStringLiteral("nntransform3d")
-                                            : QStringLiteral("ntsc3d");
-        default:
-            break;
-        }
-    }
-
-    return QString();
-}
-
-
 QString sanitizedFileToken(const QString &value)
 {
     QString token = value.trimmed().toLower();
@@ -1651,7 +1597,21 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     });
 
     // Connect to the video parameters changed signal
-    connect(videoParametersDialog, &VideoParametersDialog::videoParametersChanged, this, &MainWindow::videoParametersChangedSignalHandler);
+    // The dialog emits the whole VideoParameters it was last given, so take
+    // only the fields it edits: the rest of its copy can be older than the
+    // source's (a chroma decoder, levels, markers or In/Out set since then).
+    connect(videoParametersDialog, &VideoParametersDialog::videoParametersChanged,
+            this, [this](const TbcMetaData::VideoParameters &edited) {
+        TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
+        videoParameters.activeVideoStart = edited.activeVideoStart;
+        videoParameters.activeVideoEnd = edited.activeVideoEnd;
+        videoParameters.firstActiveFieldLine = edited.firstActiveFieldLine;
+        videoParameters.lastActiveFieldLine = edited.lastActiveFieldLine;
+        videoParameters.firstActiveFrameLine = edited.firstActiveFrameLine;
+        videoParameters.lastActiveFrameLine = edited.lastActiveFrameLine;
+        videoParameters.isWidescreen = edited.isWidescreen;
+        videoParametersChangedSignalHandler(videoParameters);
+    });
     connect(videoParametersDialog, &VideoParametersDialog::exportBoundaryToggled, this, &MainWindow::exportBoundaryToggledSignalHandler);
     connect(videoParametersDialog, &VideoParametersDialog::exportBoundaryThicknessChanged, this, &MainWindow::exportBoundaryThicknessChangedSignalHandler);
 
@@ -2345,12 +2305,11 @@ void MainWindow::resetGui()
     // Update the video parameters dialogue
     videoParametersDialog->setVideoParameters(tbcSource.getVideoParameters());
 
-    // Update the chroma decoder configuration dialogue
+    // Show the source's chroma decoder configuration (it changes nothing)
     chromaDecoderConfigDialog->setConfiguration(tbcSource.getSystem(), tbcSource.getPalConfiguration(),
                                                 tbcSource.getNtscConfiguration(),
                                                 tbcSource.getMonoConfiguration(),
-                                                tbcSource.getSourceMode(),
-                                                true); // set to true because the chroma decoder is already init
+                                                tbcSource.getSourceMode());
     chromaDecoderConfigDialog->setVideoLevels(tbcSource.getVideoParameters());
 }
 
@@ -2375,12 +2334,11 @@ void MainWindow::updateGuiLoaded()
     // Update the video parameters dialogue
     videoParametersDialog->setVideoParameters(tbcSource.getVideoParameters());
 
-    // Update the chroma decoder configuration dialogue
+    // Show the source's chroma decoder configuration (it changes nothing)
     chromaDecoderConfigDialog->setConfiguration(tbcSource.getSystem(), tbcSource.getPalConfiguration(),
                                                 tbcSource.getNtscConfiguration(),
                                                 tbcSource.getMonoConfiguration(),
-                                                tbcSource.getSourceMode(),
-                                                false); // set to false to init the chroma decoder selection
+                                                tbcSource.getSourceMode());
     chromaDecoderConfigDialog->setVideoLevels(tbcSource.getVideoParameters());
 
     // Keep load-time sizing stable: either fit frame to existing window, or
@@ -8254,7 +8212,7 @@ void MainWindow::chromaDecoderConfigChangedSignalHandler()
     videoParameters.ntscPhaseCompensation = ntscConfig.phaseCompensation ? 1 : 0;
     videoParameters.palTransformThreshold = palConfig.transformThreshold;
 
-    const QString decoderName = chromaDecoderNameFromConfig(tbcSource.getSystem(), palConfig, ntscConfig);
+    const QString decoderName = TbcSource::chromaDecoderName(tbcSource.getSystem(), palConfig, ntscConfig);
     if (!decoderName.isEmpty()) {
         videoParameters.chromaDecoder = decoderName;
     }

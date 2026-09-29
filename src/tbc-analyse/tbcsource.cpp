@@ -2012,47 +2012,66 @@ void TbcSource::setSecamFirstLineIsRed(qint32 fieldNumber, bool value, bool appl
     invalidateImageCache();
 }
 
+// Each stored chroma setting comes from the metadata, and one the metadata
+// doesn't hold takes the decoder's default, never whatever the previously
+// opened source left behind. The view-only options (chroma NR, Show FFTs,
+// Simple PAL, Show map) aren't stored, so they're left as they are.
 void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParameters &videoParameters)
 {
-    if (videoParameters.chromaGain >= 0.0) {
-        palConfiguration.chromaGain = videoParameters.chromaGain;
-        ntscConfiguration.chromaGain = videoParameters.chromaGain;
-    }
+    const PalColour::Configuration palDefaults;
+    const Comb::Configuration ntscDefaults;
 
-    if (videoParameters.chromaPhase != -1.0) {
-        palConfiguration.chromaPhase = videoParameters.chromaPhase;
-        ntscConfiguration.chromaPhase = videoParameters.chromaPhase;
-        secamConfiguration.chromaPhase = videoParameters.chromaPhase;
-    }
+    const double chromaGain = videoParameters.chromaGain >= 0.0 ? videoParameters.chromaGain
+                                                                : palDefaults.chromaGain;
+    palConfiguration.chromaGain = chromaGain;
+    ntscConfiguration.chromaGain = chromaGain;
 
-    if (videoParameters.lumaNR >= 0.0) {
-        palConfiguration.yNRLevel = videoParameters.lumaNR;
-        ntscConfiguration.yNRLevel = videoParameters.lumaNR;
-        monoConfiguration.yNRLevel = videoParameters.lumaNR;
-    }
-    if (videoParameters.ntscAdaptive != -1) {
-        ntscConfiguration.adaptive = (videoParameters.ntscAdaptive == 1);
-    }
+    const double chromaPhase = videoParameters.chromaPhase != -1.0 ? videoParameters.chromaPhase
+                                                                   : palDefaults.chromaPhase;
+    palConfiguration.chromaPhase = chromaPhase;
+    ntscConfiguration.chromaPhase = chromaPhase;
+    secamConfiguration.chromaPhase = chromaPhase;
 
-    if (videoParameters.ntscAdaptThreshold >= 0.0) {
-        ntscConfiguration.adaptThreshold = videoParameters.ntscAdaptThreshold;
-    }
+    const double lumaNR = videoParameters.lumaNR >= 0.0 ? videoParameters.lumaNR : palDefaults.yNRLevel;
+    palConfiguration.yNRLevel = lumaNR;
+    ntscConfiguration.yNRLevel = lumaNR;
+    monoConfiguration.yNRLevel = lumaNR;
 
-    if (videoParameters.ntscChromaWeight >= 0.0) {
-        ntscConfiguration.chromaWeight = videoParameters.ntscChromaWeight;
-    }
+    ntscConfiguration.adaptive = videoParameters.ntscAdaptive != -1 ? (videoParameters.ntscAdaptive == 1)
+                                                                    : ntscDefaults.adaptive;
+    ntscConfiguration.adaptThreshold = videoParameters.ntscAdaptThreshold >= 0.0
+                                           ? videoParameters.ntscAdaptThreshold
+                                           : ntscDefaults.adaptThreshold;
+    ntscConfiguration.chromaWeight = videoParameters.ntscChromaWeight >= 0.0 ? videoParameters.ntscChromaWeight
+                                                                             : ntscDefaults.chromaWeight;
 
     if (videoParameters.ntscPhaseCompensation != -1) {
         ntscConfiguration.phaseCompensation = (videoParameters.ntscPhaseCompensation == 1);
-    } else if (videoParameters.system == NTSC) {
-        ntscConfiguration.phaseCompensation = true;
+    } else {
+        // NTSC defaults to phase compensation on (the comb decoder's own default
+        // is off), including single-source combined/CVBS inputs.
+        ntscConfiguration.phaseCompensation = (videoParameters.system == NTSC);
     }
-    // SECAM/MESECAM: no NTSC-specific defaults; chroma decoder is selected by
-    // the chromaDecoder string ("secam"/"mono") in applyChromaSettingsFromMetadata.
 
-    if (videoParameters.palTransformThreshold >= 0.0) {
-        palConfiguration.transformThreshold = videoParameters.palTransformThreshold;
+    palConfiguration.transformThreshold = videoParameters.palTransformThreshold >= 0.0
+                                              ? videoParameters.palTransformThreshold
+                                              : palDefaults.transformThreshold;
+
+    // The decoder: the stored chromaDecoder, or, when the metadata names none
+    // (or one this system can't use), the default for the system and sources.
+    // The default is only used, not written to the metadata.
+    // SECAM/MESECAM carry an FM chroma block that the PAL QAM decoder cannot
+    // read (it emits neutral chroma, i.e. mono output), so they default to the
+    // SECAM FM decoder. Matches tbc-video-export's video_system_secam default
+    // and tbc-chroma-decoder's CLI auto-select.
+    const bool oneSource = (sourceMode == ONE_SOURCE);
+    if (videoParameters.system == SECAM || videoParameters.system == MESECAM) {
+        palConfiguration.chromaFilter = PalColour::secam;
+    } else {
+        palConfiguration.chromaFilter = oneSource ? PalColour::transform3DFilter : PalColour::transform2DFilter;
     }
+    ntscConfiguration.dimensions = oneSource ? 3 : 2;
+    ntscConfiguration.nnTransform3D = false;
 
     if (!videoParameters.chromaDecoder.isEmpty()) {
         const QString decoder = videoParameters.chromaDecoder.toLower();
@@ -2094,16 +2113,97 @@ void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParamete
                 ntscConfiguration.nnTransform3D = false;
             }
         }
-    } else {
-        // No chromaDecoder string in metadata: pick the default for the system.
-        // SECAM/MESECAM carry an FM chroma block that the PAL QAM decoder cannot
-        // read (it emits neutral chroma, i.e. mono output), so default to the
-        // SECAM FM decoder. Matches tbc-video-export's video_system_secam default
-        // and tbc-chroma-decoder's CLI auto-select.
-        if (videoParameters.system == SECAM || videoParameters.system == MESECAM) {
-            palConfiguration.chromaFilter = PalColour::secam;
+    }
+}
+
+// The metadata's chromaDecoder name for a decoder configuration (empty if
+// the configuration has none): the inverse of applyChromaSettingsFromMetadata
+QString TbcSource::chromaDecoderName(VideoSystem system,
+                                     const PalColour::Configuration &palConfig,
+                                     const Comb::Configuration &ntscConfig)
+{
+    const bool isPal = (system == PAL || system == PAL_M);
+    const bool isSecam = (system == SECAM || system == MESECAM);
+    if (isPal) {
+        switch (palConfig.chromaFilter) {
+        case PalColour::palColourFilter:
+            return QStringLiteral("pal2d");
+        case PalColour::transform2DFilter:
+            return QStringLiteral("transform2d");
+        case PalColour::transform3DFilter:
+            return QStringLiteral("transform3d");
+        case PalColour::mono:
+            return QStringLiteral("mono");
+        default:
+            break;
+        }
+    } else if (isSecam) {
+        // SECAM is its own system: only SECAM decoders (and mono) are named here.
+        switch (palConfig.chromaFilter) {
+        case PalColour::secam:
+            return QStringLiteral("secam");
+        case PalColour::secamPredemod:
+            return QStringLiteral("secam-predemod");
+        case PalColour::mono:
+            return QStringLiteral("mono");
+        default:
+            break;
         }
     }
+
+    if (system == NTSC) {
+        if (ntscConfig.dimensions <= 0) {
+            return QStringLiteral("mono");
+        }
+        switch (ntscConfig.dimensions) {
+        case 1:
+            return QStringLiteral("ntsc1d");
+        case 2:
+            return QStringLiteral("ntsc2d");
+        case 3:
+            return ntscConfig.nnTransform3D ? QStringLiteral("nntransform3d")
+                                            : QStringLiteral("ntsc3d");
+        default:
+            break;
+        }
+    }
+
+    return QString();
+}
+
+// The name of the decoder the view is using: the stored chromaDecoder, or the
+// default applyChromaSettingsFromMetadata chose when the metadata has none
+QString TbcSource::getChromaDecoderName() const
+{
+    return chromaDecoderName(getSystem(), palConfiguration, ntscConfiguration);
+}
+
+// The VideoParameters with each chroma setting the metadata doesn't store
+// filled in from what the view is decoding with (the fields the chroma dialog
+// writes), so an export decodes like the preview. The metadata is unchanged.
+TbcMetaData::VideoParameters TbcSource::getVideoParametersWithViewChroma() const
+{
+    TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
+    if (videoParameters.chromaDecoder.isEmpty()) {
+        videoParameters.chromaDecoder = getChromaDecoderName();
+    }
+    if (videoParameters.chromaGain < 0.0) {
+        videoParameters.chromaGain = palConfiguration.chromaGain;
+    }
+    if (videoParameters.chromaPhase == -1.0) {
+        videoParameters.chromaPhase = palConfiguration.chromaPhase;
+    }
+    if (videoParameters.lumaNR < 0.0) {
+        videoParameters.lumaNR = (videoParameters.system == NTSC) ? ntscConfiguration.yNRLevel
+                                                                  : palConfiguration.yNRLevel;
+    }
+    if (videoParameters.ntscPhaseCompensation == -1) {
+        videoParameters.ntscPhaseCompensation = ntscConfiguration.phaseCompensation ? 1 : 0;
+    }
+    if (videoParameters.palTransformThreshold < 0.0) {
+        videoParameters.palTransformThreshold = palConfiguration.transformThreshold;
+    }
+    return videoParameters;
 }
 
 // Ensure the SourceFields for the current frame are loaded
@@ -2700,7 +2800,6 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
 
     // Get the video parameters from the metadata
     TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
-    applyChromaSettingsFromMetadata(videoParameters);
     metadataOnlyFrame.init(videoParameters);
 
     // Open the new source video
@@ -2742,20 +2841,10 @@ bool TbcSource::startBackgroundLoad(QString sourceFilename)
     currentSourceFilename = sourceFilename;
     currentMetadataFilename = metadataFileName;
 
-    // Configure the chroma decoder
-    if (videoParameters.system == PAL || videoParameters.system == PAL_M
-        || videoParameters.system == SECAM || videoParameters.system == MESECAM) {
-        palColour.updateConfiguration(videoParameters, palConfiguration);
-        secamConfiguration.chromaGain = palConfiguration.chromaGain;
-        secamDecoder.updateConfiguration(videoParameters, secamConfiguration);
-    } else {
-        if (videoParameters.ntscPhaseCompensation == -1) {
-            // No metadata override: default phase compensation on for NTSC,
-            // including single-source combined/CVBS inputs.
-            ntscConfiguration.phaseCompensation = true;
-        }
-        ntscColour.updateConfiguration(videoParameters, ntscConfiguration);
-    }
+    // Configure the chroma decoder from the metadata. Its default decoder
+    // depends on the sources, so this waits until the chroma TBC is open.
+    applyChromaSettingsFromMetadata(videoParameters);
+    configureChromaDecoder();
 
     // Analyse the metadata
     emit busy(tr("Generating graph data and chapter map..."));

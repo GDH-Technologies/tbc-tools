@@ -36,8 +36,7 @@ public:
     void setConfiguration(VideoSystem system, const PalColour::Configuration &palConfiguration,
                           const Comb::Configuration &ntscConfiguration,
                           const MonoDecoder::MonoConfiguration &monoConfiguration,
-                          const TbcSource::SourceMode &_mode,
-						  const bool _isInit);
+                          const TbcSource::SourceMode &_mode);
     void setVideoLevels(const TbcMetaData::VideoParameters &videoParameters);
     const PalColour::Configuration &getPalConfiguration();
     const Comb::Configuration &getNtscConfiguration();
@@ -82,14 +81,13 @@ private:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void resetSliderToDefault(QSlider *slider);
     Ui::ChromaDecoderConfigDialog *ui;
-    VideoSystem system;
+    VideoSystem system = PAL;
     PalColour::Configuration palConfiguration;
     Comb::Configuration ntscConfiguration;
     MonoDecoder::MonoConfiguration monoConfiguration;
     qint8 secamPredemodFirstLineIsRedOverride = -1;
 	TbcSource* tbcSource = nullptr;
-	TbcSource::SourceMode sourceMode;
-	bool isInit = true;
+	TbcSource::SourceMode sourceMode = TbcSource::ONE_SOURCE;
 	bool combine = false;
     qint32 blackLevel = -1;
     qint32 whiteLevel = -1;

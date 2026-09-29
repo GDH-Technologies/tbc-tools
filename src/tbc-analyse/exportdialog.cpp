@@ -5205,7 +5205,8 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
         args << QStringLiteral("--overwrite");
     }
 
-    const TbcMetaData::VideoParameters &videoParameters = tbcSource->getVideoParameters();
+    // Chroma settings the metadata doesn't store come from the preview's decoder
+    const TbcMetaData::VideoParameters videoParameters = tbcSource->getVideoParametersWithViewChroma();
     const bool isPalSystem = (videoParameters.system == PAL || videoParameters.system == PAL_M);
     const bool isNtscSystem = (videoParameters.system == NTSC);
     const bool isSplitSource = tbcSource && tbcSource->getSourceMode() != TbcSource::ONE_SOURCE;
