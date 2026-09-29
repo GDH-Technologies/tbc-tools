@@ -74,6 +74,8 @@ fi
 
 # tbc-video-export's MKV display-dimension normalization falls back to the
 # mkvmerge the package ships in libexec; without one it silently skips it.
+# Run under the host's own locale (as the workers do): a host whose locales the
+# bundled copy cannot load must fail here, not in an export.
 "$STORE/libexec/tbc-video-export/mkvmerge" --version
 
 # The post-decode pipeline drives the headless aligner. With no arguments it

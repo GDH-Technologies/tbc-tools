@@ -244,6 +244,8 @@
               ninja
               pkg-config
               qt6.wrapQtAppsHook
+              # the libexec mkvmerge wrapper (postFixup)
+              makeBinaryWrapper
             ] ++ pkgs.lib.optionals (enableCuda && withCuda) [
               cudaPackages.cuda_nvcc
             ];
@@ -286,10 +288,21 @@
             # not postInstall: wrapQtAppsHook wraps everything in libexec at the
             # start of fixupPhase, and mkvmerge must not get tbc-tools' Qt
             # environment.
+            #
+            # On Linux it runs under LC_ALL=C.UTF-8. Nix's glibc finds a named
+            # locale only in a locale-archive, and a host with per-locale
+            # langpacks (Fedora's glibc-langpack-en, as on cs0/cs1) has none:
+            # mkvmerge then aborts at startup under LANG=en_US.UTF-8
+            # ("locale::facet::_S_create_c_locale name not valid"). C.UTF-8 is
+            # built into glibc, so it needs no locale files on any host.
             postFixup = ''
               mkdir -p $out/libexec/tbc-video-export
+            '' + (if isLinux then ''
+              makeBinaryWrapper ${p.mkvtoolnix-cli}/bin/mkvmerge \
+                $out/libexec/tbc-video-export/mkvmerge --set LC_ALL C.UTF-8
+            '' else ''
               ln -s ${p.mkvtoolnix-cli}/bin/mkvmerge $out/libexec/tbc-video-export/mkvmerge
-            '';
+            '');
 
             cmakeBuildType = "Release";
             cmakeFlags = [
