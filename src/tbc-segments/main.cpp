@@ -173,9 +173,10 @@ double verifyStored(const FieldMetrics &stored, const FieldMetrics &walked, QStr
 }
 
 // Two decoder events are the same record if everything but their provenance
-// matches. detailJson carries the build's TbcBuildInfo::commit(), which changes
-// whenever the source does, so comparing the text would report a difference on
-// every rebuild and force a needless rewrite.
+// matches. detailJson carries the build's TbcBuildInfo::sourceId(), which
+// changes whenever the source does, so comparing the text would report a
+// difference on every rebuild and force a needless rewrite. Rows written
+// before 3.2.9-gdh-2.2 carry the same value under "commit".
 bool sameEvent(const TbcMetaData::DecoderEvent &a, const TbcMetaData::DecoderEvent &b)
 {
     if (a.kind != b.kind || a.field != b.field || a.fileLoc != b.fileLoc
@@ -190,8 +191,10 @@ bool sameEvent(const TbcMetaData::DecoderEvent &a, const TbcMetaData::DecoderEve
 
     QJsonObject aDetail = QJsonDocument::fromJson(a.detailJson.toUtf8()).object();
     QJsonObject bDetail = QJsonDocument::fromJson(b.detailJson.toUtf8()).object();
-    aDetail.remove(QStringLiteral("commit"));
-    bDetail.remove(QStringLiteral("commit"));
+    for (const QString &provenanceKey : {QStringLiteral("source"), QStringLiteral("commit")}) {
+        aDetail.remove(provenanceKey);
+        bDetail.remove(provenanceKey);
+    }
     return aDetail == bDetail;
 }
 
@@ -208,7 +211,7 @@ bool reconstructEvents(TbcMetaData &metaData, const SegmentsAnalysis &analysis)
         if (event.source != QLatin1String("tbc-segments")) kept.append(event);
     }
     const double nominal = analysis.nominalSamplesPerField;
-    const QString detailTail = QStringLiteral(",\"reconstructed\":true,\"tool\":\"tbc-segments\",\"commit\":\"%1\"}").arg(TbcBuildInfo::commit());
+    const QString detailTail = QStringLiteral(",\"reconstructed\":true,\"tool\":\"tbc-segments\",\"source\":\"%1\"}").arg(TbcBuildInfo::sourceId());
     for (const SegmentEvent &ev : analysis.events) {
         TbcMetaData::DecoderEvent de;
         de.source = QStringLiteral("tbc-segments");

@@ -80,7 +80,7 @@ void debugOutputHandler(QtMsgType type, const QMessageLogContext &context, const
         // First debug output?
         if (firstDebug && showDebug) {
             firstDebug = false;
-            QTextStream(stderr) << QString("Debug: Version - Git branch: %1 / commit: %2\n").arg(TbcBuildInfo::branch(), TbcBuildInfo::commit());
+            QTextStream(stderr) << QString("Debug: Version - Build: %1 / Source: %2\n").arg(TbcBuildInfo::build(), TbcBuildInfo::sourceId());
         }
 
         // Display the output message on stderr
@@ -105,10 +105,10 @@ void tbcDebug(const QString &msg)
     // First debug output?
     if (firstDebug) {
         firstDebug = false;
-        QTextStream(stderr) << QString("[%1] Debug: Version - Git branch: %2 / commit: %3\n")
+        QTextStream(stderr) << QString("[%1] Debug: Version - Build: %2 / Source: %3\n")
                                .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz"),
-                                    TbcBuildInfo::branch(),
-                                    TbcBuildInfo::commit());
+                                    TbcBuildInfo::build(),
+                                    TbcBuildInfo::sourceId());
     }
 
     const QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz");

@@ -5,7 +5,7 @@ project(efm-tools)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
 
-# Git branch and commit are defined in the parent CMakeLists.txt
+# The build identity (APP_BUILD, APP_SOURCE_ID) is defined in the parent CMakeLists.txt
 
 # Add subdirectories
 add_subdirectory(libs/efm)

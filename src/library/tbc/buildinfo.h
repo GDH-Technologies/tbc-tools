@@ -27,21 +27,26 @@
 
 #include <QString>
 
-// The build's identity: its version, branch and commit.
+// The build's identity: its version, how it was built, and its source.
 //
-// Only buildinfo.cpp is compiled with APP_VERSION, APP_BRANCH and APP_COMMIT,
+// Only buildinfo.cpp is compiled with APP_VERSION, APP_BUILD and APP_SOURCE_ID,
 // so changing any of them recompiles that one file and relinks, rather than
-// recompiling every translation unit. Nix builds set APP_COMMIT to
-// "src-<first 12 chars of the filtered source's store hash>". That is a tree
-// id: every commit with identical content gets the same value, and so the same
-// derivation. They set APP_BRANCH to "nix".
+// recompiling every translation unit.
+//
+// The source id identifies the source tree, NOT a commit: every commit with
+// identical content gets the same value (so a PR's build and its merge on main
+// are the same derivation). Nix builds set APP_BUILD "nix" and APP_SOURCE_ID
+// "src-<first 12 chars of the filtered source's store hash>"; a CMake build
+// from a git checkout sets "git" and "tree-<first 12 chars of HEAD's tree>";
+// anything else reports "unknown". The commit a host runs is in its install
+// record (the Nix profile's locked flake URL), never in these strings.
 namespace TbcBuildInfo {
 
 QString version();
-QString branch();
-QString commit();
+QString build();
+QString sourceId();
 
-// "tbc-tools <version> - Branch: <branch> / Commit: <commit>", the string every
+// "tbc-tools <version> - Build: <build> / Source: <source id>", the string every
 // CLI tool reports through QCoreApplication::setApplicationVersion(), so
 // `<tool> --version` shows which release each host runs.
 QString versionLine();

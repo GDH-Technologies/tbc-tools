@@ -984,7 +984,7 @@ class ContractCoverageTests(unittest.TestCase):
 
     def test_build_identity_is_one_unit_and_a_tree_id(self) -> None:
         # Global APP_* definitions recompiled every file on every commit, and a
-        # commit-derived -DAPP_COMMIT made identical trees different Nix
+        # commit-derived source id made identical trees different Nix
         # derivations, so a merge rebuilt what its PR had already built.
         self.assertIn(
             "add_compile_definitions(APP_",

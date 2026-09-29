@@ -667,11 +667,12 @@ SELF_HOSTED_DEPLOY_GATING_REQUIRED_SNIPPETS = (
 
 
 # The build identity lives in one translation unit, and in Nix it is a tree id.
-# As global compile definitions, APP_BRANCH, APP_COMMIT and APP_VERSION changed
-# every file's command line on every commit, so identical source recompiled
-# everything. And the flake's -DAPP_COMMIT came from the commit, so identical
-# trees were different derivations: a merge rebuilt what its PR had already
-# built. Both are pinned, so neither can drift back.
+# As global compile definitions, APP_BUILD, APP_SOURCE_ID and APP_VERSION (then
+# APP_BRANCH/APP_COMMIT) changed every file's command line on every commit, so
+# identical source recompiled everything. And the flake's source id came from
+# the commit, so identical trees were different derivations: a merge rebuilt
+# what its PR had already built. Both are pinned, so neither can drift back.
+# Because the id names a tree, it is labelled "Source", never "Commit".
 TOP_CMAKELISTS = ROOT / "CMakeLists.txt"
 LIBRARY_CMAKELISTS = ROOT / "src/library/CMakeLists.txt"
 FLAKE_NIX = ROOT / "flake.nix"
@@ -691,8 +692,10 @@ LIBRARY_CMAKELISTS_REQUIRED_SNIPPETS = (
     "set_property(SOURCE tbc/buildinfo.cpp APPEND PROPERTY COMPILE_DEFINITIONS",
 )
 FLAKE_BUILD_IDENTITY_REQUIRED_SNIPPETS = (
-    'nixCommit = "src-${treeId}";',
-    'branch = "nix";',
+    'appSourceId = "src-${treeId}";',
+    'appBuild = "nix";',
+    '"-DAPP_SOURCE_ID=${appSourceId}"',
+    '"-DAPP_BUILD=${appBuild}"',
     "src = tbcSrc;",
 )
 # The precise expression forms, so explanatory comments can still name them.

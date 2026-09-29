@@ -846,12 +846,12 @@ class TestCMakeParityInFixtures(unittest.TestCase):
 
 STUB_PROJECT = """cmake_minimum_required(VERSION 3.20)
 project(gdh_version_stub NONE)
-set(APP_BRANCH "nix" CACHE STRING "Build source identifier")
-set(APP_COMMIT "0.0.0" CACHE STRING "Build version identifier")
+set(APP_BUILD "unknown" CACHE STRING "How this build was made: nix, git or unknown")
+set(APP_SOURCE_ID "unknown" CACHE STRING "Source tree id (src-<hash> or tree-<hash>), not a commit")
 {block}
 message(STATUS "APP_VERSION=${{APP_VERSION}}")
-message(STATUS "APP_BRANCH=${{APP_BRANCH}}")
-message(STATUS "APP_COMMIT=${{APP_COMMIT}}")
+message(STATUS "APP_BUILD=${{APP_BUILD}}")
+message(STATUS "APP_SOURCE_ID=${{APP_SOURCE_ID}}")
 """
 
 
@@ -909,14 +909,21 @@ class TestConfigureDoesNotFreeze(unittest.TestCase):
         repo, build = self.project()
         values = self.configure(repo, build)
         tree = repo.git("rev-parse", "HEAD^{tree}")[:12]
-        self.assertEqual(values["APP_BRANCH"], "git")
-        self.assertEqual(values["APP_COMMIT"], f"tree-{tree}")
+        self.assertEqual(values["APP_BUILD"], "git")
+        self.assertEqual(values["APP_SOURCE_ID"], f"tree-{tree}")
 
     def test_an_explicit_build_identity_wins(self):
         repo, build = self.project()
-        values = self.configure(repo, build, "-DAPP_COMMIT=src-abc")
-        self.assertEqual(values["APP_COMMIT"], "src-abc")
-        self.assertEqual(values["APP_BRANCH"], "nix")
+        values = self.configure(repo, build, "-DAPP_BUILD=nix", "-DAPP_SOURCE_ID=src-abc")
+        self.assertEqual(values["APP_SOURCE_ID"], "src-abc")
+        self.assertEqual(values["APP_BUILD"], "nix")
+
+    def test_the_stub_mirrors_the_real_placeholders(self):
+        # The block only fills in the identity while both still hold the
+        # top-level CMakeLists.txt's placeholders, so the stub must match them.
+        text = CMAKELISTS.read_text(encoding="utf-8")
+        for line in STUB_PROJECT.splitlines()[2:4]:
+            self.assertIn(line, text)
 
 
 if __name__ == "__main__":

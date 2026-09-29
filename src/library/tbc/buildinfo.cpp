@@ -28,11 +28,11 @@
 #ifndef APP_VERSION
 #error "APP_VERSION is not defined for buildinfo.cpp; see src/library/CMakeLists.txt"
 #endif
-#ifndef APP_BRANCH
-#error "APP_BRANCH is not defined for buildinfo.cpp; see src/library/CMakeLists.txt"
+#ifndef APP_BUILD
+#error "APP_BUILD is not defined for buildinfo.cpp; see src/library/CMakeLists.txt"
 #endif
-#ifndef APP_COMMIT
-#error "APP_COMMIT is not defined for buildinfo.cpp; see src/library/CMakeLists.txt"
+#ifndef APP_SOURCE_ID
+#error "APP_SOURCE_ID is not defined for buildinfo.cpp; see src/library/CMakeLists.txt"
 #endif
 
 namespace TbcBuildInfo {
@@ -42,19 +42,19 @@ QString version()
     return QStringLiteral(APP_VERSION);
 }
 
-QString branch()
+QString build()
 {
-    return QStringLiteral(APP_BRANCH);
+    return QStringLiteral(APP_BUILD);
 }
 
-QString commit()
+QString sourceId()
 {
-    return QStringLiteral(APP_COMMIT);
+    return QStringLiteral(APP_SOURCE_ID);
 }
 
 QString versionLine()
 {
-    return QStringLiteral("tbc-tools %1 - Branch: %2 / Commit: %3").arg(version(), branch(), commit());
+    return QStringLiteral("tbc-tools %1 - Build: %2 / Source: %3").arg(version(), build(), sourceId());
 }
 
 } // namespace TbcBuildInfo

@@ -27,12 +27,14 @@ def _runtime_vendored_version() -> str:
     version = _clean_vendored_value("TBC_VIDEO_EXPORT_VENDOR_VERSION")
     if not version:
         return ""
-    commit = _clean_vendored_value("TBC_VIDEO_EXPORT_VENDOR_COMMIT")
-    if commit and commit != "0.0.0":
-        return f"{version}+{commit}"
-    branch = _clean_vendored_value("TBC_VIDEO_EXPORT_VENDOR_BRANCH")
-    if branch:
-        return f"{version}+{branch}"
+    # The source id names the source tree (src-<hash> or tree-<hash>), not a
+    # commit; see src/library/tbc/buildinfo.h.
+    source_id = _clean_vendored_value("TBC_VIDEO_EXPORT_VENDOR_SOURCE_ID")
+    if source_id and source_id != "unknown":
+        return f"{version}+{source_id}"
+    build = _clean_vendored_value("TBC_VIDEO_EXPORT_VENDOR_BUILD")
+    if build and build != "unknown":
+        return f"{version}+{build}"
     return version
 
 
