@@ -191,7 +191,7 @@ class VideoFormatType(Enum):
 
     GRAY = {
         8: "gray8",
-        10: "gray16le",
+        10: "gray10le",
         16: "gray16le",
     }
     YUV420 = {
