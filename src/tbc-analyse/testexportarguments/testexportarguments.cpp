@@ -22,6 +22,9 @@
 
 ************************************************************************/
 
+// Tests must assert even in Release builds, where NDEBUG would otherwise
+// compile every assert() away
+#undef NDEBUG
 #include <cassert>
 #include <iostream>
 #include <QDir>
@@ -76,10 +79,46 @@ void testSanitizeOutputBasePath()
     assert(QFileInfo(sanitizedHiddenPath).fileName() == QStringLiteral(".capture"));
 }
 
+void testShouldExportLumaOnly()
+{
+    cerr << "Testing ExportArguments::shouldExportLumaOnly\n";
+
+    // Mono on a split (Y+C) source exports the luma TBC alone.
+    assert(ExportArguments::shouldExportLumaOnly(true, QStringLiteral("mono")));
+    assert(ExportArguments::shouldExportLumaOnly(true, QStringLiteral(" MONO ")));
+
+    // A colour decoder on a split source still merges the chroma TBC.
+    assert(!ExportArguments::shouldExportLumaOnly(true, QStringLiteral("ntsc2d")));
+    assert(!ExportArguments::shouldExportLumaOnly(true, QStringLiteral("pal2d")));
+    assert(!ExportArguments::shouldExportLumaOnly(true, QString()));
+
+    // A composite source has no chroma TBC to skip.
+    assert(!ExportArguments::shouldExportLumaOnly(false, QStringLiteral("mono")));
+}
+
+void testLumaOnlyNeedsYuv422()
+{
+    cerr << "Testing ExportArguments::lumaOnlyNeedsYuv422\n";
+
+    // ProRes 422 can't encode gray, and ffmpeg would pick 4:4:4 under a 422 profile.
+    assert(ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("prores")));
+    assert(ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("prores_lt")));
+    assert(ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("prores_proxy")));
+    assert(ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral(" PRORES_HQ ")));
+
+    // Everything else keeps luma-only's gray output.
+    assert(!ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("prores_4444xq")));
+    assert(!ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("ffv1")));
+    assert(!ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("h264_web")));
+    assert(!ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("v210")));
+}
+
 int main()
 {
     testDropoutDisablePolicy();
     testDefaultActiveAreaFramingPolicy();
     testSanitizeOutputBasePath();
+    testShouldExportLumaOnly();
+    testLumaOnlyNeedsYuv422();
     return 0;
 }
