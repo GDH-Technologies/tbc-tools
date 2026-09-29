@@ -10,7 +10,10 @@
 
 #include "slideshowdialog.h"
 
+#include <QAbstractSlider>
+#include <QAbstractSpinBox>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFontDatabase>
@@ -21,6 +24,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
@@ -35,6 +39,7 @@
 #include "savepngdialog.h"
 #include "timelinemarkerslider.h"
 #include "tbc/uistyle.h"
+#include "theme_color_tokens.h"
 
 namespace {
 // Review list columns
@@ -290,6 +295,16 @@ SlideshowDialog::SlideshowDialog(const SlideshowExtractOptions &settings, const 
         if (index >= 0 && index < holds.size()) emit jumpRequested(holds[index].anchor);
     });
 
+    // The settings column scrolls with the wheel: its spin boxes, combo boxes
+    // and sliders take the wheel only once clicked into (eventFilter)
+    for (QWidget *widget : settingsWidget->findChildren<QWidget *>()) {
+        if (qobject_cast<QAbstractSpinBox *>(widget) || qobject_cast<QComboBox *>(widget)
+            || qobject_cast<QAbstractSlider *>(widget)) {
+            widget->setFocusPolicy(Qt::StrongFocus);
+            widget->installEventFilter(this);
+        }
+    }
+
     refreshRange();
     scrubTo(scrubSlider->value());
     resize(1280, 860);
@@ -344,10 +359,38 @@ void SlideshowDialog::closeEvent(QCloseEvent *event)
     QDialog::closeEvent(event);
 }
 
+void SlideshowDialog::paintEvent(QPaintEvent *event)
+{
+    QDialog::paintEvent(event);
+    // An outline, so the window's edge shows against the main window in a
+    // dark theme: a step from the window colour toward its text
+    QPainter painter(this);
+    painter.setPen(QPen(theme_tokens::neutralLine(palette(), 0.35), 2));
+    painter.drawRect(rect().adjusted(1, 1, -1, -1));
+}
+
+bool SlideshowDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    // A wheel over a settings control that has not been clicked into scrolls
+    // the column instead of changing the value: ignored here, the event goes
+    // on to the scroll area
+    if (event->type() == QEvent::Wheel) {
+        auto *widget = qobject_cast<QWidget *>(watched);
+        if (widget && !widget->hasFocus()) {
+            event->ignore();
+            return true;
+        }
+    }
+    return QDialog::eventFilter(watched, event);
+}
+
 void SlideshowDialog::changeEvent(QEvent *event)
 {
-    // The hold tints come from the palette; follow a theme switch
-    if (event->type() == QEvent::PaletteChange) refreshHoldSpans();
+    // The hold tints and the outline come from the palette; follow a theme switch
+    if (event->type() == QEvent::PaletteChange) {
+        refreshHoldSpans();
+        update();
+    }
     QDialog::changeEvent(event);
 }
 
