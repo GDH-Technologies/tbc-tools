@@ -40,7 +40,12 @@ jobs:
             artifact_name: tbc-tools_windows_x86_64
             bundle_external_tools: true
           - arch: arm64
-            runs_on: windows-11-arm
+            # windows-2022 (x64 host, VS2022): cross-compiles the arm64-windows
+            # triplet via -A arm64. The windows-11-arm label moved to the
+            # windows-11-vs2026-arm64 image (VS2026 only), which cmake 3.31.6
+            # cannot select (VS2026 needs CMake 4.x) — cmake then fell back to
+            # NMake Makefiles, which rejects the preset's arm64 platform spec.
+            runs_on: windows-2022
             vcpkg_triplet: arm64-windows
             configure_preset: vcpkg-arm64
             build_preset: vcpkg-arm64
