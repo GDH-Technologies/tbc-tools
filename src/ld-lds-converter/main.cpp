@@ -42,6 +42,7 @@
 
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
+#include "tbc/wheelguard.h"
 #include "converterdialog.h"
 #include "dataconverter.h"
 #include "tbc/buildinfo.h"
@@ -464,6 +465,8 @@ int main(int argc, char *argv[])
         // Qt's own Fusion theme, dark by default
         tbc::ui::applyFusionTheme(parser.isSet(lightThemeOption) ? Qt::ColorScheme::Light
                                                                  : Qt::ColorScheme::Dark);
+        // The wheel changes a field only once it is clicked or tabbed into
+        tbc::ui::installWheelGuard();
 
         bool outputFormatIsValid = false;
         const DataConverter::OutputFormat outputFormat = parseOutputFormat(parser.value(outputFormatOption), &outputFormatIsValid);

@@ -41,6 +41,7 @@
 #include "tbc/buildinfo.h"
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
+#include "tbc/wheelguard.h"
 #include "tbcmetadata.h"
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -269,6 +270,8 @@ int main(int argc, char *argv[])
         // Qt's own Fusion theme, dark by default
         tbc::ui::applyFusionTheme(parser.isSet(options.lightThemeOption) ? Qt::ColorScheme::Light
                                                                          : Qt::ColorScheme::Dark);
+        // The wheel changes a field only once it is clicked or tabbed into
+        tbc::ui::installWheelGuard();
 
         MetadataExportDialog::InitialOptions initialOptions;
         initialOptions.inputFile = resolveInputFilename(parser, options, false);

@@ -643,6 +643,9 @@ add_subdirectory(src/efm-decoder)
 add_subdirectory(src/tbc-video-export)
 
 if(BUILD_TESTING)
+    # Qt Test, for QTest::wheelEvent and friends: only the tests need it
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+
     add_subdirectory(src/library/filter/testfilter)
     add_subdirectory(src/library/gui/testprocessprogressrunner)
     add_subdirectory(src/library/tbc/testlinenumber)
@@ -650,6 +653,7 @@ if(BUILD_TESTING)
     add_subdirectory(src/library/tbc/testsegments)
     add_subdirectory(src/library/tbc/testvbidecoder)
     add_subdirectory(src/library/tbc/testvitcdecoder)
+    add_subdirectory(src/library/tbc/testwheelguard)
     add_subdirectory(src/tbc-chroma-decoder/testsourcefield)
     add_subdirectory(src/tbc-analyse/testexportarguments)
     add_subdirectory(src/tbc-analyse/testconfiguration)

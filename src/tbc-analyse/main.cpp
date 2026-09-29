@@ -29,6 +29,7 @@
 
 #include "tbc/logging.h"
 #include "tbc/uistyle.h"
+#include "tbc/wheelguard.h"
 #include "tbc/buildinfo.h"
 namespace {
 // Parse "a,b,c,d" into four integers
@@ -612,6 +613,8 @@ int main(int argc, char *argv[])
     }
     tbc::ui::applyFusionTheme(themeChoice == QLatin1String("light") ? Qt::ColorScheme::Light
                                                                     : Qt::ColorScheme::Dark);
+    // The wheel changes a field only once it is clicked or tabbed into
+    tbc::ui::installWheelGuard();
 
     // Get the arguments from the parser
     QString inputFileName;
