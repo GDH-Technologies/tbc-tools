@@ -4,8 +4,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+from collections import deque
 from contextlib import AsyncExitStack
 from datetime import datetime
 from fractions import Fraction
@@ -14,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tbc_video_export.common.enums import ExportMode, FlagHelper, ProcessName, TBCType
-from tbc_video_export.common.utils import ansi, strings
+from tbc_video_export.common.utils import ansi, files, strings
 from tbc_video_export.process.process import Process
 from tbc_video_export.process.progress_handler import ProgressHandler
 from tbc_video_export.process.wrapper import WrapperGroup
@@ -22,6 +24,9 @@ from tbc_video_export.process.wrapper import WrapperGroup
 if TYPE_CHECKING:
     from tbc_video_export.process.process_state import ProcessState
     from tbc_video_export.program_state import ProgramState
+
+# mkvmerge --gui-mode progress line ("#GUI#progress 42%")
+_MKVMERGE_PROGRESS = re.compile(r"^#GUI#progress\s+(\d{1,3})%")
 
 
 class ProcessHandler:
@@ -69,7 +74,11 @@ class ProcessHandler:
             await asyncio.wait(pending)
 
         if self._has_run:
-            self._normalize_mkv_display_aspect()
+            # a failed export leaves a partial file; remuxing it only delays
+            # the failure
+            if not self._proc_error_event.is_set():
+                self._normalize_mkv_display_aspect()
+
             self._print_completion_message()
 
     async def stop(self, cancelled_by_user: bool = False) -> None:
@@ -120,51 +129,116 @@ class ProcessHandler:
         if display_width <= 0:
             return
 
-        if (mkvmerge := shutil.which("mkvmerge")) is None:
-            self._state.export.append_message(
-                ansi.error_color(
-                    "mkvmerge not found, unable to normalize MKV display "
-                    "dimensions (VLC may show the wrong aspect ratio)."
-                )
+        # a host mkvmerge wins; the Nix package ships its own in libexec (outside
+        # bin/, so installing it never shadows the host's)
+        bundled_mkvmerge = (
+            files.get_runtime_directory().parent.parent
+            / "libexec"
+            / "tbc-video-export"
+            / "mkvmerge"
+        )
+        mkvmerge = shutil.which("mkvmerge") or (
+            str(bundled_mkvmerge) if bundled_mkvmerge.is_file() else None
+        )
+
+        if mkvmerge is None:
+            self._report(
+                "mkvmerge not found, unable to normalize MKV display "
+                "dimensions (VLC may show the wrong aspect ratio).",
+                error=True,
             )
             return
 
         temp_file = output_file.with_name(f"{output_file.stem}.remux-{os.getpid()}.mkv")
+        dimensions = f"{display_width}x{video_stream['height']}"
+
+        # a full-length remux rewrites the whole file, which takes minutes on
+        # a network share; say what is running so a caller reading the process
+        # output does not see a silent gap
+        if self._state.opts.no_progress:
+            logging.getLogger("console").info(
+                f"Normalizing MKV display dimensions to {dimensions} with mkvmerge"
+            )
 
         # mkvmerge exit code 1 means warnings, 2 means error
-        result = subprocess.run(  # noqa: S603
+        returncode, output_tail = self._run_mkvmerge(
             [
                 mkvmerge,
-                "--quiet",
+                "--gui-mode",
                 "--timestamp-scale",
                 "1",
                 "--output",
                 str(temp_file),
                 "--display-dimensions",
-                f"{video_stream['index']}:{display_width}x{video_stream['height']}",
+                f"{video_stream['index']}:{dimensions}",
                 str(output_file),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+            ]
         )
 
-        if result.returncode in (0, 1) and temp_file.is_file():
+        if returncode in (0, 1) and temp_file.is_file():
             temp_file.replace(output_file)
-            self._state.export.append_message(
-                ansi.success_color(
-                    "Normalized MKV display dimensions to "
-                    f"{display_width}x{video_stream['height']} (pixel units)."
-                )
+            self._report(
+                f"Normalized MKV display dimensions to {dimensions} (pixel units)."
             )
         else:
             temp_file.unlink(missing_ok=True)
-            self._state.export.append_message(
-                ansi.error_color(
-                    "mkvmerge failed to normalize MKV display dimensions "
-                    f"(exit {result.returncode})."
-                )
+            details = f": {' | '.join(output_tail)}" if output_tail else ""
+            self._report(
+                "mkvmerge failed to normalize MKV display dimensions "
+                f"(exit {returncode}){details}",
+                error=True,
             )
+
+    def _run_mkvmerge(self, command: list[str]) -> tuple[int, list[str]]:
+        """Run mkvmerge, logging its progress; return its exit code and last lines.
+
+        --gui-mode prints progress as newline-terminated "#GUI#progress N%"
+        lines (the default "Progress: N%" is carriage-return-terminated, so it
+        never arrives as a line). Progress is logged only when the progress
+        view is off: that is when a caller reads the process output instead.
+        """
+        output_tail: deque[str] = deque(maxlen=20)
+        last_percent: int | None = None
+
+        with subprocess.Popen(  # noqa: S603
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+        ) as process:
+            for raw_line in process.stdout or ():
+                line = raw_line.strip()
+
+                if (match := _MKVMERGE_PROGRESS.match(line)) is None:
+                    if line:
+                        output_tail.append(line)
+                    continue
+
+                percent = int(match.group(1))
+
+                if percent != last_percent and self._state.opts.no_progress:
+                    logging.getLogger("console").info(
+                        f"Normalizing MKV display dimensions: {percent}%"
+                    )
+
+                last_percent = percent
+
+        return process.returncode, list(output_tail)
+
+    def _report(self, message: str, *, error: bool = False) -> None:
+        """Record a post-export message and log it.
+
+        These run after the progress view has drawn its final frame, so the
+        appended message alone is never shown.
+        """
+        self._state.export.append_message(
+            ansi.error_color(message) if error else ansi.success_color(message)
+        )
+
+        console = logging.getLogger("console")
+        (console.error if error else console.info)(message)
 
     def _probe_video_stream(self, video_file: Path) -> dict[str, Any] | None:
         """Return the first video stream from ffprobe of video_file."""

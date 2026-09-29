@@ -498,6 +498,10 @@ jobs:
           # the one that can actually be executed here as a launch test.
           "$STORE/bin/tbc-video-export" --version
 
+          # Its MKV display-dimension normalization falls back to the mkvmerge
+          # the package ships in libexec; without one it silently skips it.
+          "$STORE/libexec/tbc-video-export/mkvmerge" --version
+
           # Non-fatal, and probed with tbc-video-export rather than tbc-analyse:
           # on macOS the GUI is only ever a bundle, so its absence from PATH
           # says nothing, whereas the CLI tool should be reachable on both.
@@ -627,6 +631,10 @@ jobs:
           # tbc-video-export is a plain CLI binary on both platforms, so it is
           # the one that can actually be executed here as a launch test.
           "$STORE/bin/tbc-video-export" --version
+
+          # Its MKV display-dimension normalization falls back to the mkvmerge
+          # the package ships in libexec; without one it silently skips it.
+          "$STORE/libexec/tbc-video-export/mkvmerge" --version
 
           # Non-fatal, and probed with tbc-video-export rather than tbc-analyse:
           # on macOS the GUI is only ever a bundle, so its absence from PATH

@@ -22,9 +22,11 @@ class ParserLDProcessVBI(Parser):
     def parse_line(self, line: str) -> ExportStateSnapshot:  # noqa: D102
         state = ExportStateSnapshot()
 
+        # "Processing field N" is the upstream form; this fork prints
+        # "Processing fields N/M (P%, R to go)", which also carries the total.
         patterns = [
             r"Info: Using .* threads to process (.*?) fields",
-            r"Info: Processing field (.*?)$",
+            r"Info: Processing fields? (\d+)(?:/(\d+))?",
             (
                 r"Info: VBI Processing complete - (.*?) "
                 r"fields in .* seconds \( (.*?) FPS \)"
@@ -43,11 +45,13 @@ class ParserLDProcessVBI(Parser):
                     self.tracked_value_total = int(total_fields)
                 elif (current_field := reg.group(2)) is not None:
                     self.tracked_value = int(current_field)
-                elif (total_fields := reg.group(3)) is not None and (
-                    end_fps := reg.group(4)
+                    if (total_fields := reg.group(3)) is not None:
+                        self.tracked_value_total = int(total_fields)
+                elif (total_fields := reg.group(4)) is not None and (
+                    end_fps := reg.group(5)
                 ) is not None:
                     self.tracked_value = int(total_fields)
-                    self.fps = float(end_fps)
+                    self.current_fps = float(end_fps)
 
         return state
 

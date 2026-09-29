@@ -279,6 +279,18 @@
               "--set-default" "TBC_SUPERRES_MODEL_DIR" "${superResModels}"
             ];
 
+            # tbc-video-export normalizes anamorphic MKV display dimensions with
+            # mkvmerge and, without one, silently leaves the file as FFmpeg wrote
+            # it. It looks on PATH first, then here: libexec, not bin/, so
+            # installing the package never shadows a host mkvmerge. postFixup,
+            # not postInstall: wrapQtAppsHook wraps everything in libexec at the
+            # start of fixupPhase, and mkvmerge must not get tbc-tools' Qt
+            # environment.
+            postFixup = ''
+              mkdir -p $out/libexec/tbc-video-export
+              ln -s ${p.mkvtoolnix-cli}/bin/mkvmerge $out/libexec/tbc-video-export/mkvmerge
+            '';
+
             cmakeBuildType = "Release";
             cmakeFlags = [
               "-DCMAKE_BUILD_TYPE=Release"
