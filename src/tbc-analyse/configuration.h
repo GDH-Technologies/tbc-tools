@@ -47,6 +47,10 @@ struct SlideshowExtractOptions {
     }();
     double minHoldSeconds = 1.0;
     QString outputDirectory; // empty: "<tape>_stills" next to the .tbc
+    // The dialog's size and splitter positions (QWidget/QSplitter saveState)
+    QByteArray dialogGeometry;
+    QByteArray dialogColumns;
+    QByteArray dialogRows;
 };
 
 class Configuration : public QObject

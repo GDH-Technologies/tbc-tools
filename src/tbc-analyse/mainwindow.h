@@ -358,6 +358,11 @@ private:
     // Render and save the ticked holds of a slideshow scan, with a manifest
     void saveSlideshowStills(const SlideshowExtract::CaptureInput &input,
                              const QVector<SlideshowExtract::Hold> &holds, const QString &directory);
+    // The extraction dialog's colour scrub preview: one frame at a time through
+    // tbcSource on a worker (under tbcSourceBusy), the latest request next
+    void renderSlideshowPreview(qint32 frame);
+    void onSlideshowPreviewRendered();
+    void finishSlideshowPreview();
     // Copy the current video frame (renderedCurrentImageForExport) to the
     // clipboard. Shared by the main-window Ctrl+C action and the graph-window
     // copyFrameRequested() signal handlers.
@@ -449,6 +454,10 @@ private:
     void goToField(qint32 field);
     void rederiveSegments(const SegmentsThresholds &thresholds);
     QFutureWatcher<QImage> asyncFrameRenderWatcher;
+    QFutureWatcher<QImage> slideshowPreviewWatcher;
+    qint32 slideshowPreviewFrame = -1;
+    qint32 slideshowPreviewNext = -1;
+    bool slideshowPreviewHighlight = false;
     bool asyncFrameRenderInProgress = false;
     bool asyncFrameRenderQueued = false;
     // Set while a worker thread renders other frames through tbcSource (the

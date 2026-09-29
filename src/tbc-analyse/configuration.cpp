@@ -190,6 +190,9 @@ void Configuration::writeConfiguration(void)
     writeSnapshotOptions(configuration, settings.slideshowExtract.snapshot);
     configuration->setValue("minHoldSeconds", settings.slideshowExtract.minHoldSeconds);
     configuration->setValue("outputDirectory", settings.slideshowExtract.outputDirectory);
+    configuration->setValue("dialogGeometry", settings.slideshowExtract.dialogGeometry);
+    configuration->setValue("dialogColumns", settings.slideshowExtract.dialogColumns);
+    configuration->setValue("dialogRows", settings.slideshowExtract.dialogRows);
     configuration->endGroup();
 
     // Sync the settings with disk
@@ -316,6 +319,9 @@ void Configuration::readConfiguration(void)
     settings.slideshowExtract.snapshot = readSnapshotOptions(configuration, slideshowDefaults);
     settings.slideshowExtract.minHoldSeconds = std::clamp(configuration->value("minHoldSeconds", 1.0).toDouble(), 0.1, 60.0);
     settings.slideshowExtract.outputDirectory = configuration->value("outputDirectory", QString()).toString();
+    settings.slideshowExtract.dialogGeometry = configuration->value("dialogGeometry").toByteArray();
+    settings.slideshowExtract.dialogColumns = configuration->value("dialogColumns").toByteArray();
+    settings.slideshowExtract.dialogRows = configuration->value("dialogRows").toByteArray();
     configuration->endGroup();
 }
 
