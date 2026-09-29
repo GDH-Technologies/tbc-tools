@@ -24,6 +24,9 @@
 
 #include "jsonio.h"
 
+#include <QByteArray>
+#include <QLocale>
+
 #include <limits>
 #if (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || (defined(__GNUC__) && __GNUC__ >= 11 && __cplusplus >= 201703L)
 #define USE_CHARCONV
@@ -374,7 +377,10 @@ void JsonWriter::write(double value)
         output << "null";
         return;
     }
-    output << value;
+    // The shortest text that reads back as the same double. The stream's
+    // default of 6 significant digits saved a 14318181.818 Hz sample rate as
+    // 14318200.
+    output << QByteArray::number(value, 'g', QLocale::FloatingPointShortest).constData();
 }
 
 void JsonWriter::write(bool value)
