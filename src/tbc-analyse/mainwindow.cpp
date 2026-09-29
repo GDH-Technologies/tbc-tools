@@ -1257,13 +1257,9 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     saveAllModesPngAction = new QAction(tr("Save all mode views as PNGs..."), this);
     connect(saveAllModesPngAction, &QAction::triggered,
             this, &MainWindow::saveAllModesAsPngs);
-    if (ui->menuFile) {
-        if (ui->actionExit) {
-            ui->menuFile->insertAction(ui->actionExit, saveAllModesPngAction);
-        } else {
-            ui->menuFile->addAction(saveAllModesPngAction);
-        }
-    }
+    // Frame Capture: the single-frame saves, then this, then slideshow extraction
+    ui->menuFrameCapture->insertAction(ui->actionExtract_slideshow_stills, saveAllModesPngAction);
+    ui->menuFrameCapture->insertSeparator(ui->actionExtract_slideshow_stills);
     setAcceptDrops(true);
     if (centralWidget()) {
         centralWidget()->setAcceptDrops(true);
@@ -1545,7 +1541,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     // they never take keys from the Export tab's controls; a focused text
     // field still gets typed letters (Qt's ShortcutOverride).
     QMenu *editMenu = new QMenu(tr("&Edit"), this);
-    menuBar()->insertMenu(ui->menuView->menuAction(), editMenu);
+    menuBar()->insertMenu(ui->menuFrameCapture->menuAction(), editMenu);
     editMenu->addAction(copyCurrentDisplayAction);
     editMenu->addSeparator();
     const auto addViewerKeyAction = [this, editMenu](const QString &text, const QList<QKeySequence> &keys,
