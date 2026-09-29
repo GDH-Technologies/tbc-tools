@@ -211,7 +211,7 @@ These controls are independent. Disabling decode JSON attachment does not disabl
 Export decoder selection follows metadata and profile settings, with the following behavior:
 
 * NTSC export accepts `nntransform3d` and `nntsc3d` decoder names.
-* If metadata video system is `SECAM` or `MESECAM` and no decoder override is set, export defaults to `mono`.
+* When the metadata stores no decoder, or no chroma gain, phase, luma NR, NTSC phase compensation or transform threshold, export passes the value the preview is using, so the export decodes like the viewer (for `SECAM`/`MESECAM` with no stored decoder, that is `secam`).
 * When export resolves to `mono`, chroma controls are omitted (`--chroma-gain` and `--chroma-phase` are not passed).
 
 ### Export each segment as a separate file
@@ -589,6 +589,8 @@ The 'Show export boundary' checkbox overlays a red 4‑pixel outline around the 
 ## Chroma decoder configuration
 
 This window lets you adjust the chroma decoder's settings. Most of the options here correspond to command-line arguments to the `tbc-chroma-decoder` tool, so you can use it prior to decoding to find the best settings.
+
+When a file is opened, the decoder and its settings come from the metadata. A setting the metadata doesn't hold uses its default, not the value from the previously opened file. With no stored decoder, the view uses Transform PAL 3D / NTSC 3D for a single TBC, Transform PAL 2D / NTSC 2D for a luma+chroma pair, and SECAM for SECAM. Opening a file never changes its metadata: the settings are written, and Save Metadata enabled, only when you change one here. Chroma noise reduction, Show FFTs, Simple PAL and Show map aren't stored in the metadata; they keep their values from file to file.
 
 ### Chroma gain
 
