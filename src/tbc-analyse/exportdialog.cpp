@@ -4313,6 +4313,9 @@ void ExportDialog::initializeProcessStats()
     const int totalFramesValue = qMax(0, tbcSource->getNumberOfFrames());
     const QString totalFrames = totalFramesValue > 0 ? QString::number(totalFramesValue) : QStringLiteral("—");
     const TbcSource::SourceMode mode = tbcSource->getSourceMode();
+    // Same decision buildArguments makes: mono on a split source never runs the chroma pass
+    const bool lumaOnly = ExportArguments::shouldExportLumaOnly(
+        mode != TbcSource::ONE_SOURCE, tbcSource->getVideoParametersWithViewChroma().chromaDecoder);
     const auto seedStat = [this, &totalFrames](const QString &process,
                                                const QString &tbcType,
                                                const QString &feedTag) {
@@ -4327,8 +4330,11 @@ void ExportDialog::initializeProcessStats()
         stat.feedTag = feedTag;
         updateProcessStat(stat);
     };
-    const auto seedFeed = [&seedStat, mode](const QString &feedTag) {
-        if (mode == TbcSource::BOTH_SOURCES) {
+    const auto seedFeed = [&seedStat, mode, lumaOnly](const QString &feedTag) {
+        if (lumaOnly) {
+            seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("LUMA"), feedTag);
+            seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
+        } else if (mode == TbcSource::BOTH_SOURCES) {
             seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("LUMA"), feedTag);
             seedStat(QStringLiteral("tbc-dropout-correct"), QStringLiteral("CHROMA"), feedTag);
             seedStat(QStringLiteral("tbc-chroma-decoder"), QStringLiteral("LUMA"), feedTag);
@@ -5213,20 +5219,41 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
     if (videoParameters.isValid) {
         args << QStringLiteral("--video-system") << videoSystemArg(videoParameters.system);
     }
-
-    QString normalizedDecoderName;
-    if (!videoParameters.chromaDecoder.isEmpty()) {
-        normalizedDecoderName = videoParameters.chromaDecoder.trimmed().toLower();
-        // MONO cannot decode the chroma pass of a split (Y+C) source: the
-        // merged export needs U/V planes, and MONO emits GRAY16, which fails
-        // the merge and leaves an empty output file. Omit the flag so
-        // tbc-video-export picks its per-system default chroma decoder.
-        if ((!isSplitSource || normalizedDecoderName != QStringLiteral("mono"))
-            && isValidChromaDecoderForSystem(normalizedDecoderName, videoParameters.system)) {
-            args << QStringLiteral("--chroma-decoder") << normalizedDecoderName;
+    auto unsupportedOptionError = [this, &exportPath](const QString &featureLabel, const QString &optionName) {
+        if (exportPath.isEmpty()) {
+            return tr("%1 requires tbc-video-export option %2, but no export executable was found.")
+                .arg(featureLabel)
+                .arg(optionName);
         }
+        return tr("%1 requires tbc-video-export option %2. Detected export tool does not support it: %3")
+            .arg(featureLabel)
+            .arg(optionName)
+            .arg(exportPath);
+    };
+
+    const QString normalizedDecoderName = videoParameters.chromaDecoder.trimmed().toLower();
+    // MONO cannot decode the chroma pass of a split (Y+C) source: the merged
+    // export needs U/V planes, and MONO emits GRAY16. Export the luma TBC
+    // alone instead, so the chroma TBC is never read and the output is gray.
+    const bool lumaOnly = ExportArguments::shouldExportLumaOnly(isSplitSource, normalizedDecoderName);
+    if (lumaOnly) {
+        if (!executableSupportsOption(exportPath, QStringLiteral("--luma-only"))) {
+            if (errorMessage) {
+                *errorMessage = unsupportedOptionError(tr("Mono export of a Y/C source"),
+                                                       QStringLiteral("--luma-only"));
+            }
+            return QStringList();
+        }
+        args << QStringLiteral("--luma-only");
+        // ProRes 422 can't encode gray; keep the stream at its profile's 4:2:2
+        if (ExportArguments::lumaOnlyNeedsYuv422(profile)) {
+            args << QStringLiteral("--yuv422");
+        }
+    } else if (!normalizedDecoderName.isEmpty()
+               && isValidChromaDecoderForSystem(normalizedDecoderName, videoParameters.system)) {
+        args << QStringLiteral("--chroma-decoder") << normalizedDecoderName;
     }
-    const bool monoDecoderSelected = normalizedDecoderName == QStringLiteral("mono") && !isSplitSource;
+    const bool monoDecoderSelected = normalizedDecoderName == QStringLiteral("mono");
     if (!monoDecoderSelected && videoParameters.chromaGain >= 0.0) {
         args << QStringLiteral("--chroma-gain") << QString::number(videoParameters.chromaGain, 'f', 6);
     }
@@ -5259,17 +5286,6 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
                                         && ui->letterboxCropCheckBox->isChecked();
     const bool forceAnamorphicRequested = ui->forceAnamorphicCheckBox
                                           && ui->forceAnamorphicCheckBox->isChecked();
-    auto unsupportedOptionError = [this, &exportPath](const QString &featureLabel, const QString &optionName) {
-        if (exportPath.isEmpty()) {
-            return tr("%1 requires tbc-video-export option %2, but no export executable was found.")
-                .arg(featureLabel)
-                .arg(optionName);
-        }
-        return tr("%1 requires tbc-video-export option %2. Detected export tool does not support it: %3")
-            .arg(featureLabel)
-            .arg(optionName)
-            .arg(exportPath);
-    };
     if (letterboxCropRequested && forceAnamorphicRequested) {
         if (errorMessage) {
             *errorMessage = tr("Force anamorphic cannot be used with letterbox crop.");

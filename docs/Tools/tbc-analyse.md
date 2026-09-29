@@ -213,6 +213,7 @@ Export decoder selection follows metadata and profile settings, with the followi
 * NTSC export accepts `nntransform3d` and `nntsc3d` decoder names.
 * When the metadata stores no decoder, or no chroma gain, phase, luma NR, NTSC phase compensation or transform threshold, export passes the value the preview is using, so the export decodes like the viewer (for `SECAM`/`MESECAM` with no stored decoder, that is `secam`).
 * When export resolves to `mono`, chroma controls are omitted (`--chroma-gain` and `--chroma-phase` are not passed).
+* For a split Y/C source (a `_chroma.tbc` beside the `.tbc`), `mono` exports with `--luma-only`: the chroma TBC is never read or decoded, and the output is gray at the chosen bit depth (for example `gray10le` for 10-bit FFV1). ProRes 422 profiles can't encode gray, so they get `--yuv422` and flat chroma instead.
 
 ### Export each segment as a separate file
 

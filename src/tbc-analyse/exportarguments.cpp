@@ -65,5 +65,19 @@ QString sanitizeOutputBasePath(const QString &path)
     const QString sanitizedFileName = stripKnownOutputContainerSuffix(fileName);
     return QDir(info.absolutePath()).filePath(sanitizedFileName);
 }
+// MONO has no chroma pass, so a split (Y+C) source exports its luma TBC alone
+bool shouldExportLumaOnly(bool isSplitSource, const QString &chromaDecoderName)
+{
+    return isSplitSource && chromaDecoderName.trimmed().toLower() == QStringLiteral("mono");
+}
+// ProRes 422 can't encode gray; left to ffmpeg it becomes 4:4:4 under a 422 profile
+bool lumaOnlyNeedsYuv422(const QString &profileName)
+{
+    const QString normalizedName = profileName.trimmed().toLower();
+    return normalizedName == QStringLiteral("prores")
+           || normalizedName == QStringLiteral("prores_lt")
+           || normalizedName == QStringLiteral("prores_proxy")
+           || normalizedName == QStringLiteral("prores_hq");
+}
 
 }
