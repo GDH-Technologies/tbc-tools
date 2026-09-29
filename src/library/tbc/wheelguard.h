@@ -40,7 +40,9 @@ namespace tbc::ui {
 //   which gets no FocusIn) or by Tab, Shift+Tab or a shortcut landing on it, and
 //   takes the wheel only while it is focused and armed. Focus returning from its
 //   own popup or from another window keeps the arming; focus going to any other
-//   widget drops it.
+//   widget drops it. A field a click cannot focus is armed by the press alone:
+//   on macOS Qt gives a non-editable combo box Qt::TabFocus, so a click never
+//   focuses it.
 //
 // A refused wheel is ignored and filtered: Qt then carries a real (spontaneous)
 // wheel on to the parent widgets, and the scroll area behind scrolls.
@@ -77,7 +79,7 @@ protected:
                 event->ignore();
                 return true;
             }
-            if (QWidget *field = asField(watched); field && !(field->hasFocus() && field == armed)) {
+            if (QWidget *field = asField(watched); field && !isArmed(field)) {
                 event->ignore();
                 return true;
             }
@@ -111,6 +113,11 @@ private:
             }
         }
         return nullptr;
+    }
+
+    bool isArmed(const QWidget *field) const
+    {
+        return field == armed && (field->hasFocus() || !(field->focusPolicy() & Qt::ClickFocus));
     }
 
     void noteFocus(QWidget *widget, Qt::FocusReason reason)

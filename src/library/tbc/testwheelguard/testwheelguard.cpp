@@ -30,6 +30,7 @@
 #include <QWidget>
 #include <QWindow>
 
+#include "tbc/uistyle.h"
 #include "tbc/wheelguard.h"
 #endif
 
@@ -46,14 +47,18 @@
 namespace {
 
 #if !defined(Q_OS_WIN)
-// A page taller than its scroll area whose first focusable widget is a
-// dropdown, like the metadata editor's System row: Qt focuses it by itself when
-// the window opens. Each case builds a fresh one, so focus and arming start clean.
+// A page taller than its scroll area. Its first field is a spin box, which Qt
+// focuses by itself when the window opens on every platform (as it does the
+// metadata editor's System dropdown on Linux; on macOS a non-editable combo box
+// is Qt::TabFocus and may be passed over). Each case builds a fresh one, so
+// focus and arming start clean.
 struct Page
 {
     QScrollArea area;
-    QComboBox *system = new QComboBox;
+    QSpinBox *opener = new QSpinBox;
+    QLineEdit *name = new QLineEdit; // not a field: somewhere to click and Tab from
     QSpinBox *gain = new QSpinBox;
+    QComboBox *system = new QComboBox; // not first, so never focused on open
     QComboBox *editable = new QComboBox;
     QDateTimeEdit *stamp = new QDateTimeEdit;
     QSlider *slider = new QSlider(Qt::Horizontal);
@@ -65,9 +70,11 @@ struct Page
         auto *page = new QWidget;
         page->setMinimumHeight(2000);
         auto *layout = new QVBoxLayout(page);
-        system->addItems({QStringLiteral("PAL"), QStringLiteral("NTSC"), QStringLiteral("PAL-M")});
+        opener->setRange(0, 100);
+        opener->setValue(50);
         gain->setRange(0, 100);
         gain->setValue(50);
+        system->addItems({QStringLiteral("PAL"), QStringLiteral("NTSC"), QStringLiteral("PAL-M")});
         editable->setEditable(true);
         editable->addItems({QStringLiteral("one"), QStringLiteral("two"), QStringLiteral("three")});
         // Mid-range, so a notch down moves whichever section is under the cursor
@@ -75,10 +82,11 @@ struct Page
         stamp->setCalendarPopup(true);
         slider->setRange(0, 100);
         slider->setValue(50);
-        for (const QString &name : {QStringLiteral("VHS"), QStringLiteral("Hi8"), QStringLiteral("DV")}) {
-            tabs->addTab(new QWidget, name);
+        for (const QString &label : {QStringLiteral("VHS"), QStringLiteral("Hi8"), QStringLiteral("DV")}) {
+            tabs->addTab(new QWidget, label);
         }
-        for (QWidget *widget : {static_cast<QWidget *>(system), static_cast<QWidget *>(gain),
+        for (QWidget *widget : {static_cast<QWidget *>(opener), static_cast<QWidget *>(name),
+                                static_cast<QWidget *>(gain), static_cast<QWidget *>(system),
                                 static_cast<QWidget *>(editable), static_cast<QWidget *>(stamp),
                                 static_cast<QWidget *>(slider), static_cast<QWidget *>(tabs),
                                 static_cast<QWidget *>(apply)}) {
@@ -126,14 +134,19 @@ void click(QWidget *widget)
     click(widget, probePoint(widget));
 }
 
+bool wheelFocusable(const QWidget *widget)
+{
+    return (widget->focusPolicy() & Qt::WheelFocus) == Qt::WheelFocus;
+}
+
 // Proves the harness can fail: before the guard, one hover notch changes a field
 void testQtDefaultChangesAHoveredField()
 {
     std::cerr << "Testing Qt's default\n";
     Page page;
-    const int before = page.gain->value();
+    CHECK(wheelFocusable(page.gain));
     wheelDown(page, page.gain);
-    CHECK(page.gain->value() != before);
+    CHECK(page.gain->value() != 50);
 }
 
 void testInstallIsIdempotent()
@@ -149,14 +162,14 @@ void testInstallIsIdempotent()
 void testHoveredFieldsScrollThePage()
 {
     std::cerr << "Testing hover over unfocused fields\n";
-    for (int field = 0; field < 3; ++field) {
+    for (int field = 0; field < 4; ++field) {
         Page page;
-        QWidget *widget = field == 0 ? static_cast<QWidget *>(page.gain)
-                        : field == 1 ? static_cast<QWidget *>(page.stamp)
-                                     : static_cast<QWidget *>(page.slider);
+        QWidget *const widgets[] = {page.gain, page.system, page.stamp, page.slider};
+        QWidget *widget = widgets[field];
         const QDateTime stamp = page.stamp->dateTime();
         wheelDown(page, widget);
         CHECK(page.gain->value() == 50);
+        CHECK(page.system->currentIndex() == 0);
         CHECK(page.stamp->dateTime() == stamp);
         CHECK(page.slider->value() == 50);
         CHECK(!widget->hasFocus());
@@ -164,29 +177,33 @@ void testHoveredFieldsScrollThePage()
     }
 }
 
-void testFocusPolicyDemotion()
+void testFocusPolicies()
 {
     std::cerr << "Testing focus policies\n";
     Page page;
-    CHECK(page.system->focusPolicy() == Qt::StrongFocus);
-    CHECK(page.gain->focusPolicy() == Qt::StrongFocus);
-    CHECK(page.stamp->focusPolicy() == Qt::StrongFocus);
+    // No field is left for Qt to focus by wheel; each still takes Tab focus
+    for (QWidget *field : {static_cast<QWidget *>(page.opener), static_cast<QWidget *>(page.gain),
+                           static_cast<QWidget *>(page.system), static_cast<QWidget *>(page.editable),
+                           static_cast<QWidget *>(page.stamp), static_cast<QWidget *>(page.slider)}) {
+        CHECK(!wheelFocusable(field));
+        CHECK(field->focusPolicy() & Qt::TabFocus);
+    }
 
     // A policy someone chose is left alone
-    QComboBox chosen;
+    QSpinBox chosen;
     chosen.setFocusPolicy(Qt::ClickFocus);
     chosen.ensurePolished();
     CHECK(chosen.focusPolicy() == Qt::ClickFocus);
 }
 
-// The window hands its first dropdown focus on open; that is not a click
+// The window hands its first field focus on open; that is not a click
 void testAutoFocusedFirstFieldIsNotArmed()
 {
     std::cerr << "Testing an auto-focused first field\n";
     Page page;
-    CHECK(page.system->hasFocus());
-    wheelDown(page, page.system);
-    CHECK(page.system->currentText() == QLatin1String("PAL"));
+    CHECK(page.opener->hasFocus());
+    wheelDown(page, page.opener);
+    CHECK(page.opener->value() == 50);
     CHECK(page.scrolled() > 0);
 }
 
@@ -195,15 +212,31 @@ void testClickArms()
     std::cerr << "Testing a click arms a field\n";
     {
         Page page;
-        click(page.system); // focused already, so no FocusIn: the press arms it
-        wheelDown(page, page.system);
-        CHECK(page.system->currentText() == QLatin1String("NTSC"));
+        click(page.opener); // focused already, so no FocusIn: the press arms it
+        wheelDown(page, page.opener);
+        CHECK(page.opener->value() == 49);
     }
     {
         Page page;
         click(page.gain);
         wheelDown(page, page.gain);
         CHECK(page.gain->value() == 49);
+    }
+    {
+        Page page;
+        click(page.system);
+        wheelDown(page, page.system);
+        CHECK(page.system->currentIndex() == 1);
+    }
+    {
+        // As macOS has it for a non-editable combo box: a click never focuses
+        // it, so the press alone arms it
+        Page page;
+        page.system->setFocusPolicy(Qt::TabFocus);
+        click(page.system);
+        CHECK(!page.system->hasFocus());
+        wheelDown(page, page.system);
+        CHECK(page.system->currentIndex() == 1);
     }
     {
         Page page;
@@ -240,7 +273,8 @@ void testTabArms()
 {
     std::cerr << "Testing Tab arms a field\n";
     Page page;
-    QTest::keyClick(page.system, Qt::Key_Tab);
+    click(page.name);
+    QTest::keyClick(page.name, Qt::Key_Tab);
     QCoreApplication::processEvents();
     CHECK(page.gain->hasFocus());
     wheelDown(page, page.gain);
@@ -263,7 +297,7 @@ void testClickingElsewhereDisarms()
     std::cerr << "Testing a click elsewhere disarms\n";
     Page page;
     click(page.gain);
-    click(page.apply);
+    click(page.name);
     wheelDown(page, page.gain);
     CHECK(page.gain->value() == 50);
     CHECK(page.scrolled() > 0);
@@ -291,10 +325,13 @@ int main(int argc, char *argv[])
     // session) hung in the QApplication constructor.
 #if !defined(Q_OS_WIN)
     QApplication application(argc, argv);
+    // The style every tool runs with: it sets a slider's and a button's focus
+    // policy, which the platform style would otherwise decide
+    tbc::ui::applyFusionTheme(Qt::ColorScheme::Dark);
     testQtDefaultChangesAHoveredField();
     testInstallIsIdempotent();
     testHoveredFieldsScrollThePage();
-    testFocusPolicyDemotion();
+    testFocusPolicies();
     testAutoFocusedFirstFieldIsNotArmed();
     testClickArms();
     testTabArms();
