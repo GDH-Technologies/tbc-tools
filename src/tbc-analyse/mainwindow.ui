@@ -749,6 +749,7 @@
     <addaction name="separator"/>
     <addaction name="actionSave_frame_as_PNG"/>
     <addaction name="actionSave_frame_as_PNG_with_options"/>
+    <addaction name="actionExtract_slideshow_stills"/>
     <addaction name="separator"/>
     <addaction name="actionExit"/>
    </widget>
@@ -1147,6 +1148,14 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+F</string>
+   </property>
+  </action>
+  <action name="actionExtract_slideshow_stills">
+   <property name="text">
+    <string>Extract slideshow stills...</string>
+   </property>
+   <property name="toolTip">
+    <string>Find every photo held on a stretch of a slideshow tape and save each as a PNG</string>
    </property>
   </action>
   <action name="actionSNR_analysis">

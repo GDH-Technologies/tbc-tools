@@ -1,6 +1,7 @@
 add_executable(testframesnapshot
     testframesnapshot.cpp
     ../framesnapshot.cpp
+    ../slideshowextract.cpp
 )
 
 target_include_directories(testframesnapshot PRIVATE

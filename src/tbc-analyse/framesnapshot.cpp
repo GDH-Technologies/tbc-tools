@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QSet>
 #include <QTextStream>
 #include <algorithm>
 #include <cmath>
@@ -39,14 +40,11 @@ constexpr double SQUARE_PIXEL_RATE_525 = 135.0e6 / 11.0;
 constexpr double SQUARE_PIXEL_RATE_625 = 14.75e6;
 
 // Still-picture search thresholds. A frame belongs to the anchor's still
-// while its 8x8-block thumbnail differs from the anchor's by less than
-// RUN_BREAK_DIFFERENCE (fraction of black-to-white); measured on a VHS
-// slideshow, cuts sit at 0.24-0.36 and frames of one photo at <= 0.018.
-// Within the run a frame is rejected when its visible dropouts are well above
-// the run's median, or its RMS distance from the run's per-pixel median is
-// more than DISTANCE_TOLERANCE times the typical distance: a head-switching
-// tear measured about 2x.
-constexpr double RUN_BREAK_DIFFERENCE = 0.06;
+// while its 8x8-block thumbnail is within RUN_BREAK_DIFFERENCE of the
+// anchor's. Within the run a frame is rejected when its visible dropouts are
+// well above the run's median, or its RMS distance from the run's per-pixel
+// median is more than DISTANCE_TOLERANCE times the typical distance: a
+// head-switching tear measured about 2x.
 constexpr qint32 THUMBNAIL_BLOCK = 8;
 constexpr double DISTANCE_TOLERANCE = 1.5;
 constexpr double DROPOUT_ALLOWANCE_SAMPLES = 20.0;
@@ -484,70 +482,100 @@ QImage process(const QImage &frameImage, const Options &options,
     return resampled(image, QSize(width, image.height()), method);
 }
 
-SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel, std::atomic<qint32> *progress)
+bool LumaReader::open(const QString &tbcFilename, const TbcMetaData::VideoParameters &videoParameters,
+                      const QRect &cropRect, QString *errorMessage)
 {
-    SearchResult result;
-    const TbcMetaData::VideoParameters &videoParameters = input.videoParameters;
-    const qint32 fieldWidth = videoParameters.fieldWidth;
+    fieldWidth = videoParameters.fieldWidth;
     const qint32 fieldHeight = videoParameters.fieldHeight;
-
-    SourceVideo sourceVideo;
     if (fieldWidth <= 0 || fieldHeight <= 0
-        || !sourceVideo.open(input.tbcFilename, fieldWidth * fieldHeight, fieldWidth)) {
-        result.errorMessage = QStringLiteral("Could not open %1 for the still-picture search.").arg(input.tbcFilename);
-        return result;
+        || !sourceVideo.open(tbcFilename, fieldWidth * fieldHeight, fieldWidth)) {
+        if (errorMessage) *errorMessage = QStringLiteral("Could not open %1.").arg(tbcFilename);
+        return false;
     }
+    availableFields = sourceVideo.getNumberOfAvailableFields();
 
     // Frame row r comes from the first field (even r) or second field (odd r),
     // field line r / 2. Only the field lines inside the crop are read.
-    const QRect crop = input.cropRect.intersected(QRect(0, 0, fieldWidth, fieldHeight * 2 - 1));
-    const qint32 x0 = crop.left();
-    const qint32 width = crop.width();
-    const qint32 line0 = (crop.top() + 1) / 2;
-    const qint32 height = std::min(fieldHeight, (crop.bottom() + 1) / 2) - line0;
-    if (width < THUMBNAIL_BLOCK || height < THUMBNAIL_BLOCK) {
-        result.errorMessage = QStringLiteral("The framed area is too small to search.");
-        return result;
+    const QRect crop = cropRect.intersected(QRect(0, 0, fieldWidth, fieldHeight * 2 - 1));
+    x0 = crop.left();
+    areaWidth = crop.width();
+    line0 = (crop.top() + 1) / 2;
+    areaHeight = std::min(fieldHeight, (crop.bottom() + 1) / 2) - line0;
+    if (areaWidth < THUMBNAIL_BLOCK || areaHeight < THUMBNAIL_BLOCK) {
+        if (errorMessage) *errorMessage = QStringLiteral("The framed area is too small to search.");
+        return false;
     }
+
+    black = videoParameters.black16bIre;
+    range = (videoParameters.white16bIre > videoParameters.black16bIre)
+                ? videoParameters.white16bIre - videoParameters.black16bIre : 65535.0f;
+    return true;
+}
+
+bool LumaReader::readField(qint32 fieldNumber, float *target)
+{
+    if (fieldNumber < 1 || fieldNumber > availableFields) {
+        std::fill(target, target + fieldPixels(), 0.0f);
+        return false;
+    }
+    // getVideoField takes 1-based, inclusive field lines
+    const SourceVideo::Data field = sourceVideo.getVideoField(fieldNumber, line0 + 1, line0 + areaHeight);
+    for (qint32 y = 0; y < areaHeight; y++) {
+        const quint16 *source = field.constData() + y * fieldWidth + x0;
+        float *row = target + y * areaWidth;
+        for (qint32 x = 0; x < areaWidth; x++) row[x] = (source[x] - black) / range;
+    }
+    return true;
+}
+
+std::vector<double> LumaReader::thumbnail(const float *field, qint32 block) const
+{
+    const qint32 blocksX = areaWidth / block;
+    const qint32 blocksY = areaHeight / block;
+    std::vector<double> blocks(blocksX * blocksY, 0.0);
+    for (qint32 y = 0; y < blocksY * block; y++) {
+        for (qint32 x = 0; x < blocksX * block; x++) {
+            blocks[(y / block) * blocksX + x / block] += field[y * areaWidth + x];
+        }
+    }
+    for (double &value : blocks) value /= block * block;
+    return blocks;
+}
+
+double thumbnailDifference(const std::vector<double> &a, const std::vector<double> &b)
+{
+    if (a.empty() || a.size() != b.size()) return 1.0;
+    double difference = 0.0;
+    for (size_t i = 0; i < a.size(); i++) difference += std::fabs(a[i] - b[i]);
+    return difference / a.size();
+}
+
+SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel, std::atomic<qint32> *progress)
+{
+    SearchResult result;
+
+    LumaReader reader;
+    if (!reader.open(input.tbcFilename, input.videoParameters, input.cropRect, &result.errorMessage)) return result;
+    const qint32 width = reader.width();
+    const qint32 height = reader.height();
+    const qint32 line0 = reader.firstFieldLine();
     const qint32 lastFrame = input.firstFrame + input.fieldNumbers.size() - 1;
     if (input.anchorFrame < input.firstFrame || input.anchorFrame > lastFrame) {
         result.errorMessage = QStringLiteral("The current frame is outside the search window.");
         return result;
     }
 
-    const float black = videoParameters.black16bIre;
-    const float range = (videoParameters.white16bIre > videoParameters.black16bIre)
-                            ? videoParameters.white16bIre - videoParameters.black16bIre : 65535.0f;
-
-    // Both fields of a frame, one after the other, scaled 0 (black) to 1 (white)
-    const qint32 fieldPixels = width * height;
+    // Both fields of a frame, one after the other
+    const qint32 fieldPixels = reader.fieldPixels();
     auto readFrame = [&](qint32 frame) {
         std::vector<float> pixels(2 * fieldPixels);
         const QPair<qint32, qint32> &fields = input.fieldNumbers[frame - input.firstFrame];
-        for (qint32 f = 0; f < 2; f++) {
-            const SourceVideo::Data field = sourceVideo.getVideoField(f == 0 ? fields.first : fields.second);
-            for (qint32 y = 0; y < height; y++) {
-                const quint16 *source = field.constData() + (line0 + y) * fieldWidth + x0;
-                float *target = pixels.data() + f * fieldPixels + y * width;
-                for (qint32 x = 0; x < width; x++) target[x] = (source[x] - black) / range;
-            }
-        }
+        reader.readField(fields.first, pixels.data());
+        reader.readField(fields.second, pixels.data() + fieldPixels);
         return pixels;
     };
-
-    // 8x8-block means of the first field
-    const qint32 blocksX = width / THUMBNAIL_BLOCK;
-    const qint32 blocksY = height / THUMBNAIL_BLOCK;
-    auto thumbnail = [&](const std::vector<float> &pixels) {
-        std::vector<double> blocks(blocksX * blocksY, 0.0);
-        for (qint32 y = 0; y < blocksY * THUMBNAIL_BLOCK; y++) {
-            for (qint32 x = 0; x < blocksX * THUMBNAIL_BLOCK; x++) {
-                blocks[(y / THUMBNAIL_BLOCK) * blocksX + x / THUMBNAIL_BLOCK] += pixels[y * width + x];
-            }
-        }
-        for (double &block : blocks) block /= THUMBNAIL_BLOCK * THUMBNAIL_BLOCK;
-        return blocks;
-    };
+    // Of the first field
+    auto thumbnail = [&](const std::vector<float> &pixels) { return reader.thumbnail(pixels.data()); };
 
     // Walk outwards from the anchor until the picture changes, keeping the
     // pixels of every frame of the run
@@ -563,9 +591,7 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
         std::vector<float> pixels = readFrame(frame);
         const std::vector<double> frameThumbnail = thumbnail(pixels);
         if (anchorThumbnail.empty()) anchorThumbnail = frameThumbnail;
-        double difference = 0.0;
-        for (size_t i = 0; i < frameThumbnail.size(); i++) difference += std::fabs(frameThumbnail[i] - anchorThumbnail[i]);
-        score.anchorDiff = difference / frameThumbnail.size();
+        score.anchorDiff = thumbnailDifference(frameThumbnail, anchorThumbnail);
         score.inRun = score.anchorDiff < RUN_BREAK_DIFFERENCE;
         if (score.inRun) {
             runIndexOfFrame.insert(frame, runPixels.size());
@@ -576,8 +602,12 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
         return score.inRun;
     };
 
+    // An interruption the picture comes back from (up to
+    // MAX_INTERRUPTION_FRAMES) is read and scored out of the run, but does not
+    // end it
     visit(input.anchorFrame);
     for (const qint32 step : {-1, 1}) {
+        qint32 missed = 0;
         for (qint32 distance = 1; distance <= input.radius; distance++) {
             if (cancel && cancel->load()) {
                 result.cancelled = true;
@@ -585,7 +615,40 @@ SearchResult findStillFrames(const SearchInput &input, std::atomic<bool> *cancel
             }
             const qint32 frame = input.anchorFrame + step * distance;
             if (frame < input.firstFrame || frame > lastFrame) break;
-            if (!visit(frame)) break;
+            if (visit(frame)) {
+                missed = 0;
+            } else if (++missed > MAX_INTERRUPTION_FRAMES) {
+                break;
+            }
+        }
+    }
+
+    // A frame the TBC repeats exactly (as a decoder fills a skip on damaged
+    // tape) is the same noise again. Its copies would pull the median onto it
+    // and make every other frame look far from it: only the first copy counts.
+    QVector<qint32> runFrames = runIndexOfFrame.keys();
+    std::sort(runFrames.begin(), runFrames.end());
+    QSet<qint32> duplicateFrames;
+    for (qint32 i = 1; i < runFrames.size(); i++) {
+        if (runFrames[i] == runFrames[i - 1] + 1
+            && runPixels[runIndexOfFrame.value(runFrames[i])] == runPixels[runIndexOfFrame.value(runFrames[i - 1])]) {
+            duplicateFrames.insert(runFrames[i]);
+        }
+    }
+    if (!duplicateFrames.isEmpty()) {
+        std::vector<std::vector<float>> kept;
+        QHash<qint32, size_t> keptIndexOfFrame;
+        for (const qint32 frame : runFrames) {
+            if (duplicateFrames.contains(frame)) continue;
+            keptIndexOfFrame.insert(frame, kept.size());
+            kept.push_back(std::move(runPixels[runIndexOfFrame.value(frame)]));
+        }
+        runPixels = std::move(kept);
+        runIndexOfFrame = keptIndexOfFrame;
+        for (FrameScore &score : scores) {
+            if (!duplicateFrames.contains(score.frame)) continue;
+            score.inRun = false;
+            score.duplicate = true;
         }
     }
 
@@ -719,12 +782,12 @@ bool writeScoreReport(const QString &filename, const SearchResult &result, QStri
         return false;
     }
     QTextStream stream(&file);
-    stream << "frame,in_run,eligible,anchor_diff,distance,raw_distance,dropouts,shift_x,shift_x_max,shift_y_max,aligned,best\n";
+    stream << "frame,in_run,eligible,anchor_diff,distance,raw_distance,dropouts,shift_x,shift_x_max,shift_y_max,aligned,best,duplicate\n";
     for (const FrameScore &score : result.scores) {
         stream << score.frame << ',' << int(score.inRun) << ',' << int(score.eligible) << ','
                << score.anchorDiff << ',' << score.distance << ',' << score.rawDistance << ',' << score.dropouts << ','
                << score.shiftX << ',' << score.shiftXMax << ',' << score.shiftYMax << ',' << int(score.aligned) << ','
-               << int(score.frame == result.bestFrame) << '\n';
+               << int(score.frame == result.bestFrame) << ',' << int(score.duplicate) << '\n';
     }
     return true;
 }

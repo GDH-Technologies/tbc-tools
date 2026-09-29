@@ -18,11 +18,13 @@
 #include <QPixmap>
 #include <QDir>
 #include <QFileInfo>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QtConcurrent/QtConcurrent>
 #include <cstdio>
 
 #include "framesnapshot.h"
+#include "slideshowextract.h"
 #include "tbcsource.h"
 
 #include "tbc/logging.h"
@@ -42,6 +44,101 @@ bool parseFourInts(const QString &text, qint32 values[4])
     return true;
 }
 
+// Framing, aspect, still-picture and upscale flags, shared by --save-frame and
+// --extract-stills. Built-in defaults plus flags; tbc-analyse.ini is not read,
+// so a script gets the same output wherever it runs.
+bool parseSnapshotOptions(const QCommandLineParser &parser, FrameSnapshot::Options &options, QString *error)
+{
+    bool ok = false;
+    const QString crop = parser.value(QStringLiteral("crop")).trimmed().toLower();
+    if (crop == QLatin1String("full")) {
+        options.framing = FrameSnapshot::Framing::Full;
+    } else if (crop == QLatin1String("active") || crop.isEmpty()) {
+        options.framing = FrameSnapshot::Framing::Active;
+    } else {
+        qint32 rect[4];
+        if (!parseFourInts(crop, rect)) {
+            *error = QStringLiteral("--crop takes full, active or x,y,w,h");
+            return false;
+        }
+        options.framing = FrameSnapshot::Framing::Custom;
+        options.customRect = QRect(rect[0], rect[1], rect[2], rect[3]);
+    }
+    if (parser.isSet(QStringLiteral("margins"))) {
+        qint32 margins[4];
+        if (!parseFourInts(parser.value(QStringLiteral("margins")), margins)) {
+            *error = QStringLiteral("--margins takes left,top,right,bottom");
+            return false;
+        }
+        options.marginLeft = margins[0];
+        options.marginTop = margins[1];
+        options.marginRight = margins[2];
+        options.marginBottom = margins[3];
+    }
+    if (parser.isSet(QStringLiteral("aspect"))) {
+        const QString aspect = parser.value(QStringLiteral("aspect"));
+        const FrameSnapshot::AspectMode invalid = static_cast<FrameSnapshot::AspectMode>(-1);
+        options.aspectMode = FrameSnapshot::aspectModeFromName(aspect, invalid);
+        if (options.aspectMode == invalid) {
+            *error = QStringLiteral("--aspect takes exact or viewer");
+            return false;
+        }
+    }
+    if (parser.isSet(QStringLiteral("best-of")) && parser.isSet(QStringLiteral("average-of"))) {
+        *error = QStringLiteral("--best-of and --average-of are alternatives; give one");
+        return false;
+    }
+    for (const QString &flag : {QStringLiteral("best-of"), QStringLiteral("average-of")}) {
+        if (!parser.isSet(flag)) continue;
+        options.searchRadius = parser.value(flag).toInt(&ok);
+        if (!ok || options.searchRadius < 0) {
+            *error = QStringLiteral("--%1 takes a frame count (0 = off)").arg(flag);
+            return false;
+        }
+        options.stillMode = options.searchRadius == 0 ? FrameSnapshot::StillMode::Off
+                            : flag == QLatin1String("best-of") ? FrameSnapshot::StillMode::Cleanest
+                                                               : FrameSnapshot::StillMode::Average;
+    }
+    if (parser.isSet(QStringLiteral("upscale"))) {
+        options.upscaleFactor = parser.value(QStringLiteral("upscale")).toInt(&ok);
+        if (!ok || options.upscaleFactor < 1 || options.upscaleFactor > 4) {
+            *error = QStringLiteral("--upscale takes 1, 2, 3 or 4");
+            return false;
+        }
+    }
+    if (parser.isSet(QStringLiteral("upscale-method"))) {
+        options.upscaleMethod = parser.value(QStringLiteral("upscale-method"));
+        if (!FrameSnapshot::isUpscaleMethodAvailable(options.upscaleMethod)) {
+            QStringList names;
+            for (const FrameSnapshot::UpscaleMethod &method : FrameSnapshot::upscaleMethods()) names << method.name;
+            *error = QStringLiteral("--upscale-method takes one of: %1").arg(names.join(QStringLiteral(", ")));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Loads a source for a headless run and configures its chroma decoder
+bool loadHeadless(TbcSource &tbcSource, const QString &inputFileName, QString *error)
+{
+    bool loaded = false;
+    QEventLoop loop;
+    QObject::connect(&tbcSource, &TbcSource::finishedLoading, &loop, [&](bool success) {
+        loaded = success;
+        loop.quit();
+    });
+    tbcSource.loadSource(inputFileName);
+    loop.exec();
+    if (!loaded || !tbcSource.getIsSourceLoaded()) {
+        *error = QStringLiteral("Could not load %1: %2").arg(inputFileName, tbcSource.getLastIOError());
+        return false;
+    }
+    // MainWindow configures the chroma decoder by handing the loaded source's
+    // configuration back through the Chroma Decoder dialog; do the same here.
+    tbcSource.setChromaConfiguration(tbcSource.getPalConfiguration(), tbcSource.getNtscConfiguration());
+    return true;
+}
+
 // Headless "Save frame as PNG": tbc-analyse --save-frame N -o out.png input.tbc
 int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
 {
@@ -58,82 +155,16 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
     qint32 frameNumber = parser.value(QStringLiteral("save-frame")).toInt(&ok);
     if (!ok || frameNumber < 1) return fail(QStringLiteral("--save-frame needs a frame number (from 1)"));
 
-    // Built-in defaults plus flags; tbc-analyse.ini is not read, so a script
-    // gets the same output wherever it runs.
     FrameSnapshot::Options options;
-    const QString crop = parser.value(QStringLiteral("crop")).trimmed().toLower();
-    if (crop == QLatin1String("full")) {
-        options.framing = FrameSnapshot::Framing::Full;
-    } else if (crop == QLatin1String("active") || crop.isEmpty()) {
-        options.framing = FrameSnapshot::Framing::Active;
-    } else {
-        qint32 rect[4];
-        if (!parseFourInts(crop, rect)) return fail(QStringLiteral("--crop takes full, active or x,y,w,h"));
-        options.framing = FrameSnapshot::Framing::Custom;
-        options.customRect = QRect(rect[0], rect[1], rect[2], rect[3]);
-    }
-    if (parser.isSet(QStringLiteral("margins"))) {
-        qint32 margins[4];
-        if (!parseFourInts(parser.value(QStringLiteral("margins")), margins)) {
-            return fail(QStringLiteral("--margins takes left,top,right,bottom"));
-        }
-        options.marginLeft = margins[0];
-        options.marginTop = margins[1];
-        options.marginRight = margins[2];
-        options.marginBottom = margins[3];
-    }
-    if (parser.isSet(QStringLiteral("aspect"))) {
-        const QString aspect = parser.value(QStringLiteral("aspect"));
-        const FrameSnapshot::AspectMode invalid = static_cast<FrameSnapshot::AspectMode>(-1);
-        options.aspectMode = FrameSnapshot::aspectModeFromName(aspect, invalid);
-        if (options.aspectMode == invalid) return fail(QStringLiteral("--aspect takes exact or viewer"));
-    }
-    if (parser.isSet(QStringLiteral("best-of")) && parser.isSet(QStringLiteral("average-of"))) {
-        return fail(QStringLiteral("--best-of and --average-of are alternatives; give one"));
-    }
-    for (const QString &flag : {QStringLiteral("best-of"), QStringLiteral("average-of")}) {
-        if (!parser.isSet(flag)) continue;
-        options.searchRadius = parser.value(flag).toInt(&ok);
-        if (!ok || options.searchRadius < 0) return fail(QStringLiteral("--%1 takes a frame count (0 = off)").arg(flag));
-        if (options.searchRadius > 0) {
-            options.stillMode = flag == QLatin1String("best-of") ? FrameSnapshot::StillMode::Cleanest
-                                                                 : FrameSnapshot::StillMode::Average;
-        }
-    }
-    if (parser.isSet(QStringLiteral("upscale"))) {
-        options.upscaleFactor = parser.value(QStringLiteral("upscale")).toInt(&ok);
-        if (!ok || options.upscaleFactor < 1 || options.upscaleFactor > 4) {
-            return fail(QStringLiteral("--upscale takes 1, 2, 3 or 4"));
-        }
-    }
-    if (parser.isSet(QStringLiteral("upscale-method"))) {
-        options.upscaleMethod = parser.value(QStringLiteral("upscale-method"));
-        if (!FrameSnapshot::isUpscaleMethodAvailable(options.upscaleMethod)) {
-            QStringList names;
-            for (const FrameSnapshot::UpscaleMethod &method : FrameSnapshot::upscaleMethods()) names << method.name;
-            return fail(QStringLiteral("--upscale-method takes one of: %1").arg(names.join(QStringLiteral(", "))));
-        }
-    }
+    QString optionsError;
+    if (!parseSnapshotOptions(parser, options, &optionsError)) return fail(optionsError);
 
     TbcSource tbcSource;
-    bool loaded = false;
-    QEventLoop loop;
-    QObject::connect(&tbcSource, &TbcSource::finishedLoading, &loop, [&](bool success) {
-        loaded = success;
-        loop.quit();
-    });
-    tbcSource.loadSource(inputFileName);
-    loop.exec();
-    if (!loaded || !tbcSource.getIsSourceLoaded()) {
-        return fail(QStringLiteral("Could not load %1: %2").arg(inputFileName, tbcSource.getLastIOError()));
-    }
+    QString loadError;
+    if (!loadHeadless(tbcSource, inputFileName, &loadError)) return fail(loadError);
     if (frameNumber > tbcSource.getNumberOfFrames()) {
         return fail(QStringLiteral("Frame %1 is past the end (%2 frames)").arg(frameNumber).arg(tbcSource.getNumberOfFrames()));
     }
-
-    // MainWindow configures the chroma decoder by handing the loaded source's
-    // configuration back through the Chroma Decoder dialog; do the same here.
-    tbcSource.setChromaConfiguration(tbcSource.getPalConfiguration(), tbcSource.getNtscConfiguration());
 
     const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
     const QSize frameSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
@@ -195,6 +226,137 @@ int runSaveFrame(const QCommandLineParser &parser, const QString &inputFileName)
     if (!image.save(outputFileName)) return fail(QStringLiteral("Could not write %1").arg(outputFileName));
 
     printf("saved frame %d as %s (%dx%d)\n", frameNumber, qPrintable(outputFileName), image.width(), image.height());
+    return 0;
+}
+
+// Headless "Extract slideshow stills": tbc-analyse --extract-stills all -o DIR input.tbc
+int runExtractStills(const QCommandLineParser &parser, const QString &inputFileName)
+{
+    auto fail = [](const QString &message) {
+        fprintf(stderr, "tbc-analyse: %s\n", qPrintable(message));
+        return 1;
+    };
+
+    if (inputFileName.isEmpty()) return fail(QStringLiteral("--extract-stills needs an input TBC file"));
+    const QString outputDirectory = parser.value(QStringLiteral("output"));
+    // With only --scan-report, the scan is all it does
+    const bool scanOnly = outputDirectory.isEmpty() && parser.isSet(QStringLiteral("scan-report"));
+    if (outputDirectory.isEmpty() && !scanOnly) {
+        return fail(QStringLiteral("--extract-stills needs -o/--output <folder> (or just --scan-report <file>)"));
+    }
+
+    // Each photo is averaged by default
+    FrameSnapshot::Options options;
+    options.stillMode = FrameSnapshot::StillMode::Average;
+    QString optionsError;
+    if (!parseSnapshotOptions(parser, options, &optionsError)) return fail(optionsError);
+
+    bool ok = true;
+    double minHoldSeconds = 1.0;
+    if (parser.isSet(QStringLiteral("min-hold"))) minHoldSeconds = parser.value(QStringLiteral("min-hold")).toDouble(&ok);
+    if (!ok || minHoldSeconds <= 0.0) return fail(QStringLiteral("--min-hold takes a time in seconds"));
+
+    TbcSource tbcSource;
+    QString loadError;
+    if (!loadHeadless(tbcSource, inputFileName, &loadError)) return fail(loadError);
+    const qint32 frames = tbcSource.getNumberOfFrames();
+
+    qint32 firstFrame = 1;
+    qint32 lastFrame = frames;
+    const QString range = parser.value(QStringLiteral("extract-stills")).trimmed().toLower();
+    if (range != QLatin1String("all")) {
+        const QStringList ends = range.split(QLatin1Char('-'));
+        bool firstOk = false;
+        bool lastOk = false;
+        if (ends.size() == 2) {
+            firstFrame = ends[0].toInt(&firstOk);
+            lastFrame = ends[1].toInt(&lastOk);
+        }
+        if (!firstOk || !lastOk || firstFrame < 1 || lastFrame < firstFrame) {
+            return fail(QStringLiteral("--extract-stills takes all or FIRST-LAST (frame numbers from 1)"));
+        }
+        if (lastFrame > frames) return fail(QStringLiteral("Frame %1 is past the end (%2 frames)").arg(lastFrame).arg(frames));
+    }
+
+    const QDir directory(outputDirectory);
+    const QString stem = SlideshowExtract::fileStem(inputFileName);
+    const QString manifestName = directory.filePath(stem + QStringLiteral("_stills.csv"));
+    const bool existing = !scanOnly && (QFileInfo::exists(manifestName)
+                          || !directory.entryList({stem + QStringLiteral("_still_*.png")}, QDir::Files).isEmpty());
+    if (existing && !parser.isSet(QStringLiteral("overwrite"))) {
+        return fail(QStringLiteral("%1 already holds stills from this tape; give --overwrite to replace them").arg(outputDirectory));
+    }
+
+    const TbcMetaData::VideoParameters videoParameters = tbcSource.getVideoParameters();
+    const QSize frameSize(tbcSource.getFrameWidth(), tbcSource.getFrameHeight());
+    SlideshowExtract::CaptureInput input;
+    input.options = options;
+    input.scan.tbcFilename = tbcSource.getCurrentSourceFilename();
+    input.scan.videoParameters = videoParameters;
+    input.scan.cropRect = FrameSnapshot::outputRect(options, videoParameters, frameSize);
+    input.scan.firstFrame = firstFrame;
+    const QVector<double> visibleDropouts = tbcSource.getVisibleDropOutGraphData();
+    for (qint32 frame = firstFrame; frame <= lastFrame; frame++) {
+        input.scan.fieldNumbers.append(tbcSource.getFieldNumbersForFrame(frame));
+        input.visibleDropouts.append(frame - 1 < visibleDropouts.size() ? visibleDropouts[frame - 1] : 0.0);
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    const SlideshowExtract::ScanResult scan = SlideshowExtract::scan(input.scan);
+    if (!scan.errorMessage.isEmpty()) return fail(scan.errorMessage);
+    const qint32 minHoldFrames = qMax(1, qRound(minHoldSeconds * SlideshowExtract::frameRate(videoParameters.system)));
+    const QVector<SlideshowExtract::Hold> holds = SlideshowExtract::findHolds(scan.samples, firstFrame, minHoldFrames);
+    qint32 photos = 0;
+    for (const SlideshowExtract::Hold &hold : holds) {
+        if (hold.kind == SlideshowExtract::HoldKind::Photo) photos++;
+    }
+    printf("scanned frames %d-%d in %.1f s: %d photos, %lld moving or unsteady\n", firstFrame, lastFrame,
+           timer.elapsed() / 1000.0, photos, static_cast<long long>(holds.size() - photos));
+    fflush(stdout);
+    if (parser.isSet(QStringLiteral("scan-report"))) {
+        QString reportError;
+        if (!SlideshowExtract::writeScanReport(parser.value(QStringLiteral("scan-report")), scan.samples, firstFrame,
+                                               holds, &reportError)) {
+            return fail(reportError);
+        }
+    }
+
+    if (scanOnly) return 0;
+    if (!directory.mkpath(QStringLiteral("."))) return fail(QStringLiteral("Could not create %1").arg(outputDirectory));
+
+    const bool includeMoving = parser.isSet(QStringLiteral("include-moving"));
+    auto render = [&tbcSource](qint32 frame) {
+        tbcSource.load(frame, frame * 2 - 1);
+        return tbcSource.getImage();
+    };
+    QVector<SlideshowExtract::Still> stills;
+    timer.restart();
+    for (const SlideshowExtract::Hold &hold : holds) {
+        if (hold.kind != SlideshowExtract::HoldKind::Photo && !includeMoving) continue;
+        const SlideshowExtract::Capture capture = SlideshowExtract::captureHold(input, hold, render);
+        if (capture.image.isNull()) return fail(capture.errorMessage);
+
+        SlideshowExtract::Still still;
+        still.index = stills.size() + 1;
+        still.fileName = SlideshowExtract::stillFileName(stem, still.index, capture, options);
+        still.hold = hold;
+        still.captureFrame = capture.frame;
+        still.framesAveraged = capture.framesAveraged;
+        still.startTimecode = SlideshowExtract::frameTimecode(hold.first, videoParameters.system);
+        still.durationSeconds = hold.length() / SlideshowExtract::frameRate(videoParameters.system);
+        if (!capture.image.save(directory.filePath(still.fileName))) {
+            return fail(QStringLiteral("Could not write %1").arg(directory.filePath(still.fileName)));
+        }
+        printf("%s  frames %d-%d  %s\n", qPrintable(still.fileName), hold.first, hold.last,
+               qPrintable(SlideshowExtract::holdKindName(hold.kind)));
+        fflush(stdout);
+        stills.append(still);
+    }
+    QString manifestError;
+    if (!SlideshowExtract::writeManifest(manifestName, stills, &manifestError)) return fail(manifestError);
+    printf("saved %lld stills to %s in %.1f s\n", static_cast<long long>(stills.size()), qPrintable(outputDirectory),
+           timer.elapsed() / 1000.0);
     return 0;
 }
 
@@ -368,9 +530,11 @@ int main(int argc, char *argv[])
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
         Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
-    // --save-frame never opens a window, so it must not need a display
+    // --save-frame and --extract-stills never open a window, so they must not need a display
     for (int i = 1; i < argc; i++) {
-        if (QByteArray(argv[i]).startsWith("--save-frame") && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+        const QByteArray argument(argv[i]);
+        if ((argument.startsWith("--save-frame") || argument.startsWith("--extract-stills"))
+            && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
             qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
         }
     }
@@ -413,7 +577,7 @@ int main(int argc, char *argv[])
 
     // Headless "Save frame as PNG"
     parser.addOption(QCommandLineOption("save-frame", "Save frame <N> as a PNG and exit, without opening a window", "N"));
-    parser.addOption(QCommandLineOption({"o", "output"}, "PNG file written by --save-frame", "file"));
+    parser.addOption(QCommandLineOption({"o", "output"}, "PNG file written by --save-frame, or the folder for --extract-stills", "path"));
     parser.addOption(QCommandLineOption("crop", "--save-frame framing: full, active (default) or x,y,w,h", "framing"));
     parser.addOption(QCommandLineOption("margins", "--save-frame trims from the framing: left,top,right,bottom (default 0,0,0,12)", "l,t,r,b"));
     parser.addOption(QCommandLineOption("aspect", "--save-frame aspect: exact (square pixels, default) or viewer (tbc-analyse's DAR stretch)", "mode"));
@@ -423,6 +587,15 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("upscale-method", "--save-frame: resampling for the upscale and aspect correction "
                                                           "(default lanczos4; an invalid name lists this build's methods)", "method"));
     parser.addOption(QCommandLineOption("score-report", "--save-frame: write the still-picture search's per-frame figures as CSV", "file"));
+
+    // Headless "Extract slideshow stills"; takes the --save-frame framing,
+    // aspect, --best-of/--average-of (default --average-of 60) and upscale flags
+    parser.addOption(QCommandLineOption("extract-stills", "Save every photo held on the tape (all, or frames FIRST-LAST) "
+                                                          "to the -o folder with a stills.csv manifest, and exit", "range"));
+    parser.addOption(QCommandLineOption("min-hold", "--extract-stills: shortest hold that counts as a photo, in seconds (default 1)", "seconds"));
+    parser.addOption(QCommandLineOption("include-moving", "--extract-stills: also save pans, zooms and unsteady holds (their cleanest frame)"));
+    parser.addOption(QCommandLineOption("overwrite", "--extract-stills: replace stills already in the -o folder"));
+    parser.addOption(QCommandLineOption("scan-report", "--extract-stills: write the scan's per-frame figures and holds as CSV (without -o, only scan)", "file"));
 
     // Positional argument to specify input video file
     parser.addPositionalArgument("input", QCoreApplication::translate("main", "Specify input TBC or metadata file"));
@@ -453,6 +626,9 @@ int main(int argc, char *argv[])
     }
     if (parser.isSet("save-frame")) {
         return runSaveFrame(parser, inputFileName);
+    }
+    if (parser.isSet("extract-stills")) {
+        return runExtractStills(parser, inputFileName);
     }
 
     const bool metadataOnly = parser.isSet("metadata-only");

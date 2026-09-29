@@ -234,6 +234,26 @@ If the selected mode is not supported by the detected `tbc-video-export`/tool ve
 
 This option saves the currently selected frame as a PNG image.  The image saved contains both the visible and non-visible frame image.  The option saves the currently displayed image (however, drop-out highlighting is not included).
 
+## Extract slideshow stills
+
+For a tape (or a stretch of one) that is a slideshow of photos, this option finds every photo held on it and saves each one as a PNG in a folder.
+
+1. Choose the frames to scan. The dialog starts on the Export tab's In/Out selection if one is set, otherwise from the current frame to the end. **Whole tape** scans everything.
+2. Press **Scan**. The scan reads only the TBC's luma, so it is quick (about half a minute for a 20,000-frame tape) and the viewer stays usable meanwhile.
+3. Review the list. Photos are ticked. Slow pans and zooms, and stretches that keep breaking up (tracking or tape damage), are listed unticked. Black and blank stretches, dissolves and anything held for less than **Shortest photo** (1 s by default) are not listed. Select a row to preview it; double-click to show it in the viewer.
+4. Press **Save**. Each photo is saved as the average of its frames (frames with dropouts or tears are left out, repeated frames count once, and slightly misaligned frames are realigned first), or as its cleanest frame. Framing, aspect ratio and upscaling work as in **Save frame as PNG (options)**. Saving needs the Frame view.
+
+Files are named `<tape>_still_001_f<frame>[_avg<frames>].png`, and `<tape>_stills.csv` next to them lists each still's frames, timecode and length, so every picture can be traced back to the tape.
+
+The same runs without a window:
+
+```
+tbc-analyse --extract-stills all -o <folder> input.tbc
+tbc-analyse --extract-stills 1000-5000 -o <folder> --best-of 60 --upscale 2 input.tbc
+```
+
+`--extract-stills` takes `all` or `FIRST-LAST`, and the `--save-frame` options `--crop`, `--margins`, `--aspect`, `--best-of`/`--average-of` (default `--average-of 60`), `--upscale` and `--upscale-method`. `--min-hold <seconds>` sets the shortest photo, `--include-moving` also saves pans, zooms and unsteady stretches, and `--overwrite` replaces stills already in the folder. `--scan-report <file.csv>` writes the scan's per-frame figures; given without `-o`, the scan is all it does.
+
 ## Exit
 
 This option quits tbc-analyse and closes all windows.
