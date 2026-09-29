@@ -1056,7 +1056,7 @@ class TestOutput:
             ),
         ),
         OutputTestCase(
-            id="gray16le (10)",
+            id="gray10le",
             input_opts=["--quiet", "--overwrite", "--luma-only", "--gray", "--10bit"],
             input_tbc="pal_svideo",
             output_file="pal_svideo.mkv",
@@ -1064,7 +1064,7 @@ class TestOutput:
             output_video_base=VideoBasePAL(),
             output_video_color=VideoColorPAL(
                 color_space="Y",
-                bit_depth=16,
+                bit_depth=10,
                 chroma_subsampling=None,
             ),
         ),

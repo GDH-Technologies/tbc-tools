@@ -696,7 +696,7 @@ class TestWrappersFFmpeg:
             id="10bit gray",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=["--10bit", "--gray"],
-            expected_str=[f"format=gray16le,{pal_setparams}[v_output]"],
+            expected_str=[f"format=gray10le,{pal_setparams}[v_output]"],
         ),
         WrapperTestCase(
             id="16bit gray",
@@ -720,7 +720,7 @@ class TestWrappersFFmpeg:
             id="10bit gray (luma only)",
             input_tbc=f"{get_path('pal_svideo')}.tbc",
             input_opts=["--luma-only", "--10bit"],
-            expected_str=[f"format=gray16le,{pal_setparams}[v_output]"],
+            expected_str=[f"format=gray10le,{pal_setparams}[v_output]"],
         ),
         WrapperTestCase(
             id="16bit gray (luma only)",
