@@ -34,7 +34,7 @@ rm -rf build
 
 ## Notes
 
-- The flake sets `-DEZPWD_DIR`, `-DAPP_BRANCH`, and `-DAPP_COMMIT` automatically for package builds.
+- The flake sets `-DEZPWD_DIR`, `-DAPP_BUILD`, and `-DAPP_SOURCE_ID` automatically for package builds. `--version` prints them as `Build: nix / Source: src-<hash>`: the source id identifies the source tree, not a commit.
 - The dev shell exports `EZPWD_DIR`, so manual builds via `nix develop` pick it up automatically.
 
 # Manual build (native distro packages)

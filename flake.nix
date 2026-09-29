@@ -184,16 +184,19 @@
         # The build identity comes from that content, not from the commit.
         #
         # The commit id (shortRev) and the flake ref (self.ref) used to feed
-        # -DAPP_COMMIT and -DAPP_BRANCH. That made every commit a new
-        # derivation, even one whose tree was byte-identical: a PR's merge ref
-        # and the merge commit on main, or a version-bump commit that changes
-        # only .gdh-version (which does still change the version, and so still
-        # rebuilds). With a tree id, the merge deploy evaluates the derivation
-        # the PR run already built, and wm and air0 install it from their local
-        # store instead of recompiling.
+        # the build identity (then APP_COMMIT/APP_BRANCH). That made every
+        # commit a new derivation, even one whose tree was byte-identical: a
+        # PR's merge ref and the merge commit on main, or a version-bump commit
+        # that changes only .gdh-version (which does still change the version,
+        # and so still rebuilds). With a tree id, the merge deploy evaluates the
+        # derivation the PR run already built, and wm and air0 install it from
+        # their local store instead of recompiling.
+        #
+        # --version prints these as "Build: nix / Source: src-<treeId>". The
+        # source id is a tree id, not a commit, so it is never labelled one.
         treeId = builtins.substring 0 12 (builtins.baseNameOf (toString tbcSrc));
-        nixCommit = "src-${treeId}";
-        branch = "nix";
+        appSourceId = "src-${treeId}";
+        appBuild = "nix";
         # mkTbcTools: single derivation factory. withCuda=false (default release,
         # CI test/release jobs) builds CPU-only - no nvcc, no CUDA buildInputs,
         # -DLDCHROMA_ENABLE_CUDA=OFF - so default `nix build .#` skips CUDA kernel
@@ -284,8 +287,8 @@
               # it, so the store path name and what the binaries report can
               # never disagree.
               "-DAPP_VERSION=${packageVersion}"
-              "-DAPP_BRANCH=${branch}"
-              "-DAPP_COMMIT=${nixCommit}"
+              "-DAPP_BUILD=${appBuild}"
+              "-DAPP_SOURCE_ID=${appSourceId}"
               "-DLDCHROMA_ENABLE_CUDA=${if withCuda then "ON" else "OFF"}"
             ] ++ pkgs.lib.optionals (isLinux || isDarwin) [
               "-DONNXRUNTIME_ROOT=${onnxruntimePackage}"

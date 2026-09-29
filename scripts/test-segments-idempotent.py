@@ -57,13 +57,17 @@ def event_count(db: Path) -> int:
         return conn.execute("SELECT COUNT(*) FROM decoder_event").fetchone()[0]
 
 
-def restamp_commit(db: Path) -> None:
-    """Make the stored rows look like they came from a different build."""
+def restamp_source(db: Path, legacy: bool = False) -> None:
+    """Make the stored rows look like they came from a different build.
+
+    legacy: store it the way builds before 3.2.9-gdh-2.2 did, under "commit".
+    """
     with closing(sqlite3.connect(db)) as conn, conn:
         rows = conn.execute("SELECT event_id, detail_json FROM decoder_event").fetchall()
         for event_id, detail in rows:
             obj = json.loads(detail)
-            obj["commit"] = "0000000-from-another-build"
+            obj.pop("source", None)
+            obj["commit" if legacy else "source"] = "src-from-another-build"
             conn.execute("UPDATE decoder_event SET detail_json = ? WHERE event_id = ?",
                          (json.dumps(obj), event_id))
 
@@ -97,16 +101,18 @@ def main() -> int:
         if db.read_bytes() != before:
             raise SystemExit("second run changed the database despite reporting no change")
 
-        # Third run: the stored rows carry another build's commit string, which
-        # is provenance, not content, and must not force a rewrite
-        restamp_commit(db)
-        before = db.read_bytes()
-        third = run(args.binary, db, tbc)
-        if "Nothing to write" not in third:
-            sys.stderr.write(third)
-            raise SystemExit("a differing build commit forced a rewrite")
-        if db.read_bytes() != before:
-            raise SystemExit("a differing build commit changed the database")
+        # Third and fourth runs: the stored rows carry another build's source
+        # id, which is provenance, not content, and must not force a rewrite --
+        # nor must rows from before 3.2.9-gdh-2.2, which stored it as "commit"
+        for label, legacy in (("source id", False), ("legacy commit key", True)):
+            restamp_source(db, legacy=legacy)
+            before = db.read_bytes()
+            out = run(args.binary, db, tbc)
+            if "Nothing to write" not in out:
+                sys.stderr.write(out)
+                raise SystemExit(f"a differing build {label} forced a rewrite")
+            if db.read_bytes() != before:
+                raise SystemExit(f"a differing build {label} changed the database")
 
     print("tbc-segments --write is idempotent")
     return 0

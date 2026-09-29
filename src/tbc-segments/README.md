@@ -164,7 +164,7 @@ captures; the tool undoes that exactly as tbc-audio-align does
 
 ```json
 {"schemaVersion": 1,
- "tool": {"name": "tbc-segments", "branch": "...", "commit": "..."},
+ "tool": {"name": "tbc-segments", "build": "nix|git|unknown", "source": "src-…|tree-…|unknown"},
  "input": {"path": "...", "kind": "sqlite|json"},
  "video": {"system": "NTSC", "tapeFormat": "VHS", "fieldRate": 59.94, "secondsPerField": 0.01668,
            "fieldWidth": 910, "fieldHeight": 263, "numberOfFields": 123456, "numberOfFrames": 61728,

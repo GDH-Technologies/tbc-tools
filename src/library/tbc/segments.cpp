@@ -780,8 +780,8 @@ QJsonObject buildReport(const TbcMetaData &metaData,
     report.insert("schemaVersion", 1);
     QJsonObject tool;
     tool.insert("name", QStringLiteral("tbc-segments"));
-    tool.insert("branch", TbcBuildInfo::branch());
-    tool.insert("commit", TbcBuildInfo::commit());
+    tool.insert("build", TbcBuildInfo::build());
+    tool.insert("source", TbcBuildInfo::sourceId());
     report.insert("tool", tool);
 
     QJsonObject input;

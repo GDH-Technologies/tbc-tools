@@ -341,9 +341,12 @@ function(stage_windows_qt_platform_runtime target_name)
     )
 endfunction()
 
-# Build metadata (set by Nix or other build systems)
-set(APP_BRANCH "nix" CACHE STRING "Build source identifier")
-set(APP_COMMIT "0.0.0" CACHE STRING "Build version identifier")
+# Build identity (see src/library/tbc/buildinfo.h): how the build was made
+# ("nix", "git") and which source tree it came from ("src-<store hash>",
+# "tree-<git tree>"). The flake passes both; for a build from a git checkout
+# the gdh-version block below fills them in. "unknown" means neither.
+set(APP_BUILD "unknown" CACHE STRING "How this build was made: nix, git or unknown")
+set(APP_SOURCE_ID "unknown" CACHE STRING "Source tree id (src-<hash> or tree-<hash>), not a commit")
 # Release version: <upstream>-gdh-<major>.<minor>, with +<N>.g<sha>[.dirty]
 # after the release commit. A release is a committed .gdh-version; it rides in a
 # PR, and gdh-version-tag.yml tags the commit that introduced it on main once the
@@ -585,14 +588,14 @@ if(NOT APP_VERSION)
     unset(_GDH_UPSTREAM)
 endif()
 
-# Build identity for a CMake build from a git checkout. "nix" and "0.0.0" are
-# placeholders that only the flake overrides, so every other build (win0's, a
-# developer's) reported "Branch: nix / Commit: 0.0.0". Anything else was passed
-# explicitly and wins. The tree, not the commit: the deploy reuses a PR's build
-# of an identical tree, whose commit (refs/pull/N/merge) never lands on main --
-# the same reason the flake stamps src-<tree>.
-if(DEFINED APP_BRANCH AND DEFINED APP_COMMIT
-   AND APP_BRANCH STREQUAL "nix" AND APP_COMMIT STREQUAL "0.0.0")
+# Build identity for a CMake build from a git checkout. "unknown" is the
+# placeholder the flake overrides; anything else was passed explicitly and
+# wins. The tree, not the commit: the deploy reuses a PR's build of an
+# identical tree, whose commit (refs/pull/N/merge) never lands on main -- the
+# same reason the flake stamps src-<tree>. So it is labelled "Source", never
+# "Commit".
+if(DEFINED APP_BUILD AND DEFINED APP_SOURCE_ID
+   AND APP_BUILD STREQUAL "unknown" AND APP_SOURCE_ID STREQUAL "unknown")
     find_package(Git QUIET)
     if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
         execute_process(
@@ -605,8 +608,8 @@ if(DEFINED APP_BRANCH AND DEFINED APP_COMMIT
         )
         if(_GDH_TREE_RESULT EQUAL 0)
             string(SUBSTRING "${_GDH_TREE}" 0 12 _GDH_TREE)
-            set(APP_BRANCH "git")
-            set(APP_COMMIT "tree-${_GDH_TREE}")
+            set(APP_BUILD "git")
+            set(APP_SOURCE_ID "tree-${_GDH_TREE}")
         endif()
         unset(_GDH_TREE)
         unset(_GDH_TREE_RESULT)
@@ -614,7 +617,7 @@ if(DEFINED APP_BRANCH AND DEFINED APP_COMMIT
 endif()
 # --- gdh-version block: end ---
 
-# APP_BRANCH, APP_COMMIT and APP_VERSION are NOT global compile definitions.
+# APP_BUILD, APP_SOURCE_ID and APP_VERSION are NOT global compile definitions.
 # Only src/library/tbc/buildinfo.cpp receives them (see src/library/CMakeLists.txt),
 # and every tool reads them through TbcBuildInfo. As global flags they changed
 # every translation unit's command line on every commit, so an identical source
@@ -667,11 +670,12 @@ if(BUILD_TESTING)
 
     # --version must name the version this build resolved. It used to print
     # only branch and commit, so no host could be checked after a release, and
-    # win0's then showed the "nix" / "0.0.0" placeholders.
+    # win0's then showed the "nix" / "0.0.0" placeholders. The source id is a
+    # tree id, so its label is "Source", not "Commit".
     string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" _APP_VERSION_REGEX "${APP_VERSION}")
     add_test(NAME version-line COMMAND tbc-chroma-decoder --version)
     set_tests_properties(version-line PROPERTIES
-        PASS_REGULAR_EXPRESSION "tbc-tools ${_APP_VERSION_REGEX} - Branch: [^ ]+ / Commit: [^ ]+")
+        PASS_REGULAR_EXPRESSION "tbc-tools ${_APP_VERSION_REGEX} - Build: (nix|git|unknown) / Source: (src-|tree-|unknown)[^ ]*")
     unset(_APP_VERSION_REGEX)
 
     add_test(

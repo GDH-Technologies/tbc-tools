@@ -34,11 +34,11 @@ if(WIN32)
 endif()
 
 # Only this one file sees the build identity (see the note in the top-level
-# CMakeLists.txt). A new commit, branch or version recompiles buildinfo.cpp and
-# relinks, instead of recompiling every translation unit.
+# CMakeLists.txt). A new source id, build kind or version recompiles
+# buildinfo.cpp and relinks, instead of recompiling every translation unit.
 set_property(SOURCE tbc/buildinfo.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-    "APP_BRANCH=\"${APP_BRANCH}\""
-    "APP_COMMIT=\"${APP_COMMIT}\""
+    "APP_BUILD=\"${APP_BUILD}\""
+    "APP_SOURCE_ID=\"${APP_SOURCE_ID}\""
     "APP_VERSION=\"${APP_VERSION}\"")
 
 target_include_directories(tbc-library PUBLIC filter tbc tbc/vbi)

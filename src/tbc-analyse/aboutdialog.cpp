@@ -18,7 +18,7 @@ AboutDialog::AboutDialog(QWidget *parent) :
 {
     ui->setupUi(this);
     ui->gitVersionLabel->setText(QString("TBC-Tools · Version %1").arg(TbcBuildInfo::version()));
-    ui->gitVersionLabel->setToolTip(QString("Build metadata: %1 / %2").arg(TbcBuildInfo::branch(), TbcBuildInfo::commit()));
+    ui->gitVersionLabel->setToolTip(QString("Build: %1 / Source: %2").arg(TbcBuildInfo::build(), TbcBuildInfo::sourceId()));
 }
 
 AboutDialog::~AboutDialog()

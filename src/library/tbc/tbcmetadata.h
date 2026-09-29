@@ -343,7 +343,7 @@ public:
         QString comment;
         QString createdBy;
         QString updatedAt;                 // ISO-8601 UTC
-        QString derivedFrom;               // JSON text: tool, commit, thresholds
+        QString derivedFrom;               // JSON text: tool, thresholds, nominalSource
 
         void read(JsonReader &reader);
         void write(JsonWriter &writer) const;
