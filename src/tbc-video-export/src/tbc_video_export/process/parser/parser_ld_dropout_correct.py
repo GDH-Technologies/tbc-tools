@@ -47,7 +47,7 @@ class ParserLDDropoutCorrect(Parser):
                     (end_fps := reg.group(4)) is not None
                 ):
                     self.tracked_value = int(total_frames)
-                    self.fps = float(end_fps)
+                    self.current_fps = float(end_fps)
                 elif (concealments := reg.group(5)) is not None:
                     state.concealments = int(concealments)
 

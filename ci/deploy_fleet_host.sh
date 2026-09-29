@@ -72,6 +72,10 @@ fi
 
 "$STORE/bin/tbc-video-export" --version
 
+# tbc-video-export's MKV display-dimension normalization falls back to the
+# mkvmerge the package ships in libexec; without one it silently skips it.
+"$STORE/libexec/tbc-video-export/mkvmerge" --version
+
 # The post-decode pipeline drives the headless aligner. With no arguments it
 # prints its usage and exits 2, which proves the headless entry point shipped
 # without touching any media.
