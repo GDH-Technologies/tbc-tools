@@ -531,6 +531,38 @@ void testJsonRoundTrip()
     CHECK(!plainText.contains(QStringLiteral("\"pictureMetrics\"")));
 }
 
+// JSON keeps every double exactly. With the stream's default 6 significant
+// digits, the 4fsc NTSC sample rate saved as 14318200 and a 28.636 MHz RF rate
+// (what Auto Audio Align aligns against) as 28636400.
+void testJsonDoublePrecision()
+{
+    std::cerr << "Testing JSON double precision\n";
+    QTemporaryDir dir;
+    CHECK(dir.isValid());
+    const QString jsonPath = dir.filePath(QStringLiteral("precision.tbc.json"));
+
+    TbcMetaData original;
+    buildMetadata(original, 4, true);
+    TbcMetaData::VideoParameters vp = original.getVideoParameters();
+    vp.sampleRate = 4.0 * 315.0e6 / 88.0;
+    vp.rfSourceSampleRateHz = 8.0 * 315.0e6 / 88.0;
+    vp.chromaGain = 1.0 / 3.0;
+    vp.palTransformThreshold = 0.4;
+    original.setVideoParameters(vp);
+    CHECK(original.write(jsonPath));
+
+    TbcMetaData copy;
+    CHECK(copy.read(jsonPath));
+    CHECK(copy.getVideoParameters().sampleRate == vp.sampleRate);
+    CHECK(copy.getVideoParameters().rfSourceSampleRateHz == vp.rfSourceSampleRateHz);
+    CHECK(copy.getVideoParameters().chromaGain == vp.chromaGain);
+
+    // Shortest form: a value with a short exact text stays short
+    const QString text = readTextFile(jsonPath);
+    CHECK(text.contains(QStringLiteral("\"palTransformThreshold\":0.4,"))
+          || text.contains(QStringLiteral("\"palTransformThreshold\":0.4}")));
+}
+
 // A decoder-shaped JSON: fields last, unknown keys, null inside an unknown key
 void testDecoderShapedJson()
 {
@@ -1048,6 +1080,7 @@ int main(int argc, char *argv[])
         setDebug(true);
         testVideoSystem();
         testJsonRoundTrip();
+        testJsonDoublePrecision();
         testDecoderShapedJson();
         testSqliteRoundTrip();
         testMigrationFromVhsDecodeV1();
