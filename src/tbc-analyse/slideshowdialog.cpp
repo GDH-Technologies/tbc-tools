@@ -10,10 +10,7 @@
 
 #include "slideshowdialog.h"
 
-#include <QAbstractSlider>
-#include <QAbstractSpinBox>
 #include <QCloseEvent>
-#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFontDatabase>
@@ -296,14 +293,8 @@ SlideshowDialog::SlideshowDialog(const SlideshowExtractOptions &settings, const 
     });
 
     // The settings column scrolls with the wheel: its spin boxes, combo boxes
-    // and sliders take the wheel only once clicked into (eventFilter)
-    for (QWidget *widget : settingsWidget->findChildren<QWidget *>()) {
-        if (qobject_cast<QAbstractSpinBox *>(widget) || qobject_cast<QComboBox *>(widget)
-            || qobject_cast<QAbstractSlider *>(widget)) {
-            widget->setFocusPolicy(Qt::StrongFocus);
-            widget->installEventFilter(this);
-        }
-    }
+    // and sliders take it only once clicked into, like every field in the
+    // program (tbc/wheelguard.h, installed by main)
 
     refreshRange();
     scrubTo(scrubSlider->value());
@@ -367,21 +358,6 @@ void SlideshowDialog::paintEvent(QPaintEvent *event)
     QPainter painter(this);
     painter.setPen(QPen(theme_tokens::neutralLine(palette(), 0.35), 2));
     painter.drawRect(rect().adjusted(1, 1, -1, -1));
-}
-
-bool SlideshowDialog::eventFilter(QObject *watched, QEvent *event)
-{
-    // A wheel over a settings control that has not been clicked into scrolls
-    // the column instead of changing the value: ignored here, the event goes
-    // on to the scroll area
-    if (event->type() == QEvent::Wheel) {
-        auto *widget = qobject_cast<QWidget *>(watched);
-        if (widget && !widget->hasFocus()) {
-            event->ignore();
-            return true;
-        }
-    }
-    return QDialog::eventFilter(watched, event);
 }
 
 void SlideshowDialog::changeEvent(QEvent *event)
