@@ -23,6 +23,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -170,16 +171,24 @@ FrameSnapshotControls::FrameSnapshotControls(const TbcMetaData::VideoParameters 
     framingLayout->addWidget(marginsNote);
     layout->addWidget(framingBox);
 
+    if (middleGroup) layout->addWidget(middleGroup);
+
     // Aspect
     auto *aspectBox = new QGroupBox(tr("Aspect ratio"), this);
-    auto *aspectLayout = new QVBoxLayout(aspectBox);
-    aspectCombo = new QComboBox(aspectBox);
-    aspectCombo->addItem(tr("Square pixels from the sample rate"), int(FrameSnapshot::AspectMode::Exact));
-    aspectCombo->addItem(tr("Match the tbc-analyse viewer's DAR stretch"), int(FrameSnapshot::AspectMode::Viewer));
-    aspectLayout->addWidget(aspectCombo);
+    auto *aspectLayout = new QHBoxLayout(aspectBox);
+    auto *exactRadio = new QRadioButton(tr("Exact"), aspectBox);
+    exactRadio->setToolTip(tr("Square pixels from the decoded sample rate (ITU-R BT.601): the picture's true "
+                              "shape. NTSC 4fsc samples are narrowed by 6/7."));
+    auto *viewerRadio = new QRadioButton(tr("Viewer DAR"), aspectBox);
+    viewerRadio->setToolTip(tr("The fixed width stretch tbc-analyse's viewer applies in DAR mode, so the PNG "
+                               "matches what the viewer shows."));
+    aspectGroup = new QButtonGroup(this);
+    aspectGroup->addButton(exactRadio, int(FrameSnapshot::AspectMode::Exact));
+    aspectGroup->addButton(viewerRadio, int(FrameSnapshot::AspectMode::Viewer));
+    aspectLayout->addWidget(exactRadio);
+    aspectLayout->addWidget(viewerRadio);
+    aspectLayout->addStretch(1);
     layout->addWidget(aspectBox);
-
-    if (middleGroup) layout->addWidget(middleGroup);
 
     // Resize
     auto *resizeBox = new QGroupBox(tr("Resize"), this);
@@ -214,10 +223,11 @@ FrameSnapshotControls::FrameSnapshotControls(const TbcMetaData::VideoParameters 
     };
 
     connect(framingGroup, &QButtonGroup::idClicked, this, [this]() { refresh(); });
+    connect(aspectGroup, &QButtonGroup::idClicked, this, [this]() { refresh(); });
     for (QSpinBox *spin : {marginLeftSpin, marginTopSpin, marginRightSpin, marginBottomSpin}) {
         connect(spin, &QSpinBox::valueChanged, this, [this]() { refresh(); });
     }
-    for (QComboBox *combo : {aspectCombo, upscaleCombo, methodCombo}) {
+    for (QComboBox *combo : {upscaleCombo, methodCombo}) {
         connect(combo, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
     }
 }
@@ -226,7 +236,7 @@ void FrameSnapshotControls::setOptions(const FrameSnapshot::Options &options)
 {
     // Filled without signals; refresh() below brings everything in line once
     const QList<QObject *> controls = {marginLeftSpin, marginTopSpin, marginRightSpin, marginBottomSpin,
-                                       aspectCombo, upscaleCombo, methodCombo};
+                                       upscaleCombo, methodCombo};
     for (QObject *control : controls) control->blockSignals(true);
 
     customRect = options.customRect;
@@ -235,7 +245,7 @@ void FrameSnapshotControls::setOptions(const FrameSnapshot::Options &options)
     marginTopSpin->setValue(options.marginTop);
     marginRightSpin->setValue(options.marginRight);
     marginBottomSpin->setValue(options.marginBottom);
-    aspectCombo->setCurrentIndex(qMax(0, aspectCombo->findData(int(options.aspectMode))));
+    if (QAbstractButton *button = aspectGroup->button(int(options.aspectMode))) button->setChecked(true);
     upscaleCombo->setCurrentIndex(qMax(0, upscaleCombo->findData(options.upscaleFactor)));
     methodCombo->setCurrentIndex(qMax(0, methodCombo->findData(options.upscaleMethod)));
 
@@ -251,7 +261,7 @@ void FrameSnapshotControls::applyTo(FrameSnapshot::Options &options) const
     options.marginRight = marginRightSpin->value();
     options.marginBottom = marginBottomSpin->value();
     options.customRect = customRect;
-    options.aspectMode = static_cast<FrameSnapshot::AspectMode>(aspectCombo->currentData().toInt());
+    options.aspectMode = static_cast<FrameSnapshot::AspectMode>(aspectGroup->checkedId());
     options.upscaleFactor = upscaleCombo->currentData().toInt();
     options.upscaleMethod = methodCombo->currentData().toString();
 }
@@ -273,6 +283,87 @@ void FrameSnapshotControls::refresh()
     const QSize size = FrameSnapshot::outputSize(options, videoParameters, rect.size());
     outputLabel->setText(tr("Output: %1 × %2 pixels").arg(size.width()).arg(size.height()));
     emit changed();
+}
+
+StillModeControls::StillModeControls(const QString &title, const QVector<Mode> &modes, QWidget *parent)
+    : QGroupBox(title, parent)
+{
+    auto *layout = new QVBoxLayout(this);
+    auto *modeLayout = new QHBoxLayout();
+    modeGroup = new QButtonGroup(this);
+    for (const Mode &mode : modes) {
+        auto *radio = new QRadioButton(mode.label, this);
+        radio->setToolTip(mode.toolTip);
+        modeGroup->addButton(radio, int(mode.mode));
+        modeLayout->addWidget(radio);
+    }
+    modeLayout->addStretch(1);
+    layout->addLayout(modeLayout);
+
+    auto *windowLayout = new QFormLayout();
+    windowLabel = new QLabel(this);
+    windowSpin = new QSpinBox(this);
+    windowSpin->setRange(1, 600);
+    windowSpin->setPrefix(tr("\u00b1"));
+    windowSpin->setSuffix(tr(" frames"));
+    windowLayout->addRow(windowLabel, windowSpin);
+    layout->addLayout(windowLayout);
+    windowSlider = new QSlider(Qt::Horizontal, this);
+    windowSlider->setRange(windowSpin->minimum(), windowSpin->maximum());
+    layout->addWidget(windowSlider);
+
+    connect(modeGroup, &QButtonGroup::idClicked, this, [this]() {
+        refresh();
+        emit changed();
+    });
+    connect(windowSpin, &QSpinBox::valueChanged, this, [this](int value) {
+        const QSignalBlocker blocker(windowSlider);
+        windowSlider->setValue(value);
+        emit changed();
+    });
+    connect(windowSlider, &QSlider::valueChanged, windowSpin, &QSpinBox::setValue);
+    if (!modes.isEmpty()) setMode(modes.first().mode);
+}
+
+FrameSnapshot::StillMode StillModeControls::mode() const
+{
+    return static_cast<FrameSnapshot::StillMode>(modeGroup->checkedId());
+}
+
+qint32 StillModeControls::window() const
+{
+    return windowSpin->value();
+}
+
+void StillModeControls::setMode(FrameSnapshot::StillMode mode)
+{
+    QAbstractButton *button = modeGroup->button(int(mode));
+    if (!button) button = modeGroup->buttons().value(0);
+    if (button) button->setChecked(true);
+    refresh();
+}
+
+void StillModeControls::setWindow(qint32 frames)
+{
+    windowSpin->setValue(frames);
+}
+
+void StillModeControls::refresh()
+{
+    const FrameSnapshot::StillMode current = mode();
+    const bool averaging = current == FrameSnapshot::StillMode::Average;
+    windowLabel->setText(averaging ? tr("Averaging window:") : tr("Search window:"));
+    const QString toolTip =
+        averaging ? tr("Frames either side of the picture's most typical frame that are checked; the ones "
+                       "without dropouts or tears are averaged. A larger window removes more noise, up to "
+                       "the length of the hold.")
+                  : tr("Frames either side of the picture's most typical frame that are searched for the "
+                       "cleanest one. Only frames showing the same picture count.");
+    for (QWidget *widget : {static_cast<QWidget *>(windowLabel), static_cast<QWidget *>(windowSpin),
+                            static_cast<QWidget *>(windowSlider)}) {
+        widget->setToolTip(toolTip);
+        widget->setEnabled(current != FrameSnapshot::StillMode::Off);
+    }
 }
 
 SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage &frameImage,
@@ -299,25 +390,19 @@ SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage
         optionsLayout->addWidget(viewNote);
     }
 
-    // Still pictures
-    auto *searchBox = new QGroupBox(tr("Still picture"), this);
-    auto *searchLayout = new QFormLayout(searchBox);
-    stillCombo = new QComboBox(searchBox);
-    stillCombo->addItem(tr("This frame only"), int(FrameSnapshot::StillMode::Off));
-    stillCombo->addItem(tr("Cleanest nearby frame"), int(FrameSnapshot::StillMode::Cleanest));
-    stillCombo->addItem(tr("Average of nearby frames"), int(FrameSnapshot::StillMode::Average));
-    stillCombo->setToolTip(tr("For a picture held on tape (a slideshow photo): finds the frames around this one "
-                              "that show the same picture and drops those with dropouts or tears. \"Cleanest\" "
-                              "saves the most typical of them; \"Average\" saves their mean, which removes most "
-                              "tape noise. The viewer moves to the most typical frame."));
-    radiusSpin = new QSpinBox(searchBox);
-    radiusSpin->setRange(1, 600);
-    radiusSpin->setPrefix(tr("±"));
-    radiusSpin->setSuffix(tr(" frames"));
-    searchLayout->addRow(tr("Save:"), stillCombo);
-    searchLayout->addRow(tr("Search up to:"), radiusSpin);
+    // Still pictures (a slideshow photo held on tape)
+    stillControls = new StillModeControls(
+        tr("Still picture"),
+        {{FrameSnapshot::StillMode::Off, tr("This frame"), tr("Save the frame on screen as it is.")},
+         {FrameSnapshot::StillMode::Cleanest, tr("Cleanest nearby"),
+          tr("Find the frames around this one that show the same picture, drop those with dropouts or tears, "
+             "and save the most typical of them. The viewer moves to it.")},
+         {FrameSnapshot::StillMode::Average, tr("Average nearby"),
+          tr("Find the frames around this one that show the same picture, drop those with dropouts or tears, "
+             "realign any that sit off, and save their mean, which removes most tape noise.")}},
+        this);
 
-    controls = new FrameSnapshotControls(videoParameters, frameImage.size(), preview, searchBox, this);
+    controls = new FrameSnapshotControls(videoParameters, frameImage.size(), preview, stillControls, this);
     optionsLayout->addWidget(controls);
     optionsLayout->addStretch(1);
 
@@ -330,9 +415,6 @@ SavePngDialog::SavePngDialog(const FrameSnapshot::Options &current, const QImage
     optionsLayout->addWidget(buttons);
 
     setControls(current);
-    connect(stillCombo, &QComboBox::currentIndexChanged, this, [this]() {
-        radiusSpin->setEnabled(stillCombo->currentData().toInt() != int(FrameSnapshot::StillMode::Off));
-    });
 
     resize(1100, 620);
 }
@@ -341,18 +423,14 @@ FrameSnapshot::Options SavePngDialog::selectedOptions() const
 {
     FrameSnapshot::Options options;
     controls->applyTo(options);
-    options.stillMode = static_cast<FrameSnapshot::StillMode>(stillCombo->currentData().toInt());
-    options.searchRadius = radiusSpin->value();
+    options.stillMode = stillControls->mode();
+    options.searchRadius = stillControls->window();
     return options;
 }
 
 void SavePngDialog::setControls(const FrameSnapshot::Options &options)
 {
     controls->setOptions(options);
-    {
-        const QSignalBlocker blocker(stillCombo);
-        stillCombo->setCurrentIndex(qMax(0, stillCombo->findData(int(options.stillMode))));
-    }
-    radiusSpin->setValue(options.searchRadius);
-    radiusSpin->setEnabled(options.stillMode != FrameSnapshot::StillMode::Off);
+    stillControls->setMode(options.stillMode);
+    stillControls->setWindow(options.searchRadius);
 }

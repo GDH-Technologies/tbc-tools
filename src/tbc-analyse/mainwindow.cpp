@@ -1257,13 +1257,9 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     saveAllModesPngAction = new QAction(tr("Save all mode views as PNGs..."), this);
     connect(saveAllModesPngAction, &QAction::triggered,
             this, &MainWindow::saveAllModesAsPngs);
-    if (ui->menuFile) {
-        if (ui->actionExit) {
-            ui->menuFile->insertAction(ui->actionExit, saveAllModesPngAction);
-        } else {
-            ui->menuFile->addAction(saveAllModesPngAction);
-        }
-    }
+    // Frame Capture: the single-frame saves, then this, then slideshow extraction
+    ui->menuFrameCapture->insertAction(ui->actionExtract_slideshow_stills, saveAllModesPngAction);
+    ui->menuFrameCapture->insertSeparator(ui->actionExtract_slideshow_stills);
     setAcceptDrops(true);
     if (centralWidget()) {
         centralWidget()->setAcceptDrops(true);
@@ -1545,7 +1541,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     // they never take keys from the Export tab's controls; a focused text
     // field still gets typed letters (Qt's ShortcutOverride).
     QMenu *editMenu = new QMenu(tr("&Edit"), this);
-    menuBar()->insertMenu(ui->menuView->menuAction(), editMenu);
+    menuBar()->insertMenu(ui->menuFrameCapture->menuAction(), editMenu);
     editMenu->addAction(copyCurrentDisplayAction);
     editMenu->addSeparator();
     const auto addViewerKeyAction = [this, editMenu](const QString &text, const QList<QKeySequence> &keys,
@@ -1674,6 +1670,8 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     connect(&tbcSource, &TbcSource::finishedSaving, this, &MainWindow::onSourceSaved);
     connect(&asyncFrameRenderWatcher, &QFutureWatcher<QImage>::finished,
             this, &MainWindow::onAsyncFrameRenderFinished);
+    connect(&slideshowPreviewWatcher, &QFutureWatcher<QImage>::finished,
+            this, &MainWindow::onSlideshowPreviewRendered);
 
     // Load the window geometry and settings from the configuration
     const QByteArray savedMainGeometry = configuration.getMainWindowGeometry();
@@ -1820,6 +1818,7 @@ MainWindow::~MainWindow()
     if (asyncFrameRenderInProgress) {
         cancelInFlightAsyncFrameRender();
     }
+    finishSlideshowPreview();
     // Save the window geometry and settings to the configuration
     configuration.setMainWindowGeometry(saveGeometry());
     configuration.setMainWindowScaleFactor(scaleFactor);
@@ -3446,6 +3445,7 @@ void MainWindow::loadTbcFile(QString inputFileName, bool forceMetadataOnly, bool
 
     // Close current source video (if loaded). A slideshow scan belongs to it.
     if (slideshowDialog) slideshowDialog->close();
+    finishSlideshowPreview();
     if (tbcSource.getIsSourceLoaded()) {
         tbcSource.unloadSource();
     }
@@ -6187,7 +6187,63 @@ void MainWindow::on_actionExtract_slideshow_stills_triggered()
         configuration.writeConfiguration();
     });
     connect(slideshowDialog, &SlideshowDialog::saveRequested, this, &MainWindow::saveSlideshowStills);
+    connect(slideshowDialog, &SlideshowDialog::colourFrameRequested, this, &MainWindow::renderSlideshowPreview);
     showOrRaise(slideshowDialog);
+}
+
+void MainWindow::renderSlideshowPreview(qint32 frame)
+{
+    slideshowPreviewNext = frame;
+    // Frames render as the viewer shows them: colour needs the Frame view.
+    // Anything else using tbcSource (a save) has the dialog blocked anyway.
+    if (slideshowPreviewWatcher.isRunning() || tbcSourceBusy
+        || tbcSource.getViewMode() != TbcSource::ViewMode::FRAME_VIEW) {
+        return;
+    }
+    slideshowPreviewFrame = slideshowPreviewNext;
+    slideshowPreviewNext = -1;
+
+    // As the averaging does: no async render meanwhile, showImage() waits, and
+    // no dropout highlighting painted into the frame
+    cancelInFlightAsyncFrameRender();
+    slideshowPreviewHighlight = tbcSource.getHighlightDropouts();
+    tbcSource.setHighlightDropouts(false);
+    tbcSourceBusy = true;
+    const qint32 renderFrame = slideshowPreviewFrame;
+    slideshowPreviewWatcher.setFuture(QtConcurrent::run([this, renderFrame]() {
+        tbcSource.load(renderFrame, renderFrame * 2 - 1);
+        return tbcSource.getImage();
+    }));
+}
+
+void MainWindow::onSlideshowPreviewRendered()
+{
+    if (slideshowPreviewFrame < 0) return; // already wound up by finishSlideshowPreview()
+    const QImage image = slideshowPreviewWatcher.result();
+    tbcSourceBusy = false;
+    tbcSource.setHighlightDropouts(slideshowPreviewHighlight);
+    // tbcSource holds the preview frame; put the viewer's back
+    showImagePending = false;
+    tbcSource.load(currentFrameNumber, currentFieldNumber);
+    showImage();
+
+    if (slideshowDialog) slideshowDialog->setPreviewFrame(slideshowPreviewFrame, image);
+    slideshowPreviewFrame = -1;
+    if (slideshowDialog && slideshowPreviewNext > 0) renderSlideshowPreview(slideshowPreviewNext);
+}
+
+// Before the source goes away: let a preview render in flight finish (one
+// frame), as cancelInFlightAsyncFrameRender() does for the viewer's own
+void MainWindow::finishSlideshowPreview()
+{
+    slideshowPreviewNext = -1;
+    if (!slideshowPreviewWatcher.isRunning()) return;
+    tbcSource.requestNnTransform3DCancel();
+    slideshowPreviewWatcher.waitForFinished();
+    // Its finished signal arrives later, to a source that may be gone
+    slideshowPreviewFrame = -1;
+    tbcSourceBusy = false;
+    tbcSource.setHighlightDropouts(slideshowPreviewHighlight);
 }
 
 void MainWindow::saveSlideshowStills(const SlideshowExtract::CaptureInput &input,

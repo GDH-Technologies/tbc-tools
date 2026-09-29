@@ -747,11 +747,16 @@
     <addaction name="actionReload_TBC"/>
     <addaction name="actionSave_Metadata"/>
     <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuFrameCapture">
+    <property name="title">
+     <string>Frame &amp;Capture</string>
+    </property>
     <addaction name="actionSave_frame_as_PNG"/>
     <addaction name="actionSave_frame_as_PNG_with_options"/>
-    <addaction name="actionExtract_slideshow_stills"/>
     <addaction name="separator"/>
-    <addaction name="actionExit"/>
+    <addaction name="actionExtract_slideshow_stills"/>
    </widget>
    <widget class="QMenu" name="menuWindow">
     <property name="title">
@@ -843,6 +848,7 @@
     </property>
    </widget>
    <addaction name="menuFile"/>
+   <addaction name="menuFrameCapture"/>
    <addaction name="menuView"/>
    <addaction name="menuScopes"/>
    <addaction name="menuWindow"/>
