@@ -12,6 +12,7 @@
 #define SAVEPNGDIALOG_H
 
 #include <QDialog>
+#include <QGroupBox>
 #include <QImage>
 #include <functional>
 
@@ -21,6 +22,7 @@ class QButtonGroup;
 class QComboBox;
 class QLabel;
 class QRadioButton;
+class QSlider;
 class QSpinBox;
 
 // A frame, scaled to fit and shown at the chosen pixel aspect, with the
@@ -66,7 +68,7 @@ class FrameSnapshotControls : public QWidget
     Q_OBJECT
 
 public:
-    // middleGroup, if given, is laid out between Aspect ratio and Resize
+    // middleGroup, if given, is laid out between Framing and Aspect ratio
     FrameSnapshotControls(const TbcMetaData::VideoParameters &videoParameters, const QSize &frameSize,
                           CropPreview *preview, QWidget *middleGroup = nullptr, QWidget *parent = nullptr);
 
@@ -91,11 +93,44 @@ private:
     QSpinBox *marginTopSpin = nullptr;
     QSpinBox *marginRightSpin = nullptr;
     QSpinBox *marginBottomSpin = nullptr;
-    QComboBox *aspectCombo = nullptr;
+    QButtonGroup *aspectGroup = nullptr;
     QComboBox *upscaleCombo = nullptr;
     QComboBox *methodCombo = nullptr;
     QLabel *customLabel = nullptr;
     QLabel *outputLabel = nullptr;
+};
+
+// How a held still is captured, as radio buttons with the search window below
+// them: a spinbox and a slider in step. The window's label follows the mode,
+// "Averaging window" for Average and "Search window" otherwise; it is
+// disabled for StillMode::Off. Shared by both dialogs, each with its modes.
+class StillModeControls : public QGroupBox
+{
+    Q_OBJECT
+
+public:
+    struct Mode {
+        FrameSnapshot::StillMode mode;
+        QString label;
+        QString toolTip;
+    };
+    StillModeControls(const QString &title, const QVector<Mode> &modes, QWidget *parent = nullptr);
+
+    FrameSnapshot::StillMode mode() const;
+    qint32 window() const;
+    void setMode(FrameSnapshot::StillMode mode);
+    void setWindow(qint32 frames);
+
+signals:
+    void changed();
+
+private:
+    void refresh();
+
+    QButtonGroup *modeGroup = nullptr;
+    QLabel *windowLabel = nullptr;
+    QSpinBox *windowSpin = nullptr;
+    QSlider *windowSlider = nullptr;
 };
 
 // Options for "Save frame as PNG": framing (with a rectangle dragged on the
@@ -116,8 +151,7 @@ private:
     void setControls(const FrameSnapshot::Options &options);
 
     FrameSnapshotControls *controls = nullptr;
-    QComboBox *stillCombo = nullptr;
-    QSpinBox *radiusSpin = nullptr;
+    StillModeControls *stillControls = nullptr;
 };
 
 #endif // SAVEPNGDIALOG_H
