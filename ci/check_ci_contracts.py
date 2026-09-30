@@ -235,7 +235,10 @@ TBC_ANALYSE_REQUIRED_SNIPPETS = (
 # 20 Msps RF exports landing at twice the intended position when unscaled),
 # and the ms padding is converted to samples using the real rate reported by
 # the flac-chop --probe --json output (never guessed from the video frame
-# rate).
+# rate). Source selection must ignore the export's own output naming
+# (__frame_NNNNNN_rf.flac/ldf snippets left in the capture folder) and prefer
+# the RF source remembered from the last successful export while it still
+# exists next to the loaded TBC.
 TBC_ANALYSE_RF_EXPORT_REQUIRED_SNIPPETS = (
     'QStringLiteral("--units"), QStringLiteral("samples")',
     'QStringLiteral("--probe"), rfSourcePath, QStringLiteral("--json")',
@@ -245,6 +248,8 @@ TBC_ANALYSE_RF_EXPORT_REQUIRED_SNIPPETS = (
     "getFieldFileLoc",
     "%1__frame_%2_rf.flac",
     "decodeDomainRateHz",
+    "isRfSnippetName",
+    "getRfExportSourcePath",
 )
 # tbc-video-export must keep --field-order defaulting to AUTO so parity is derived from
 # firstActiveFrameLine/lastActiveFrameLine + output padding rather than hardcoded TFF/BFF.

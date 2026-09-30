@@ -126,6 +126,7 @@ void Configuration::writeConfiguration(void)
     // RF segment export (FLAC-Chop)
     configuration->beginGroup("rfExport");
     configuration->setValue("flacChopPath", settings.rfExport.flacChopPath);
+    configuration->setValue("sourcePath", settings.rfExport.sourcePath);
     configuration->setValue("padBeforeMs", settings.rfExport.padBeforeMs);
     configuration->setValue("padAfterMs", settings.rfExport.padAfterMs);
     configuration->setValue("saveAllAlsoExportRf", settings.rfExport.saveAllAlsoExportRf);
@@ -221,6 +222,7 @@ void Configuration::readConfiguration(void)
     // RF segment export (additive keys - older config files fall back to defaults)
     configuration->beginGroup("rfExport");
     settings.rfExport.flacChopPath = configuration->value("flacChopPath", QString()).toString();
+    settings.rfExport.sourcePath = configuration->value("sourcePath", QString()).toString();
     settings.rfExport.padBeforeMs = configuration->value("padBeforeMs", 500).toInt();
     settings.rfExport.padAfterMs = configuration->value("padAfterMs", 500).toInt();
     settings.rfExport.saveAllAlsoExportRf = configuration->value("saveAllAlsoExportRf", false).toBool();
@@ -289,6 +291,7 @@ void Configuration::setDefault(void)
 
     // RF segment export (FLAC-Chop)
     settings.rfExport.flacChopPath = QString();
+    settings.rfExport.sourcePath = QString();
     settings.rfExport.padBeforeMs = 500;
     settings.rfExport.padAfterMs = 500;
     settings.rfExport.saveAllAlsoExportRf = false;
@@ -625,6 +628,16 @@ void Configuration::setRfExportFlacChopPath(QString flacChopPath)
 QString Configuration::getRfExportFlacChopPath(void)
 {
     return settings.rfExport.flacChopPath;
+}
+
+void Configuration::setRfExportSourcePath(QString sourcePath)
+{
+    settings.rfExport.sourcePath = sourcePath;
+}
+
+QString Configuration::getRfExportSourcePath(void)
+{
+    return settings.rfExport.sourcePath;
 }
 
 void Configuration::setRfExportPadBeforeMs(qint32 padBeforeMs)

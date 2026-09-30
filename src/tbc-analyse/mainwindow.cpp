@@ -6645,8 +6645,30 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
     if (sourceFilename.isEmpty()) {
         sourceFilename = lastFilename;
     }
+
+    // This export's own output naming (<base>__frame_NNNNNN_rf.flac) is never
+    // a source candidate and never a remembered source: exported snippets
+    // left in the capture folder must not outrank the original capture in
+    // the longest-prefix search below (issue #29).
+    const QRegularExpression rfSnippetPattern(
+        QStringLiteral("__frame_\\d+_rf\\.(?:flac|ldf)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto isRfSnippetName = [&rfSnippetPattern](const QString &fileName) {
+        return rfSnippetPattern.match(fileName).hasMatch();
+    };
+
     QString rfSourcePath;
-    if (!sourceFilename.isEmpty()) {
+    // Prefer the RF source remembered from the last successful export while
+    // it still exists and still sits next to the loaded TBC (so switching to
+    // a different capture folder re-runs discovery instead).
+    const QString rememberedRfSource = configuration.getRfExportSourcePath().trimmed();
+    if (!rememberedRfSource.isEmpty() && !sourceFilename.isEmpty()
+        && !isRfSnippetName(QFileInfo(rememberedRfSource).fileName())
+        && QFileInfo::exists(rememberedRfSource)
+        && QFileInfo(rememberedRfSource).absolutePath() == QFileInfo(sourceFilename).absolutePath()) {
+        rfSourcePath = rememberedRfSource;
+    }
+    if (rfSourcePath.isEmpty() && !sourceFilename.isEmpty()) {
         const QFileInfo sourceInfo(sourceFilename);
         const QDir sourceDir = sourceInfo.dir();
         const QString baseLower = sourceInfo.completeBaseName().toLower();
@@ -6665,13 +6687,19 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
             const QString prefixLower = prefix.toLower();
             QStringList nameCandidates;
             for (const QString &rfSuffix : {QStringLiteral("flac"), QStringLiteral("ldf")}) {
-                nameCandidates.append(prefix + QLatin1Char('.') + rfSuffix);
+                const QString exactName = prefix + QLatin1Char('.') + rfSuffix;
+                if (!isRfSnippetName(exactName)) {
+                    nameCandidates.append(exactName);
+                }
             }
             const QFileInfoList dirEntries = sourceDir.entryInfoList(QDir::Files, QDir::Name);
             for (const QFileInfo &entry : dirEntries) {
                 const QString entryLower = entry.fileName().toLower();
                 if (!entryLower.endsWith(QLatin1String(".flac"))
                     && !entryLower.endsWith(QLatin1String(".ldf"))) {
+                    continue;
+                }
+                if (isRfSnippetName(entry.fileName())) {
                     continue;
                 }
                 const bool plainForm = entryLower.startsWith(prefixLower + QLatin1Char('_'));
@@ -6773,6 +6801,14 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
     // Remember the working binary path for future exports.
     if (configuration.getRfExportFlacChopPath() != flacChopPath) {
         configuration.setRfExportFlacChopPath(flacChopPath);
+        configuration.writeConfiguration();
+    }
+    // Remember the RF source that probed successfully so later exports (and
+    // the background save-all-PNGs export) keep targeting the original
+    // capture instead of re-running discovery over exported snippets
+    // (issue #29).
+    if (configuration.getRfExportSourcePath() != rfSourcePath) {
+        configuration.setRfExportSourcePath(rfSourcePath);
         configuration.writeConfiguration();
     }
 
