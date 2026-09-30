@@ -28,13 +28,13 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ## Export Page
 
 
-<img width="1354" height="" alt="Screenshot from 2026-05-02 07-02-52" src="https://github.com/user-attachments/assets/e6241648-a911-445b-a777-629a691ce7d6" />
+<img width="1920" height="" alt="Screenshot from 2026-05-02 07-02-52" src="https://github.com/user-attachments/assets/e6241648-a911-445b-a777-629a691ce7d6" />
 
 
 ## VBI Decoding
 
 
-<img width="422" height="404" alt="image" src="https://github.com/user-attachments/assets/e9d748b6-d494-43a1-a1d6-2c8a3f1753c3" />
+<img width="400" height="" alt="image" src="https://github.com/user-attachments/assets/e9d748b6-d494-43a1-a1d6-2c8a3f1753c3" />
 
 
 ## Chapter Marker Control 
@@ -74,7 +74,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 *Replaces deprecated ld-process-efm with staged decoding and stacking capabilities*
 
-- **ac3-decoder**       - Decode AC3 data from demodulated AC3-RF QPSK symbols
+- **ac3-decoder**        - Decode AC3 data from demodulated AC3-RF QPSK symbols
 
 - **efm-handler**        - GUI handling tool for stages automatic use.
 
@@ -112,7 +112,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 
 **Analyse & Adjust**: Use `tbc-analyse` to assess capture quality and identify issues such as off-set active picture area or chroma phase/gain & video levels corrections.
 
-**Decode VBI**: If any usable DBI data is present, decode it and save that to metadata or automatically prepare it for export with standard files.
+**Decode VBI**: If any usable VBI data is present, decode it and save that to metadata or automatically prepare it for export with standard files.
 
 **Align**: Using Auto Audio Align, you can easily align your same clock source capture to your metadata and load in the audio for perfect cut.
 
@@ -124,7 +124,7 @@ Please see the [releases page](https://github.com/harrypm/tbc-tools/releases/) f
 ## Important Notes
 
 
-- **Metadata Formats**: SQLite (`.tbc.db`) is the 2026-present metadata format, JSON metadata (2017-2026) being still supported by the tools and used by many older builds for the decode suite.
+- **Metadata Formats**: SQLite (`.tbc.db`) is the 2026-present metadata format, JSON metadata (2017-2026) being still supported by the tools and used by many builds for the decode suite.
 
 - **File Extensions**: TBC files use `.tbc` extension; metadata is commonly `.tbc.json` & `.tbc.db` (SQLite) 
 
