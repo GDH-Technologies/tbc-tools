@@ -6778,8 +6778,9 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
 
     // Frame -> RF sample range: start at the fileLoc of the frame's first
     // field, end at the fileLoc of the first field of frame N+1. fileLoc is a
-    // block-aligned RF sample index that can sit up to blockcut samples before
-    // the true field start, which is why padding below is mandatory.
+    // block-aligned sample index in the decode chain's internal rate domain
+    // (see the scaling below) that can sit up to blockcut samples before the
+    // true field start, which is why padding below is mandatory.
     const qint32 totalFields = tbcSource.getNumberOfFields();
     const qint32 firstFieldNumber = tbcSource.getFrameFirstFieldNumber(frameNumber);
     if (firstFieldNumber < 1) {
@@ -6862,6 +6863,20 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
         return;
     }
 
+    // Scale the metadata positions out of the decode chain's fixed internal
+    // sample rate into real RF samples. vhs-decode/cvbs-decode always decode
+    // at 40 Msps ("we pass 40 as sample frequency, as any other will be
+    // resampled by the loader function"), so fileLoc is in 40 Msps units
+    // regardless of the capture rate, while the RF capture is at its real
+    // recorded rate (e.g. 20 Msps MISRC). Positions convert as
+    // rfSample = fileLoc * (realRateHz / 40e6): halved for a 20 Msps capture,
+    // unchanged for a 40 Msps capture (verified on issue #29: an unscaled
+    // fileLoc landed at twice the intended RF position).
+    const double decodeDomainRateHz = 40000000.0;
+    const double fileLocToRfScale = probe.realRateHz / decodeDomainRateHz;
+    const qint64 startRfLoc = qRound64(static_cast<double>(startFileLoc) * fileLocToRfScale);
+    const qint64 endRfLoc = qRound64(static_cast<double>(endFileLoc) * fileLocToRfScale);
+
     // Padding (ms) around the frame boundaries; interactive mode prompts and
     // remembers, the save-all-PNGs path uses the persisted values. The
     // FLAC-Chop GUI hand-off uses the persisted values silently (the user
@@ -6889,6 +6904,14 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
         auto *probeInfoLabel = new QLabel(probeInfoTokens.join(QStringLiteral(" \u00b7 ")), &padDialog);
         probeInfoLabel->setWordWrap(true);
         padDialogLayout->addWidget(probeInfoLabel);
+
+        auto *scaleInfoLabel = new QLabel(
+            tr("Metadata positions are scaled from the decoder's 40 Msps internal rate to the capture rate (%1 Hz, x%2).")
+                .arg(probe.realRateHz, 0, 'f', 0)
+                .arg(fileLocToRfScale, 0, 'f', 4),
+            &padDialog);
+        scaleInfoLabel->setWordWrap(true);
+        padDialogLayout->addWidget(scaleInfoLabel);
 
         for (const QString &probeWarning : probe.warnings) {
             auto *probeWarningLabel = new QLabel(tr("Probe warning: %1").arg(probeWarning), &padDialog);
@@ -6925,9 +6948,9 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
                 qRound64((static_cast<double>(padBeforeSpinBox->value()) * probe.realRateHz) / 1000.0);
             const qint64 afterSamples =
                 qRound64((static_cast<double>(padAfterSpinBox->value()) * probe.realRateHz) / 1000.0);
-            qint64 previewStart = startFileLoc - beforeSamples;
+            qint64 previewStart = startRfLoc - beforeSamples;
             if (previewStart < 0) previewStart = 0;
-            qint64 previewEnd = endFileLoc + afterSamples;
+            qint64 previewEnd = endRfLoc + afterSamples;
             if (probe.totalSamplesKnown && probe.totalSamples > 0 && previewEnd > probe.totalSamples) {
                 previewEnd = probe.totalSamples;
             }
@@ -6962,9 +6985,9 @@ void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
         qRound64((static_cast<double>(padBeforeMs) * probe.realRateHz) / 1000.0);
     const qint64 padAfterSamples =
         qRound64((static_cast<double>(padAfterMs) * probe.realRateHz) / 1000.0);
-    qint64 exportStart = startFileLoc - padBeforeSamples;
+    qint64 exportStart = startRfLoc - padBeforeSamples;
     if (exportStart < 0) exportStart = 0;
-    qint64 exportEnd = endFileLoc + padAfterSamples;
+    qint64 exportEnd = endRfLoc + padAfterSamples;
 
     // Clamp the export range to the probed RF stream length.
     if (probe.totalSamplesKnown && probe.totalSamples > 0) {

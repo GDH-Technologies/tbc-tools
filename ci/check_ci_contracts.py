@@ -227,11 +227,15 @@ TBC_ANALYSE_REQUIRED_SNIPPETS = (
 )
 # tbc-analyse's RF segment export (issue #29) must drive the FLAC-Chop CLI with
 # the pinned integration contract: background chop invocations pass exact RF
-# sample counts in --units samples mode (the same units as vhs-decode metadata
-# fileLoc), the exported range is derived from the metadata fileLoc of the
-# frame's first field through the first field of the next frame, and the ms
-# padding is converted to samples using the real rate reported by the
-# flac-chop --probe --json output (never guessed from the video frame rate).
+# sample counts in --units samples mode, the exported range is derived from
+# the metadata fileLoc of the frame's first field through the first field of
+# the next frame AFTER scaling out of the decode chain's fixed 40 Msps
+# internal domain (vhs-decode/cvbs-decode loaders resample every capture rate
+# to 40 Msps, so fileLoc is always in 40 Msps units; issue #29 reported
+# 20 Msps RF exports landing at twice the intended position when unscaled),
+# and the ms padding is converted to samples using the real rate reported by
+# the flac-chop --probe --json output (never guessed from the video frame
+# rate).
 TBC_ANALYSE_RF_EXPORT_REQUIRED_SNIPPETS = (
     'QStringLiteral("--units"), QStringLiteral("samples")',
     'QStringLiteral("--probe"), rfSourcePath, QStringLiteral("--json")',
@@ -240,6 +244,7 @@ TBC_ANALYSE_RF_EXPORT_REQUIRED_SNIPPETS = (
     "getFrameFirstFieldNumber",
     "getFieldFileLoc",
     "%1__frame_%2_rf.flac",
+    "decodeDomainRateHz",
 )
 # tbc-video-export must keep --field-order defaulting to AUTO so parity is derived from
 # firstActiveFrameLine/lastActiveFrameLine + output padding rather than hardcoded TFF/BFF.

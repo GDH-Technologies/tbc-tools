@@ -1681,8 +1681,10 @@ qint32 TbcSource::getFrameFirstFieldNumber(qint32 frameNumber) const
     return metaData.getFirstFieldNumber(frameNumber);
 }
 
-// Method to get the raw RF sample location (fileLoc) of a sequential field
-// number. Padding fields (no source data) return -1.
+// Method to get the raw metadata sample location (fileLoc) of a sequential
+// field number. Padding fields (no source data) return -1. Note: fileLoc is
+// a block-aligned sample index in the decode chain's fixed 40 Msps internal
+// domain, NOT in the original RF capture's sample rate.
 qint64 TbcSource::getFieldFileLoc(qint32 sequentialFieldNumber) const
 {
     if (!sourceReady) return -1;

@@ -398,8 +398,10 @@ private:
     // RF segment export via FLAC-Chop (issue #29). Resolves the FLAC-Chop
     // binary and the source RF FLAC capture, probes the capture for its real
     // sample rate and length, converts the current frame's metadata fileLoc
-    // range into a padded RF sample range (padding in ms, converted with the
-    // probed real_rate_hz), then chops in the background via QProcess.
+    // range into a padded RF sample range (fileLoc is scaled from the decode
+    // chain's fixed 40 Msps internal domain to the probed real_rate_hz, and
+    // the ms padding is converted with the same probed rate), then chops in
+    // the background via QProcess.
     struct RfExportProbeResult {
         bool ok = false;
         double realRateHz = -1.0;
