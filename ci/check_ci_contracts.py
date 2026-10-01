@@ -22,6 +22,7 @@ BUNDLE_VERIFY_SCRIPT = ROOT / "ci/verify_linux_bundle.sh"
 AAA_LINUX_BUILD_SCRIPT = ROOT / "scripts/build-aaa-linux.sh"
 AAA_LINUX_PACKAGE_SCRIPT = ROOT / "scripts/package-aaa-appimage.sh"
 TBC_ANALYSE_EXPORT_DIALOG = ROOT / "src/tbc-analyse/exportdialog.cpp"
+TBC_ANALYSE_MAIN_WINDOW = ROOT / "src/tbc-analyse/mainwindow.cpp"
 TBC_VIDEO_EXPORT_OPTS_FFMPEG = ROOT / "src/tbc-video-export/src/tbc_video_export/opts/opts_ffmpeg.py"
 TBC_VIDEO_EXPORT_FIELD_ORDER = ROOT / "src/tbc-video-export/src/tbc_video_export/common/field_order.py"
 AGENTS_RULES_FILE = ROOT / "AGENTS.md"
@@ -224,6 +225,32 @@ TBC_ANALYSE_REQUIRED_SNIPPETS = (
     # Web profile selection helper used by both parallel and fallback proxy paths.
     "proxyExportProfileName",
 )
+# tbc-analyse's RF segment export (issue #29) must drive the FLAC-Chop CLI with
+# the pinned integration contract: background chop invocations pass exact RF
+# sample counts in --units samples mode, the exported range is derived from
+# the metadata fileLoc of the frame's first field through the first field of
+# the next frame AFTER scaling out of the decode chain's fixed 40 Msps
+# internal domain (vhs-decode/cvbs-decode loaders resample every capture rate
+# to 40 Msps, so fileLoc is always in 40 Msps units; issue #29 reported
+# 20 Msps RF exports landing at twice the intended position when unscaled),
+# and the ms padding is converted to samples using the real rate reported by
+# the flac-chop --probe --json output (never guessed from the video frame
+# rate). Source selection must ignore the export's own output naming
+# (__frame_NNNNNN_rf.flac/ldf snippets left in the capture folder) and prefer
+# the RF source remembered from the last successful export while it still
+# exists next to the loaded TBC.
+TBC_ANALYSE_RF_EXPORT_REQUIRED_SNIPPETS = (
+    'QStringLiteral("--units"), QStringLiteral("samples")',
+    'QStringLiteral("--probe"), rfSourcePath, QStringLiteral("--json")',
+    "real_rate_hz",
+    "total_samples_known",
+    "getFrameFirstFieldNumber",
+    "getFieldFileLoc",
+    "%1__frame_%2_rf.flac",
+    "decodeDomainRateHz",
+    "isRfSnippetName",
+    "getRfExportSourcePath",
+)
 # tbc-video-export must keep --field-order defaulting to AUTO so parity is derived from
 # firstActiveFrameLine/lastActiveFrameLine + output padding rather than hardcoded TFF/BFF.
 TBC_VIDEO_EXPORT_REQUIRED_SNIPPETS = (
@@ -393,6 +420,7 @@ def main() -> int:
         AAA_LINUX_BUILD_SCRIPT,
         AAA_LINUX_PACKAGE_SCRIPT,
         TBC_ANALYSE_EXPORT_DIALOG,
+        TBC_ANALYSE_MAIN_WINDOW,
         TBC_VIDEO_EXPORT_OPTS_FFMPEG,
         TBC_VIDEO_EXPORT_FIELD_ORDER,
         AGENTS_RULES_FILE,
@@ -457,6 +485,8 @@ def main() -> int:
         check_not_contains(TBC_ANALYSE_EXPORT_DIALOG, snippet, errors)
     for snippet in TBC_ANALYSE_REQUIRED_SNIPPETS:
         check_contains(TBC_ANALYSE_EXPORT_DIALOG, snippet, errors)
+    for snippet in TBC_ANALYSE_RF_EXPORT_REQUIRED_SNIPPETS:
+        check_contains(TBC_ANALYSE_MAIN_WINDOW, snippet, errors)
     for snippet in TBC_VIDEO_EXPORT_REQUIRED_SNIPPETS:
         check_contains(TBC_VIDEO_EXPORT_OPTS_FFMPEG, snippet, errors)
     check_contains(TBC_VIDEO_EXPORT_FIELD_ORDER, "def compute_is_tff", errors)

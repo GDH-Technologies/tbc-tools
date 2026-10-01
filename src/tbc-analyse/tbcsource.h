@@ -170,6 +170,13 @@ public:
 
     qint32 getFirstFieldNumber() const;
     qint32 getSecondFieldNumber() const;
+    // RF segment export support: first field of an arbitrary frame number, and
+    // the raw metadata sample location (fileLoc) of a sequential field number
+    // (-1 for padding fields with no source data). fileLoc is a block-aligned
+    // sample index in the decode chain's fixed 40 Msps internal domain, not in
+    // the original RF capture's sample rate.
+    qint32 getFrameFirstFieldNumber(qint32 frameNumber) const;
+    qint64 getFieldFileLoc(qint32 sequentialFieldNumber) const;
     bool getSecamFirstLineIsRed(qint32 fieldNumber) const;
 
     qint32 getCcData0() const;
