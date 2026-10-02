@@ -323,6 +323,17 @@ CUDA_PLUGIN_PUBLISH_REQUIRED_SNIPPETS = (
     "gh release create",
     "CACHE_REPOSITORY",
     "CI_CACHE_REPO_TOKEN",
+    # The Teletext GPU (lite) plugin job must also exist in the same workflow:
+    # it builds the pyopencl wheel packages (no Nix closure needed) and
+    # publishes both platform packages + manifests under a cuda-lite-plugin-vX
+    # tag. Job-level if: guards keep the two tag prefixes from cross-triggering.
+    "build-and-publish-cuda-lite",
+    'cuda-lite-plugin-v*',
+    "bash scripts/cuda-plugin-package.sh build-cuda-lite-all",
+    "tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz",
+    "tbc-tools-cuda-lite-plugin-windows-x86_64.zip",
+    "tbc-cuda-lite-plugin-linux-x86_64-manifest.json",
+    "tbc-cuda-lite-plugin-windows-x86_64-manifest.json",
 )
 # The packaging script must pin the same NVIDIA wheel versions + the ORT version,
 # and produce the trimmed 7-file set (cudnn_adv_infer dropped as unused by the
@@ -336,6 +347,19 @@ CUDA_PLUGIN_PACKAGE_SCRIPT_REQUIRED_SNIPPETS = (
     "libonnxruntime_providers_cuda.so",
     "onnxruntime_providers_cuda.dll",
     "--deps-dir",
+)
+# The packaging script's teletext GPU (lite) modes must produce the per-platform
+# packages + manifests, pin the pyopencl version, and install into site-packages.
+CUDA_LITE_PACKAGE_SCRIPT_REQUIRED_SNIPPETS = (
+    "build-cuda-lite-linux",
+    "build-cuda-lite-windows",
+    "build-cuda-lite-all",
+    "PYOPENCL_VERSION=",
+    "site-packages",
+    "tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz",
+    "tbc-tools-cuda-lite-plugin-windows-x86_64.zip",
+    "tbc-cuda-lite-plugin-linux-x86_64-manifest.json",
+    "tbc-cuda-lite-plugin-windows-x86_64-manifest.json",
 )
 # Windows release must bundle the vendored vhs-teletext Python tree at
 # release\vendor\vhs-teletext so tbc-process-vbi's teletextintegration.cpp
@@ -553,6 +577,10 @@ def main() -> int:
     # The packaging script must pin the NVIDIA wheel versions + produce the
     # trimmed provider set.
     for snippet in CUDA_PLUGIN_PACKAGE_SCRIPT_REQUIRED_SNIPPETS:
+        check_contains(CUDA_PLUGIN_PACKAGE_SCRIPT, snippet, errors)
+    # The teletext GPU (lite) packaging modes must produce the per-platform
+    # packages + manifests with a pinned pyopencl version.
+    for snippet in CUDA_LITE_PACKAGE_SCRIPT_REQUIRED_SNIPPETS:
         check_contains(CUDA_PLUGIN_PACKAGE_SCRIPT, snippet, errors)
     # The CUDA closure cache is self-built and unsigned, so the restore must
     # import it with require-sigs disabled or Nix refuses the paths with

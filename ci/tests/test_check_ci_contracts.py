@@ -504,6 +504,39 @@ class ContractCoverageTests(unittest.TestCase):
             expected.issubset(set(check_ci_contracts.MACOS_UNIVERSAL_VENDOR_REQUIRED_SNIPPETS))
         )
 
+    def test_cuda_plugin_publish_contract_requires_lite_packages(self) -> None:
+        # The publish workflow must also carry the Teletext GPU (lite) job that
+        # builds the pyopencl wheel packages and publishes both platform
+        # packages + manifests under a cuda-lite-plugin-vX tag.
+        expected = {
+            "build-and-publish-cuda-lite",
+            "cuda-lite-plugin-v*",
+            "bash scripts/cuda-plugin-package.sh build-cuda-lite-all",
+            "tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz",
+            "tbc-tools-cuda-lite-plugin-windows-x86_64.zip",
+            "tbc-cuda-lite-plugin-linux-x86_64-manifest.json",
+            "tbc-cuda-lite-plugin-windows-x86_64-manifest.json",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.CUDA_PLUGIN_PUBLISH_REQUIRED_SNIPPETS))
+        )
+
+    def test_cuda_lite_package_script_contract_requires_lite_modes(self) -> None:
+        # The packaging script must keep the lite modes (pyopencl wheel-only
+        # packages with a pinned version) alongside the CUDA runtime modes.
+        expected = {
+            "build-cuda-lite-linux",
+            "build-cuda-lite-windows",
+            "build-cuda-lite-all",
+            "PYOPENCL_VERSION=",
+            "site-packages",
+            "tbc-cuda-lite-plugin-linux-x86_64-manifest.json",
+            "tbc-cuda-lite-plugin-windows-x86_64-manifest.json",
+        }
+        self.assertTrue(
+            expected.issubset(set(check_ci_contracts.CUDA_LITE_PACKAGE_SCRIPT_REQUIRED_SNIPPETS))
+        )
+
     def test_macos_workflow_has_exactly_one_universal_vendor_validation_block(self) -> None:
         content = check_ci_contracts.MACOS_WORKFLOW.read_text(encoding="utf-8")
         count = content.count("Validate universal bundled vendor payloads")
