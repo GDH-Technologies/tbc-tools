@@ -55,8 +55,35 @@
 - Decoded content sampled: Rai "TELEVIDEO" pages (100 index, 103/120 news, Italian politics headlines)
 - Gates: `ci/check_ci_contracts.py` passed; contract tests 48 passed; ctest 30/30
 
+## Publication (2026-10-03, after user go-ahead "continue")
+- Determinism fix committed first (`d9958ef`): all lite wheel downloads are `--no-deps` + version-pinned
+  (pytools 2026.1.1, platformdirs 4.12.2, typing_extensions 4.16.0, siphash24 1.9 per Python version,
+  numpy 2.5.3 for Windows) so the CI-built package manifest matches the committed catalog hashes exactly.
+  Contracts/tests extended to guard the pins; catalog.json regenerated from the pinned build (112 Linux files).
+- Tag `cuda-lite-plugin-v1.0.0` pushed -> publish run 37117826157: SUCCESS
+  (lite job executed; cuda-runtime job correctly skipped by its tag-prefix `if:` guard).
+- Assets published to harrypm/tbc-tools-ci-cache release `cuda-lite-plugin-v1.0.0`:
+  tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz (2,328,763 B),
+  tbc-tools-cuda-lite-plugin-windows-x86_64.zip (24,627,929 B) + both manifests.
+- Verification: all 112 Linux catalog files[] SHA-256 entries match the published+extracted package (112/112).
+- Monitor log: /home/harry/prompt-logs/cuda-lite-publish-monitor-2026-10-03/readme.md
+
+## Installed-profile processing test (2026-10-03, user confirmed plugin installed via GUI)
+- First attempt failed on BOTH fixes -> hard data: the profile still held the OLD tbc-tools-3.2.9 store path
+  (no plugin discovery log, pyopencl=no, CSS write error back). The GUI plugin install had still worked
+  (data-only flow: remote catalog fetch + generic installer wrote plugin.json record).
+- Fix: `nix build .#` produced new store path jl8mqh8kkyjkb72ql70ym10gvmh0ink5-tbc-tools-3.2.9;
+  `nix profile install` no-ops when already added -> `nix profile upgrade tbc-tools` moved the profile to it.
+  (Note: `nix profile install` is a deprecated alias for `add` and does NOT upgrade an existing entry.)
+- Re-test with installed binary on Teletext.tbc (540 fields):
+  - `GPU runtime plugin found: .../tbc-tools.cuda-lite-linux-x86_64`
+  - probe: `pyopencl=yes`, `pyopencl_runtime=yes`, `pyopencl_selected_ctx=0:0`, `pycuda=no`
+  - `OpenCL-first backend ordering enabled by GPU runtime plugin`
+  - `Teletext export complete - generated 247 HTML pages` (identical to CPU baseline)
+  - NO CSS write error; only benign noise (locale warning, pyopencl RepeatedKernelRetrieval warnings)
+- Note: installed binary version string still reports 3.2.9 / commit unknown-dirty (dirty-tree metadata,
+  cosmetic only).
+
 ## Follow-ups
-- Publish the actual plugin packages + catalogs: push tag `cuda-lite-plugin-v1.0.0` (or dispatch the publish workflow)
-  — held until the user gives the go-ahead
-- Real-world GUI validation: install the plugin via Plugin Manager on a clean machine + confirm GPU probe in the GUI log
+- (done) Real-world validation: plugin installed via Plugin Manager by user + installed-binary teletext export runs on GPU
 - Vendored vhs-teletext update note (pinned f470629) still pending as a separate follow-up
