@@ -2153,36 +2153,26 @@ TbcMetaData::FieldNumbering TbcMetaData::checkFieldNumbering() const
     return report;
 }
 
-// Drop repeated field numbers, renumber what is left 1..N. See the header:
-// this cannot recover a field number the source never wrote, so everything
-// after a gap shifts down by one field.
+// Renumber every field by its position, keeping them all. See the header:
+// the .tbc holds one field per entry, in order, so the position is the field
+// number and the source's seqNo is only a label.
 qint32 TbcMetaData::repairFieldNumbering()
 {
-    QSet<qint32> seen;
-    seen.reserve(fields.size());
-
-    QVector<Field> kept;
-    kept.reserve(fields.size());
-    for (const Field &field : fields) {
-        if (seen.contains(field.seqNo)) continue;
-        seen.insert(field.seqNo);
-        kept.append(field);
+    qint32 renumbered = 0;
+    for (qint32 index = 0; index < static_cast<qint32>(fields.size()); index++) {
+        if (fields[index].seqNo != index + 1) {
+            fields[index].seqNo = index + 1;
+            renumbered++;
+        }
     }
 
-    const qint32 dropped = static_cast<qint32>(fields.size() - kept.size());
-
-    for (qint32 index = 0; index < static_cast<qint32>(kept.size()); index++) {
-        kept[index].seqNo = index + 1;
-    }
-
-    fields = kept;
     videoParameters.numberOfSequentialFields = static_cast<qint32>(fields.size());
 
-    // The PCM audio map is indexed by field position, so it has to follow the
-    // renumbering rather than keep pointing at where the fields used to be.
+    // The PCM audio map is indexed by field position, which has not moved,
+    // but the field count it was sized from may have.
     generatePcmAudioMap();
 
-    return dropped;
+    return renumbered;
 }
 
 // This method appends a new field to the existing metadata

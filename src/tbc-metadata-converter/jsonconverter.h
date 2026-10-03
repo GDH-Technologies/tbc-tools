@@ -23,9 +23,10 @@ public:
     };
 
     // repairFieldNumbering: convert source metadata whose field numbering is
-    // broken (a duplicate or missing seqNo) by dropping the repeats and
-    // renumbering, instead of refusing it. Lossy -- see
-    // TbcMetaData::repairFieldNumbering() -- so it is opt-in only.
+    // broken (a duplicate or missing seqNo) by renumbering every field by its
+    // position, instead of refusing it. See
+    // TbcMetaData::repairFieldNumbering(). It rewrites the source's field
+    // numbers, so it is opt-in only.
     JsonConverter(const QString &inputFilename, const QString &outputFilename, Direction direction,
                   bool repairFieldNumbering = false);
     ~JsonConverter();

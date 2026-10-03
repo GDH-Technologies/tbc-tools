@@ -772,31 +772,52 @@ void testFieldNumberingIntegrity()
         CHECK(numbering.gaps == 0);
     }
 
-    // A repeated field number is caught, and the repair mends it
+    // A repeated field number is caught, and the repair renumbers by position
+    // without dropping a field
     {
         TbcMetaData metaData;
         buildMetadata(metaData, 8, false);
+        const qint64 field3Loc = metaData.getField(3).fileLoc;
+        const qint64 field6Loc = metaData.getField(6).fileLoc;
 
-        // Make entry 4 a second copy of field 3, exactly as a resumed decode
-        // re-emitting an overlapping field does: field number 3 twice, and 4
-        // never written at all.
+        // Number the fields 1 2 3 4 3 5 7 8, the way vhs-decode does when it
+        // sees two first fields in a row and logs "duplicating the last field
+        // to compensate": entry 5 is a second copy of field 3 (same fileLoc,
+        // same number), the entry after it is numbered 5, and 6 is never
+        // written. Every entry is still a field in the .tbc, in order.
         TbcMetaData::Field repeated = metaData.getField(3);
-        metaData.updateField(repeated, 4);
+        metaData.updateField(repeated, 5);
+        TbcMetaData::Field afterRepeat = metaData.getField(6);
+        afterRepeat.seqNo = 5;
+        metaData.updateField(afterRepeat, 6);
 
         const TbcMetaData::FieldNumbering broken = metaData.checkFieldNumbering();
         CHECK(!broken.isValid);
+        CHECK(broken.declaredFields == 8);
+        CHECK(broken.actualFields == 8);
         CHECK(broken.duplicates == 1);
         CHECK(broken.gaps == 1);
-        CHECK(broken.firstBadIndex == 3);
+        CHECK(broken.firstBadIndex == 4);
         CHECK(broken.firstBadSeqNo == 3);
         CHECK(!broken.summary().isEmpty());
 
-        CHECK(metaData.repairFieldNumbering() == 1);
-        CHECK(metaData.getNumberOfFields() == 7);
+        // Entries 5 and 6 take their position's number; nothing is dropped
+        CHECK(metaData.repairFieldNumbering() == 2);
+        CHECK(metaData.getNumberOfFields() == 8);
+        CHECK(metaData.getVideoParameters().numberOfSequentialFields == 8);
         CHECK(metaData.checkFieldNumbering().isValid);
-        for (qint32 fieldNumber = 1; fieldNumber <= 7; fieldNumber++) {
+        for (qint32 fieldNumber = 1; fieldNumber <= 8; fieldNumber++) {
             CHECK(metaData.getField(fieldNumber).seqNo == fieldNumber);
+            // Field parity still alternates, as the .tbc does
+            CHECK(metaData.getField(fieldNumber).isFirstField == ((fieldNumber % 2) == 1));
         }
+        // Each entry still describes the .tbc field at its position
+        CHECK(metaData.getField(5).fileLoc == field3Loc);
+        CHECK(metaData.getField(6).fileLoc == field6Loc);
+
+        // Sound numbering is left alone
+        CHECK(metaData.repairFieldNumbering() == 0);
+        CHECK(metaData.getNumberOfFields() == 8);
     }
 
     // A database whose rows do not match its declared count is refused, and
