@@ -355,6 +355,14 @@ CUDA_LITE_PACKAGE_SCRIPT_REQUIRED_SNIPPETS = (
     "build-cuda-lite-windows",
     "build-cuda-lite-all",
     "PYOPENCL_VERSION=",
+    # The dep wheels must be version-pinned (--no-deps + explicit pins) so the
+    # published package manifest is deterministic and matches the catalog.
+    "LITE_PYTOOLS_VERSION=",
+    "LITE_PLATFORMDIRS_VERSION=",
+    "LITE_TYPING_EXTENSIONS_VERSION=",
+    "LITE_SIPHASH24_VERSION=",
+    "LITE_NUMPY_VERSION=",
+    "--no-deps",
     "site-packages",
     "tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz",
     "tbc-tools-cuda-lite-plugin-windows-x86_64.zip",

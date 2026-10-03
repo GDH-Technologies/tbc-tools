@@ -429,15 +429,27 @@
                 },
                 {
                     "name": "site-packages/siphash24-1.9.dist-info/RECORD",
-                    "sha256": "c407e0f2bc2e646e6879814724c33f669d3a4c0de25e4584eb16e03cc9f5eaf9"
+                    "sha256": "7b1873c7bb7180821560b602c3d163972f5da365c2981e94a802e1f5bb349461"
                 },
                 {
                     "name": "site-packages/siphash24-1.9.dist-info/WHEEL",
-                    "sha256": "aa7cf4ee7d561886e2e512a4c52581bc0bdffd0123894a817dc3010d777114e1"
+                    "sha256": "4ae54b15dec57677feda153741cfe58d4d80f9b108d3f301b2b58523742c36b2"
                 },
                 {
                     "name": "site-packages/siphash24.cpython-310-x86_64-linux-gnu.so",
                     "sha256": "46fb66eceba5c7c1331d76c6fcd08e635983ca84e093ff41c64b0b0a6ba20417"
+                },
+                {
+                    "name": "site-packages/siphash24.cpython-311-x86_64-linux-gnu.so",
+                    "sha256": "0c9f90490ba27c1992bb081196ecaaa774b42925c733bb0037e48fac6519540e"
+                },
+                {
+                    "name": "site-packages/siphash24.cpython-312-x86_64-linux-gnu.so",
+                    "sha256": "d13783f2176b69e6c2052bfb04de3fb793856cc6f8ace2505b3b98d600ead438"
+                },
+                {
+                    "name": "site-packages/siphash24.cpython-313-x86_64-linux-gnu.so",
+                    "sha256": "98c0a45108b773811e3d1ad07eaae118b613606686b88686e15036b7b1b5d43f"
                 },
                 {
                     "name": "site-packages/typing_extensions-4.16.0.dist-info/METADATA",

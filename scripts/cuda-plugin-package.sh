@@ -62,6 +62,21 @@ LITE_PYTHONS=("3.10" "3.11" "3.12" "3.13")
 # Python version of the Windows embeddable distribution.
 LITE_WIN_PYTHON="3.13"
 LITE_WIN_PYTHON_BUILD="3.13.9"
+# Dependency wheel pins for the lite packages. Every download uses --no-deps
+# with these exact versions so the published package's SHA-256 manifest is
+# deterministic and matches plugins/catalog.json regardless of when/where the
+# package is built (PyPI wheels are immutable).
+LITE_PYTOOLS_VERSION="2026.1.1"
+LITE_PLATFORMDIRS_VERSION="4.12.2"
+LITE_TYPING_EXTENSIONS_VERSION="4.16.0"
+# Compiled pytools dependency (siphash24 is imported as the recommended hash
+# with a graceful hashlib fallback; declared as a hard dep in pytools METADATA)
+# -- interpreter-version specific wheels, fetched per Python version below.
+LITE_SIPHASH24_VERSION="1.9"
+# Windows embeddable runtime has no site packages of its own, so numpy is
+# bundled into the Windows package (the Linux package relies on the system
+# numpy required by tbc-process-vbi's teletext dependency probe).
+LITE_NUMPY_VERSION="2.5.3"
 
 # Pinned NVIDIA redistributable wheel versions (same as windows-cuda-runtime.sh).
 # cuDNN 8.9.5 is the latest 8.x (required by ORT 1.18.x CUDA-11.x; 9.x is ABI-incompatible).
@@ -349,16 +364,20 @@ build_cuda_lite_linux() {
   local pyver pyabi
   for pyver in "${LITE_PYTHONS[@]}"; do
     pyabi="cp${pyver//./}"
-    say "  downloading pyopencl $PYOPENCL_VERSION wheel for python $pyver ($pyabi)"
+    say "  downloading pyopencl $PYOPENCL_VERSION + siphash24 $LITE_SIPHASH24_VERSION for python $pyver ($pyabi)"
     pip download --quiet --only-binary=:all: --no-deps \
       --platform manylinux_2_27_x86_64 --platform manylinux_2_28_x86_64 \
       --python-version "$pyver" --implementation cp --abi "$pyabi" \
-      -d "$tmp/wheels" "pyopencl==$PYOPENCL_VERSION" || die "pip download failed for python $pyver"
+      -d "$tmp/wheels" "pyopencl==$PYOPENCL_VERSION" "siphash24==$LITE_SIPHASH24_VERSION" \
+      || die "pip download failed for python $pyver"
   done
-  # Small pure-Python deps resolve to py3-none-any wheels (one per package).
+  # Pure-Python deps resolve to py3-none-any wheels (one per package).
   say "  downloading pure-Python deps (pytools platformdirs typing_extensions)"
-  pip download --quiet --only-binary=:all: \
-    -d "$tmp/wheels" pytools platformdirs typing_extensions || die "pip download of deps failed"
+  pip download --quiet --only-binary=:all: --no-deps \
+    -d "$tmp/wheels" \
+    "pytools==$LITE_PYTOOLS_VERSION" \
+    "platformdirs==$LITE_PLATFORMDIRS_VERSION" \
+    "typing_extensions==$LITE_TYPING_EXTENSIONS_VERSION" || die "pip download of deps failed"
 
   # Merge every wheel into one site-packages tree: ABI-tagged .so files of
   # different Python versions coexist; shared pure files are identical.
@@ -413,10 +432,18 @@ build_cuda_lite_windows() {
   rm -f "$pkgdir/python/python${LITE_WIN_PYTHON//./}._pth"
 
   local pyabi="cp${LITE_WIN_PYTHON//./}"
-  say "  downloading pyopencl $PYOPENCL_VERSION + deps wheels for win_amd64 python $LITE_WIN_PYTHON ($pyabi)"
-  pip download --quiet --only-binary=:all: \
+  say "  downloading pyopencl $PYOPENCL_VERSION + numpy $LITE_NUMPY_VERSION + siphash24 $LITE_SIPHASH24_VERSION for win_amd64 python $LITE_WIN_PYTHON ($pyabi)"
+  pip download --quiet --only-binary=:all: --no-deps \
     --platform win_amd64 --python-version "$LITE_WIN_PYTHON" --implementation cp --abi "$pyabi" \
-    -d "$tmp/wheels" "pyopencl==$PYOPENCL_VERSION" || die "pip download failed for win_amd64"
+    -d "$tmp/wheels" \
+    "pyopencl==$PYOPENCL_VERSION" \
+    "numpy==$LITE_NUMPY_VERSION" \
+    "siphash24==$LITE_SIPHASH24_VERSION" || die "pip download failed for win_amd64"
+  pip download --quiet --only-binary=:all: --no-deps \
+    -d "$tmp/wheels" \
+    "pytools==$LITE_PYTOOLS_VERSION" \
+    "platformdirs==$LITE_PLATFORMDIRS_VERSION" \
+    "typing_extensions==$LITE_TYPING_EXTENSIONS_VERSION" || die "pip download of deps failed"
 
   local wheel
   for wheel in "$tmp"/wheels/*.whl; do
