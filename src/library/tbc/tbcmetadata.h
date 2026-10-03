@@ -446,9 +446,11 @@ public:
     // Every consumer indexes fields by sequential field number: getField(n)
     // returns fields[n - 1], which is only the right field while
     // fields[i].seqNo == i + 1 and numberOfSequentialFields == fields.size().
-    // Metadata can break that. A decode that emitted a duplicate seqNo (a
-    // resumed decode re-writing an overlapping field) survives the JSON
-    // load, because the JSON check only compares the declared count with the
+    // Metadata can break that. vhs-decode emits a duplicate seqNo when it
+    // sees two fields of the same parity in a row and logs "duplicating the
+    // last field to compensate": it writes the field before last into the
+    // .tbc a second time, under that field's number, and its count then
+    // skips one. The metadata survives the JSON load, because the JSON check only compares the declared count with the
     // array length -- but field_record is keyed on (capture_id, field_id),
     // so the INSERT OR REPLACE that writes it silently drops the loser and
     // the resulting database declares one more field than it stores. Every
@@ -467,11 +469,13 @@ public:
         QString summary() const;
     };
     FieldNumbering checkFieldNumbering() const;
-    // Drops every field whose seqNo repeats one already seen, renumbers the
-    // survivors 1..N and sets numberOfSequentialFields to match. Returns the
-    // number of fields dropped. Lossy by construction: a seqNo the source
-    // never wrote cannot be recovered, so every field after a gap shifts down
-    // by one. Only for an explicit operator-driven repair, never automatic.
+    // Renumbers every field by its position (seqNo = index + 1) and sets
+    // numberOfSequentialFields to match. Returns the number of fields whose
+    // seqNo changed. Nothing is dropped: entry i is the field at position i
+    // in the .tbc, a repeated field included, so dropping an entry would
+    // shift every later field's metadata onto the wrong picture and break
+    // the field parity. Only for an explicit operator-driven repair, never
+    // automatic.
     qint32 repairFieldNumbering();
 
     void setNumberOfFields(qint32 numberOfFields);

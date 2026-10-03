@@ -185,7 +185,7 @@ int main(int argc, char *argv[])
 
     // Option to convert source metadata whose field numbering is broken
     QCommandLineOption repairOption(QStringList() << "repair",
-                                    QCoreApplication::translate("main", "Convert source metadata with broken field numbering (a duplicate or missing field number) by dropping the repeats and renumbering. Lossy: fields after a gap shift down by one. Without this the conversion is refused."));
+                                    QCoreApplication::translate("main", "Convert source metadata with broken field numbering (a duplicate or missing field number) by renumbering every field by its position in the .tbc. No field is dropped. Without this the conversion is refused."));
     parser.addOption(repairOption);
 
     // Process the command line options and arguments given by the user

@@ -107,17 +107,15 @@ bool JsonConverter::ensureFieldNumbering(TbcMetaData &metaData)
                               << numbering.summary();
         qCritical() << "Refusing to convert: the SQLite output would declare more fields than it "
                        "holds, which every consumer reads as a damaged file. Re-run with --repair "
-                       "to drop the repeated field numbers and renumber what is left (lossy: the "
-                       "fields after a gap shift down by one).";
+                       "to renumber every field by its position in the .tbc (no field is dropped).";
         return false;
     }
 
-    const qint32 dropped = metaData.repairFieldNumbering();
+    const qint32 renumbered = metaData.repairFieldNumbering();
     qWarning().noquote() << "Repaired field numbering in" << m_inputFilename << ":"
                          << numbering.summary();
-    qWarning() << "Dropped" << dropped << "repeated field(s); the metadata now describes"
-               << metaData.getNumberOfFields()
-               << "fields. Field numbers after the first break no longer line up with the source.";
+    qWarning() << "Renumbered" << renumbered << "field(s) by their position in the .tbc; none dropped."
+               << "The metadata describes" << metaData.getNumberOfFields() << "fields.";
 
     const TbcMetaData::FieldNumbering afterRepair = metaData.checkFieldNumbering();
     if (!afterRepair.isValid) {
