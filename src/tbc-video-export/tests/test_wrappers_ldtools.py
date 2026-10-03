@@ -656,10 +656,10 @@ class TestWrappersChromaDecoder:
             input_tbc=f"{get_path('ntsc_svideo')}.tbc",
             input_opts=["--letterbox"],
             expected_opts=[
-                {"--ffll", "61"},
-                {"--lfll", "224"},
-                {"--ffrl", "122"},
-                {"--lfrl", "448"},
+                {"--ffll", "50"},
+                {"--lfll", "232"},
+                {"--ffrl", "100"},
+                {"--lfrl", "464"},
             ],
         ),
         WrapperTestCase(
