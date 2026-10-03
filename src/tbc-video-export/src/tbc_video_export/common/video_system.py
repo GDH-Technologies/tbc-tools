@@ -125,7 +125,11 @@ video_system_ntsc = VideoSystemData(
     active_lines={
         "default": VideoSystemData.ActiveLines(20, 259, 40, 525, None),  # unused
         "full_vertical": VideoSystemData.ActiveLines(1, 259, 2, 525, None),
-        "letterbox": VideoSystemData.ActiveLines(61, 224, 122, 448, 1),  # unsure!
+        # A 16:9 picture letterboxed in 4:3 fills 3/4 of the 485 active lines
+        # (40..525): 364 lines, centred, starting on an even frame line like
+        # the default so the field order is unchanged. 122..448 (326 lines)
+        # stretched the picture about 12% once shown at 16:9.
+        "letterbox": VideoSystemData.ActiveLines(50, 232, 100, 464, 1),
         "vbi": VideoSystemData.ActiveLines(16, 259, 17, 525, 2),  # unsure!
     },
     aspect_ratio={

@@ -536,9 +536,10 @@ class TestOutput:
             output_video_codec=codec_ffv1,
             output_video_base=VideoBaseNTSC(
                 width=760,
-                height=326,
-                pixel_aspect_ratio="0.763",
-                display_aspect_ratio="1.779",
+                # the 16:9 band keeps the default pixel aspect; 326 lines squeezed it to 0.763
+                height=364,
+                pixel_aspect_ratio="0.851",
+                display_aspect_ratio="1.778",
             ),
             output_video_color=VideoColorNTSC(
                 bit_depth=10,
@@ -650,9 +651,10 @@ class TestOutput:
             output_video_codec=codec_ffv1,
             output_video_base=VideoBaseNTSC(
                 width=760,
-                height=326,
-                pixel_aspect_ratio="0.763",
-                display_aspect_ratio="1.779",
+                # the 16:9 band keeps the default pixel aspect; 326 lines squeezed it to 0.763
+                height=364,
+                pixel_aspect_ratio="0.851",
+                display_aspect_ratio="1.778",
             ),
             output_video_color=VideoColorNTSC(
                 bit_depth=10,
@@ -768,9 +770,10 @@ class TestOutput:
             output_video_codec=codec_ffv1,
             output_video_base=VideoBaseNTSC(
                 width=760,
-                height=326,
-                pixel_aspect_ratio="0.763",
-                display_aspect_ratio="1.779",
+                # the 16:9 band keeps the default pixel aspect; 326 lines squeezed it to 0.763
+                height=364,
+                pixel_aspect_ratio="0.851",
+                display_aspect_ratio="1.778",
                 framerate_num=None,
                 framerate_den=None,
             ),

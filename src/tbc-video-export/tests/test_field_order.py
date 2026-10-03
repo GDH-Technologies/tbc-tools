@@ -4,6 +4,7 @@ from tbc_video_export.common.field_order import (
     compute_is_tff,
     compute_top_pad_lines,
 )
+from tbc_video_export.common.video_system import video_system_ntsc
 
 
 class TestFieldOrder:
@@ -30,6 +31,15 @@ class TestFieldOrder:
         top = compute_top_pad_lines(40, 525, 8, trim_to_active=True)
         assert top == 2
         assert compute_is_tff(40, top) is True
+
+    def test_ntsc_letterbox_is_a_16_9_band_and_stays_tff(self) -> None:  # noqa: D102
+        # NTSC letterbox preset: the 16:9 band of a 4:3 picture is 3/4 of the
+        # 485 active lines (40..525), centred: 100..464. Starting even keeps TFF.
+        letterbox = video_system_ntsc.active_lines["letterbox"]
+        assert (letterbox.first_frame, letterbox.last_frame) == (100, 464)
+        assert letterbox.last_frame - letterbox.first_frame == round((525 - 40) * 3 / 4)
+        top = compute_top_pad_lines(letterbox.first_frame, letterbox.last_frame, 1, trim_to_active=True)
+        assert compute_is_tff(letterbox.first_frame, top) is True
 
     def test_ntsc_vbi_is_bff(self) -> None:  # noqa: D102
         # NTSC VBI preset: first=17, last=525, pad=2 -> activeHeight=508
