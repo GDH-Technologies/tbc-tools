@@ -5,6 +5,7 @@ GenericName=TBC Analysis Tool
 Comment=Analyse and adjust 4fsc TBC video captures and their metadata
 Exec=tbc-analyse %f
 Icon=tbc-analyse
+StartupWMClass=tbc-analyse
 Terminal=false
 NoDisplay=false
 StartupNotify=true

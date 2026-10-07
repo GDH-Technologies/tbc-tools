@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+#
+# test-teletext-plugin-integrity - tbc-process-vbi loads the Teletext GPU
+# runtime plugin only as the Plugin Manager installed and verified it
+#
+# This file is part of tbc-tools.
+#
+# tbc-tools is free software: you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Each case builds a fake tbc-tools.cuda-lite plugin under an isolated
+# XDG_DATA_HOME and runs a teletext export. The plugin's
+# site-packages/sitecustomize.py appends to a marker file, so the marker
+# exists exactly when the export's Python imported from the plugin. Linux
+# only: elsewhere QStandardPaths ignores XDG_DATA_HOME.
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+SKIP_EXIT_CODE = 77
+REJECTED_TEXT = "ignoring the GPU runtime plugin"
+
+# Records the import, then runs the sitecustomize this one shadows (a Nix
+# Python ships its own), so the export behaves as it would without the plugin.
+SITECUSTOMIZE = '''\
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+_marker = os.environ.get("TBC_TEST_PLUGIN_MARKER")
+if _marker:
+    with open(_marker, "a", encoding="utf-8") as _handle:
+        _handle.write("loaded\\n")
+
+_here = os.path.dirname(os.path.abspath(__file__))
+_rest = [p for p in sys.path if os.path.abspath(p or ".") != _here]
+_spec = importlib.machinery.PathFinder.find_spec("sitecustomize", _rest)
+if _spec is not None and _spec.loader is not None:
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+'''
+
+
+def resolve_tool(build_dir: Path) -> Path | None:
+    for candidate in (
+        build_dir / "bin" / "tbc-process-vbi",
+        build_dir / "src" / "tbc-process-vbi" / "tbc-process-vbi",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def plugin_id() -> str | None:
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "tbc-tools.cuda-lite-linux-x86_64"
+    if machine in ("aarch64", "arm64"):
+        return "tbc-tools.cuda-lite-linux-arm64"
+    return None
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_plugin(plugin_dir: Path, record_id: str | None) -> None:
+    """A one-file plugin, with an install record when record_id is given."""
+    site_packages = plugin_dir / "site-packages"
+    site_packages.mkdir(parents=True)
+    module = site_packages / "sitecustomize.py"
+    module.write_text(SITECUSTOMIZE, encoding="utf-8")
+    if record_id is None:
+        return
+    record = {
+        "plugin_id": record_id,
+        "version": "1.0.0",
+        "install_path": str(plugin_dir),
+        "files": [{"name": "site-packages/sitecustomize.py", "sha256": sha256(module)}],
+    }
+    (plugin_dir / "plugin.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+def run_export(tool: Path, input_base: Path, case_dir: Path, data_home: Path, marker: Path) -> tuple[int, str]:
+    work = case_dir / "work"
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    input_tbc = work / f"{input_base.name}.tbc"
+    input_db = work / f"{input_base.name}.tbc.db"
+    shutil.copy2(f"{input_base}.tbc", input_tbc)
+    shutil.copy2(f"{input_base}.tbc.db", input_db)
+
+    env = os.environ.copy()
+    env["XDG_DATA_HOME"] = str(data_home)
+    env["TBC_TEST_PLUGIN_MARKER"] = str(marker)
+    env["TELETEXT_FORCE_CPU"] = "1"
+    env["TELETEXT_DECONV_TIMEOUT_SEC"] = "120"
+    env.pop("TELETEXT_PYTHON", None)
+    command = [
+        str(tool), "--nobackup", "--threads", "1",
+        "--input-metadata", str(input_db),
+        "--teletext", "--teletext-html-dir", str(work / "teletext_html"),
+        "--teletext-tape-format", "vhs", "--teletext-min-duplicates", "1",
+        str(input_tbc),
+    ]
+    completed = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return completed.returncode, completed.stdout
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--build", required=True, help="CMake build directory containing tbc-process-vbi.")
+    parser.add_argument("--input-base", required=True, help="Fixture base path (<base>.tbc and <base>.tbc.db).")
+    parser.add_argument("--work-dir", required=True, help="Scratch directory, emptied first.")
+    args = parser.parse_args()
+
+    if not sys.platform.startswith("linux"):
+        print("SKIP: the plugin root follows XDG_DATA_HOME only on Linux", file=sys.stderr)
+        return SKIP_EXIT_CODE
+    expected_id = plugin_id()
+    if expected_id is None:
+        print(f"SKIP: no cuda-lite plugin id for {platform.machine()}", file=sys.stderr)
+        return SKIP_EXIT_CODE
+    build_dir = Path(args.build).resolve()
+    input_base = Path(args.input_base).resolve()
+    work_dir = Path(args.work_dir).resolve()
+    if not Path(f"{input_base}.tbc").exists() or not Path(f"{input_base}.tbc.db").exists():
+        print(f"SKIP: teletext fixture is missing: {input_base}", file=sys.stderr)
+        return SKIP_EXIT_CODE
+    tool = resolve_tool(build_dir)
+    if tool is None:
+        print(f"SKIP: tbc-process-vbi not found in {build_dir}", file=sys.stderr)
+        return SKIP_EXIT_CODE
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+
+    def no_record(plugin_dir: Path) -> None:
+        write_plugin(plugin_dir, None)
+
+    def verified(plugin_dir: Path) -> None:
+        write_plugin(plugin_dir, expected_id)
+
+    def other_id(plugin_dir: Path) -> None:
+        write_plugin(plugin_dir, "tbc-tools.some-other-plugin")
+
+    def changed(plugin_dir: Path) -> None:
+        write_plugin(plugin_dir, expected_id)
+        with (plugin_dir / "site-packages" / "sitecustomize.py").open("a", encoding="utf-8") as handle:
+            handle.write("# changed after install\n")
+
+    def unrecorded(plugin_dir: Path) -> None:
+        write_plugin(plugin_dir, expected_id)
+        (plugin_dir / "site-packages" / "extra.py").write_text("pass\n", encoding="utf-8")
+
+    def symlinked(plugin_dir: Path) -> None:
+        write_plugin(plugin_dir, expected_id)
+        (plugin_dir / "site-packages" / "elsewhere").symlink_to(work_dir)
+
+    # (name, builder, expect the plugin to load, runs)
+    cases = (
+        ("no-record", no_record, False, 1),
+        ("verified", verified, True, 2),  # the second run proves the first left no bytecode behind
+        ("other-id", other_id, False, 1),
+        ("changed", changed, False, 1),
+        ("unrecorded", unrecorded, False, 1),
+        ("symlink", symlinked, False, 1),
+    )
+    failures = []
+    for name, build, expect_loaded, runs in cases:
+        case_dir = work_dir / name
+        data_home = case_dir / "data"
+        plugin_dir = data_home / "tbc-tools" / "plugins" / expected_id
+        build(plugin_dir)
+        for run in range(1, runs + 1):
+            marker = case_dir / f"marker-{run}"
+            code, output = run_export(tool, input_base, case_dir, data_home, marker)
+            loaded = marker.exists()
+            problems = []
+            if code != 0:
+                problems.append(f"export exited {code}")
+            if loaded != expect_loaded:
+                problems.append("plugin was imported" if loaded else "plugin was not imported")
+            if not expect_loaded and REJECTED_TEXT not in output:
+                problems.append(f"no '{REJECTED_TEXT}' warning")
+            stray = sorted(str(p.relative_to(plugin_dir)) for p in plugin_dir.rglob("__pycache__"))
+            if stray:
+                problems.append(f"bytecode written into the plugin: {', '.join(stray)}")
+            label = f"{name} (run {run})" if runs > 1 else name
+            if problems:
+                failures.append(f"{label}: {'; '.join(problems)}")
+                print(f"FAIL {label}: {'; '.join(problems)}\n{output}", file=sys.stderr)
+            else:
+                print(f"ok   {label}: {'imported' if loaded else 'refused'}", file=sys.stderr)
+    if failures:
+        print(f"FAIL: {len(failures)} case(s): " + " | ".join(failures), file=sys.stderr)
+        return 1
+    print("Teletext plugin integrity test passed.", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

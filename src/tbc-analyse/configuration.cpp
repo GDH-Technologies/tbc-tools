@@ -195,6 +195,15 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("dialogRows", settings.slideshowExtract.dialogRows);
     configuration->endGroup();
 
+    // RF segment export (FLAC-Chop)
+    configuration->beginGroup("rfExport");
+    configuration->setValue("flacChopPath", settings.rfExport.flacChopPath);
+    configuration->setValue("sourcePath", settings.rfExport.sourcePath);
+    configuration->setValue("padBeforeMs", settings.rfExport.padBeforeMs);
+    configuration->setValue("padAfterMs", settings.rfExport.padAfterMs);
+    configuration->setValue("saveAllAlsoExportRf", settings.rfExport.saveAllAlsoExportRf);
+    configuration->endGroup();
+
     // Sync the settings with disk
     tbcDebugStream() << "Configuration::writeConfiguration(): Writing configuration to disk";
     configuration->sync();
@@ -323,6 +332,17 @@ void Configuration::readConfiguration(void)
     settings.slideshowExtract.dialogColumns = configuration->value("dialogColumns").toByteArray();
     settings.slideshowExtract.dialogRows = configuration->value("dialogRows").toByteArray();
     configuration->endGroup();
+
+    // RF segment export (additive keys - older config files fall back to defaults)
+    configuration->beginGroup("rfExport");
+    settings.rfExport.flacChopPath = configuration->value("flacChopPath", QString()).toString();
+    settings.rfExport.sourcePath = configuration->value("sourcePath", QString()).toString();
+    settings.rfExport.padBeforeMs = configuration->value("padBeforeMs", 500).toInt();
+    settings.rfExport.padAfterMs = configuration->value("padAfterMs", 500).toInt();
+    settings.rfExport.saveAllAlsoExportRf = configuration->value("saveAllAlsoExportRf", false).toBool();
+    if (settings.rfExport.padBeforeMs < 0) settings.rfExport.padBeforeMs = 0;
+    if (settings.rfExport.padAfterMs < 0) settings.rfExport.padAfterMs = 0;
+    configuration->endGroup();
 }
 
 void Configuration::setDefault(void)
@@ -389,6 +409,13 @@ void Configuration::setDefault(void)
     // "Save frame as PNG" and "Extract slideshow stills" options
     settings.frameSnapshot = FrameSnapshot::Options();
     settings.slideshowExtract = SlideshowExtractOptions();
+
+    // RF segment export (FLAC-Chop)
+    settings.rfExport.flacChopPath = QString();
+    settings.rfExport.sourcePath = QString();
+    settings.rfExport.padBeforeMs = 500;
+    settings.rfExport.padAfterMs = 500;
+    settings.rfExport.saveAllAlsoExportRf = false;
 
     // Write the configuration
     writeConfiguration();
@@ -802,6 +829,57 @@ void Configuration::setCudaPluginInstallPath(QString path)
 QString Configuration::getCudaPluginInstallPath(void)
 {
     return settings.cudaPlugin.installPath;
+}
+
+// RF segment export (FLAC-Chop)
+void Configuration::setRfExportFlacChopPath(QString flacChopPath)
+{
+    settings.rfExport.flacChopPath = flacChopPath;
+}
+
+QString Configuration::getRfExportFlacChopPath(void)
+{
+    return settings.rfExport.flacChopPath;
+}
+
+void Configuration::setRfExportSourcePath(QString sourcePath)
+{
+    settings.rfExport.sourcePath = sourcePath;
+}
+
+QString Configuration::getRfExportSourcePath(void)
+{
+    return settings.rfExport.sourcePath;
+}
+
+void Configuration::setRfExportPadBeforeMs(qint32 padBeforeMs)
+{
+    settings.rfExport.padBeforeMs = padBeforeMs;
+}
+
+qint32 Configuration::getRfExportPadBeforeMs(void)
+{
+    return settings.rfExport.padBeforeMs;
+}
+
+void Configuration::setRfExportPadAfterMs(qint32 padAfterMs)
+{
+    settings.rfExport.padAfterMs = padAfterMs;
+}
+
+qint32 Configuration::getRfExportPadAfterMs(void)
+{
+    return settings.rfExport.padAfterMs;
+}
+
+void Configuration::setSaveAllAlsoExportRf(bool saveAllAlsoExportRf)
+{
+    settings.rfExport.saveAllAlsoExportRf = saveAllAlsoExportRf;
+}
+
+bool Configuration::getSaveAllAlsoExportRf(void)
+{
+    return settings.rfExport.saveAllAlsoExportRf;
 }
 
 // VBI processing options

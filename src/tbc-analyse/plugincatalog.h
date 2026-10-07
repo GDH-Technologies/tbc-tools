@@ -51,6 +51,11 @@ struct PluginCatalogEntry {
     QString version;       // catalog-advertised version (update detection)
     QString packageUrl;    // direct download URL for the archive
     QList<PluginCatalogFile> files;  // per-file SHA-256 manifest
+
+    // Optional platform gate, e.g. "linux-x86_64" / "windows-x86_64"
+    // (<platform>-<arch> as reported by CudaPluginManager::currentPlatform/
+    // currentArch). Empty list = available on every platform.
+    QStringList platforms;
 };
 
 class PluginCatalog : public QObject

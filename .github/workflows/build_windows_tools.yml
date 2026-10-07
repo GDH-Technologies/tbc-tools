@@ -40,7 +40,12 @@ jobs:
             artifact_name: tbc-tools_windows_x86_64
             bundle_external_tools: true
           - arch: arm64
-            runs_on: windows-11-arm
+            # windows-2022 (x64 host, VS2022): cross-compiles the arm64-windows
+            # triplet via -A arm64. The windows-11-arm label moved to the
+            # windows-11-vs2026-arm64 image (VS2026 only), which cmake 3.31.6
+            # cannot select (VS2026 needs CMake 4.x) — cmake then fell back to
+            # NMake Makefiles, which rejects the preset's arm64 platform spec.
+            runs_on: windows-2022
             vcpkg_triplet: arm64-windows
             configure_preset: vcpkg-arm64
             build_preset: vcpkg-arm64
@@ -215,7 +220,13 @@ jobs:
         uses: lukka/run-cmake@v10
         with:
           configurePreset: ${{ matrix.configure_preset }}
-          configurePresetAdditionalArgs: "['-DCMAKE_BUILD_TYPE=Release', '-DUSE_QT_VERSION=6', '-DBUILD_PYTHON=false', '-DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }}', '-DVCPKG_APPLOCAL_DEPS=ON', '-DBUILD_TESTING=OFF',]"
+          # VCPKG_HOST_TRIPLET: in the arm64 cross build the toolchain otherwise
+          # exposes only the TARGET tools dir via CMAKE_PROGRAM_PATH, so
+          # find_package(PkgConfig) finds the arm64 pkgconf.exe that the x64 host
+          # cannot execute ("Could NOT find PkgConfig (missing:
+          # PKG_CONFIG_EXECUTABLE)"). Pointing it at the host triplet exposes the
+          # x64 host tools instead (no-op for the x64 job where host == target).
+          configurePresetAdditionalArgs: "['-DCMAKE_BUILD_TYPE=Release', '-DUSE_QT_VERSION=6', '-DBUILD_PYTHON=false', '-DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }}', '-DVCPKG_HOST_TRIPLET=x64-windows', '-DVCPKG_APPLOCAL_DEPS=ON', '-DBUILD_TESTING=OFF',]"
           buildPreset: ${{ matrix.build_preset }}
           buildPresetAdditionalArgs: "['--config Release']"
           # Prevent false-positive "File not found" warnings from broad default log regexes.

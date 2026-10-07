@@ -29,6 +29,17 @@
 #       files staged from the Nix store). Required for build-linux.
 #   build-windows [--out DIR] [--version VER]  produce the Windows x86_64 zip + manifest
 #   build-all     [--out DIR] [--version VER] [--deps-dir DIR]  produce both
+#   build-cuda-lite-linux   [--out DIR] [--version VER]
+#       produce the Linux x86_64 teletext GPU (lite) plugin tar.gz + manifest:
+#       pyopencl wheels (bundled ICD loader) for system Pythons cp310-cp313 +
+#       the small pure-Python deps. numpy is NOT bundled: tbc-process-vbi's
+#       teletext dependency probe already requires it. The OpenCL ICD
+#       (/etc/OpenCL/vendors) comes from the user's GPU driver.
+#   build-cuda-lite-windows [--out DIR] [--version VER]
+#       produce the Windows x86_64 teletext GPU (lite) plugin zip + manifest:
+#       Python embeddable distribution (._pth removed so PYTHONPATH works) +
+#       the pyopencl win_amd64 wheel closure (numpy included).
+#   build-cuda-lite-all     [--out DIR] [--version VER]  produce both lite packages
 #
 # Defaults:
 #   --out     ./cuda-plugin-out
@@ -40,6 +51,32 @@ set -euo pipefail
 OUT_DEFAULT="${PWD}/cuda-plugin-out"
 VERSION_DEFAULT="1.0.0"
 ORT_VERSION="1.18.1"
+# pyopencl ships a bundled OpenCL ICD loader in its manylinux/win wheels
+# (.libs/libOpenCL-*.so), so the plugin needs no system libOpenCL and no
+# LD_LIBRARY_PATH wiring -- only an ICD from the user's GPU driver.
+PYOPENCL_VERSION="2026.1.4"
+# Python minor versions covered by the Linux site-packages wheel set (the
+# pyopencl manylinux wheels are interpreter-version specific; the C-side ABI
+# tagged .so files of all versions coexist in one site-packages tree).
+LITE_PYTHONS=("3.10" "3.11" "3.12" "3.13")
+# Python version of the Windows embeddable distribution.
+LITE_WIN_PYTHON="3.13"
+LITE_WIN_PYTHON_BUILD="3.13.9"
+# Dependency wheel pins for the lite packages. Every download uses --no-deps
+# with these exact versions so the published package's SHA-256 manifest is
+# deterministic and matches plugins/catalog.json regardless of when/where the
+# package is built (PyPI wheels are immutable).
+LITE_PYTOOLS_VERSION="2026.1.1"
+LITE_PLATFORMDIRS_VERSION="4.12.2"
+LITE_TYPING_EXTENSIONS_VERSION="4.16.0"
+# Compiled pytools dependency (siphash24 is imported as the recommended hash
+# with a graceful hashlib fallback; declared as a hard dep in pytools METADATA)
+# -- interpreter-version specific wheels, fetched per Python version below.
+LITE_SIPHASH24_VERSION="1.9"
+# Windows embeddable runtime has no site packages of its own, so numpy is
+# bundled into the Windows package (the Linux package relies on the system
+# numpy required by tbc-process-vbi's teletext dependency probe).
+LITE_NUMPY_VERSION="2.5.3"
 
 # Pinned NVIDIA redistributable wheel versions (same as windows-cuda-runtime.sh).
 # cuDNN 8.9.5 is the latest 8.x (required by ORT 1.18.x CUDA-11.x; 9.x is ABI-incompatible).
@@ -349,6 +386,127 @@ build_windows() {
   rm -rf "$tmp"
 }
 
+# Build the Linux x86_64 teletext GPU (lite) plugin package: pyopencl wheels
+# (+ pure-Python deps) extracted into one site-packages tree covering the
+# system Pythons listed in LITE_PYTHONS. numpy is intentionally NOT bundled.
+build_cuda_lite_linux() {
+  local out version
+  out="$(abs "$1")"; version="$2"
+  local pkgdir="$out/cuda-lite-linux-x86_64" manifest="$out/tbc-cuda-lite-plugin-linux-x86_64-manifest.json"
+  local tmp; tmp="$(mktemp -d)"
+  mkdir -p "$pkgdir/site-packages"
+
+  say "building Linux x86_64 teletext GPU (lite) plugin package (version $version)"
+  : > "$manifest"
+  printf '{\n  "plugin_id": "tbc-tools.cuda-lite",\n  "plugin_version": "%s",\n  "platform": "linux",\n  "arch": "x86_64",\n  "pyopencl_version": "%s",\n  "python_versions": "%s",\n' "$version" "$PYOPENCL_VERSION" "$(IFS=,; echo "${LITE_PYTHONS[*]//.}")" >> "$manifest"
+
+  local pyver pyabi
+  for pyver in "${LITE_PYTHONS[@]}"; do
+    pyabi="cp${pyver//./}"
+    say "  downloading pyopencl $PYOPENCL_VERSION + siphash24 $LITE_SIPHASH24_VERSION for python $pyver ($pyabi)"
+    pip download --quiet --only-binary=:all: --no-deps \
+      --platform manylinux_2_27_x86_64 --platform manylinux_2_28_x86_64 \
+      --python-version "$pyver" --implementation cp --abi "$pyabi" \
+      -d "$tmp/wheels" "pyopencl==$PYOPENCL_VERSION" "siphash24==$LITE_SIPHASH24_VERSION" \
+      || die "pip download failed for python $pyver"
+  done
+  # Pure-Python deps resolve to py3-none-any wheels (one per package).
+  say "  downloading pure-Python deps (pytools platformdirs typing_extensions)"
+  pip download --quiet --only-binary=:all: --no-deps \
+    -d "$tmp/wheels" \
+    "pytools==$LITE_PYTOOLS_VERSION" \
+    "platformdirs==$LITE_PLATFORMDIRS_VERSION" \
+    "typing_extensions==$LITE_TYPING_EXTENSIONS_VERSION" || die "pip download of deps failed"
+
+  # Merge every wheel into one site-packages tree: ABI-tagged .so files of
+  # different Python versions coexist; shared pure files are identical.
+  local wheel
+  for wheel in "$tmp"/wheels/*.whl; do
+    say "  extracting $(basename "$wheel")"
+    unzip -q -o "$wheel" -d "$pkgdir/site-packages"
+  done
+
+  # Full per-file manifest (the GUI generic installer SHA-256-verifies these).
+  local first=1
+  local rel sha size
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    sha="$(sha256_of "$pkgdir/$rel")"
+    size="$(stat -c '%s' "$pkgdir/$rel")"
+    manifest_add_file "$manifest" "$rel" "$sha" "$size" "$first"
+    first=0
+  done < <(cd "$pkgdir" && find site-packages -type f | LC_ALL=C sort)
+  printf '\n  ]\n}\n' >> "$manifest"
+
+  local archive="$out/tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz"
+  tar -czf "$archive" -C "$pkgdir" .
+  say "Linux lite package: $archive ($(du -h "$archive" | awk '{print $1}'))"
+  say "Linux lite manifest: $manifest"
+  rm -rf "$tmp"
+}
+
+# Build the Windows x86_64 teletext GPU (lite) plugin package: Python
+# embeddable distribution + full pyopencl wheel closure (numpy included, the
+# embeddable runtime has no site packages of its own).
+build_cuda_lite_windows() {
+  local out version
+  out="$(abs "$1")"; version="$2"
+  local pkgdir="$out/cuda-lite-windows-x86_64" manifest="$out/tbc-cuda-lite-plugin-windows-x86_64-manifest.json"
+  local tmp; tmp="$(mktemp -d)"
+  mkdir -p "$pkgdir/site-packages"
+
+  say "building Windows x86_64 teletext GPU (lite) plugin package (version $version)"
+  : > "$manifest"
+  printf '{\n  "plugin_id": "tbc-tools.cuda-lite",\n  "plugin_version": "%s",\n  "platform": "windows",\n  "arch": "x86_64",\n  "pyopencl_version": "%s",\n  "python_version": "%s",\n' "$version" "$PYOPENCL_VERSION" "$LITE_WIN_PYTHON" >> "$manifest"
+
+  local first=1
+  # Python embeddable distribution.
+  say "  downloading Python $LITE_WIN_PYTHON_BUILD embeddable distribution"
+  local py_zip="$tmp/python-embed.zip"
+  curl -fsSL -o "$py_zip" "https://www.python.org/ftp/python/${LITE_WIN_PYTHON_BUILD}/python-${LITE_WIN_PYTHON_BUILD}-embed-amd64.zip"
+  unzip -q -o "$py_zip" -d "$pkgdir/python"
+  # The ._pth file enables isolated path mode which IGNORES PYTHONPATH, so
+  # remove it: the embedded runtime then behaves like a normal interpreter
+  # and honors the PYTHONPATH the teletext integration sets.
+  rm -f "$pkgdir/python/python${LITE_WIN_PYTHON//./}._pth"
+
+  local pyabi="cp${LITE_WIN_PYTHON//./}"
+  say "  downloading pyopencl $PYOPENCL_VERSION + numpy $LITE_NUMPY_VERSION + siphash24 $LITE_SIPHASH24_VERSION for win_amd64 python $LITE_WIN_PYTHON ($pyabi)"
+  pip download --quiet --only-binary=:all: --no-deps \
+    --platform win_amd64 --python-version "$LITE_WIN_PYTHON" --implementation cp --abi "$pyabi" \
+    -d "$tmp/wheels" \
+    "pyopencl==$PYOPENCL_VERSION" \
+    "numpy==$LITE_NUMPY_VERSION" \
+    "siphash24==$LITE_SIPHASH24_VERSION" || die "pip download failed for win_amd64"
+  pip download --quiet --only-binary=:all: --no-deps \
+    -d "$tmp/wheels" \
+    "pytools==$LITE_PYTOOLS_VERSION" \
+    "platformdirs==$LITE_PLATFORMDIRS_VERSION" \
+    "typing_extensions==$LITE_TYPING_EXTENSIONS_VERSION" || die "pip download of deps failed"
+
+  local wheel
+  for wheel in "$tmp"/wheels/*.whl; do
+    say "  extracting $(basename "$wheel")"
+    unzip -q -o "$wheel" -d "$pkgdir/site-packages"
+  done
+
+  local rel sha size
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    sha="$(sha256_of "$pkgdir/$rel")"
+    size="$(stat -c '%s' "$pkgdir/$rel")"
+    manifest_add_file "$manifest" "$rel" "$sha" "$size" "$first"
+    first=0
+  done < <(cd "$pkgdir" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+  printf '\n  ]\n}\n' >> "$manifest"
+
+  local archive="$out/tbc-tools-cuda-lite-plugin-windows-x86_64.zip"
+  (cd "$pkgdir" && zip -qr "$archive" .)
+  say "Windows lite package: $archive ($(du -h "$archive" | awk '{print $1}'))"
+  say "Windows lite manifest: $manifest"
+  rm -rf "$tmp"
+}
+
 main() {
   [ "$#" -ge 1 ] || { sed -n '2,55p' "$0" >&2; exit 64; }
   local mode="$1"; shift
@@ -364,11 +522,14 @@ main() {
   out="$(abs "$out")"
   mkdir -p "$out"
   case "$mode" in
-    build-linux)   build_linux "$out" "$version" "$deps_dir" ;;
-    build-windows) build_windows "$out" "$version" ;;
-    build-all)     build_linux "$out" "$version" "$deps_dir"; build_windows "$out" "$version" ;;
-    -h|--help)     sed -n '2,55p' "$0" ;;
-    *) die "unknown mode '$mode' (try: build-linux|build-windows|build-all)" ;;
+    build-linux)             build_linux "$out" "$version" "$deps_dir" ;;
+    build-windows)           build_windows "$out" "$version" ;;
+    build-all)               build_linux "$out" "$version" "$deps_dir"; build_windows "$out" "$version" ;;
+    build-cuda-lite-linux)   build_cuda_lite_linux "$out" "$version" ;;
+    build-cuda-lite-windows) build_cuda_lite_windows "$out" "$version" ;;
+    build-cuda-lite-all)     build_cuda_lite_linux "$out" "$version"; build_cuda_lite_windows "$out" "$version" ;;
+    -h|--help)               sed -n '2,55p' "$0" ;;
+    *) die "unknown mode '$mode' (try: build-linux|build-windows|build-all|build-cuda-lite-all)" ;;
   esac
   say "done. packages + manifests in $out"
 }

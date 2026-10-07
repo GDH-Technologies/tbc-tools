@@ -209,7 +209,7 @@ if(UNIX AND NOT APPLE)
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
 
     # Application icons.
-    foreach(_dd_size IN ITEMS 16 32 64 128)
+    foreach(_dd_size IN ITEMS 16 32 64 128 256)
         install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Graphics/${_dd_size}-analyse.png"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${_dd_size}x${_dd_size}/apps"
             RENAME tbc-analyse.png)
