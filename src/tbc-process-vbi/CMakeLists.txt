@@ -69,4 +69,18 @@ if(BUILD_TESTING)
     set_tests_properties(tbc-process-vbi-teletext-runtime PROPERTIES
         SKIP_RETURN_CODE 77
     )
+
+    # The Teletext GPU runtime plugin is imported only as installed and verified
+    add_test(
+        NAME tbc-process-vbi-teletext-plugin-integrity
+        COMMAND python3
+            ${CMAKE_SOURCE_DIR}/scripts/test-teletext-plugin-integrity
+            --build ${CMAKE_BINARY_DIR}
+            --input-base ${CMAKE_SOURCE_DIR}/test-data/ntsc/issue176
+            --work-dir ${CMAKE_BINARY_DIR}/test-artifacts/teletext-plugin-integrity
+    )
+    set_tests_properties(tbc-process-vbi-teletext-plugin-integrity PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 300
+    )
 endif()

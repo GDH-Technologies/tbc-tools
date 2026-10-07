@@ -26,15 +26,21 @@
 #include "teletextintegration.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTextStream>
@@ -101,6 +107,15 @@ QString resolveTeletextVendorDirectory()
 // through the OpenCL backend using the user's OpenCL-capable driver ICD. The
 // catalog publishes one package per platform; the plugin id carries the
 // <platform>-<arch> suffix matching this binary.
+//
+// The plugin is used only as the Plugin Manager installed and verified it.
+// Its install record (plugin.json, written after the SHA-256 check) must name
+// this plugin, and the directory must hold exactly the recorded files with
+// their recorded hashes: nothing missing, changed, added or symlinked. Python
+// imports anything on PYTHONPATH (a stray sitecustomize.py runs at every
+// interpreter start), so an unrecorded file is as unsafe as a changed one.
+// Anything else falls back to the system interpreter, as if no plugin were
+// installed.
 QString resolveCudaLitePluginDirectory()
 {
 #if defined(Q_OS_LINUX) || defined(Q_OS_WIN) || defined(Q_OS_MACOS)
@@ -125,14 +140,68 @@ QString resolveCudaLitePluginDirectory()
     if (basePath.trimmed().isEmpty()) {
         return QString();
     }
-    const QString pluginDirectoryPath = QDir(basePath).filePath(
-        QStringLiteral("tbc-tools/plugins/tbc-tools.cuda-lite-%1").arg(platformArch));
+    const QString pluginId = QStringLiteral("tbc-tools.cuda-lite-%1").arg(platformArch);
+    const QString pluginDirectoryPath = QDir(basePath).filePath(QStringLiteral("tbc-tools/plugins/") + pluginId);
     const QDir pluginDirectory(pluginDirectoryPath);
     if (!pluginDirectory.exists()) {
         return QString();
     }
     if (!QFileInfo::exists(pluginDirectory.filePath(QStringLiteral("site-packages")))) {
         return QString();
+    }
+
+    const auto reject = [&pluginDirectoryPath](const QString &reason) {
+        qWarning().noquote() << "Teletext export: ignoring the GPU runtime plugin at" << pluginDirectoryPath
+                             << "-" << reason << "(reinstall it from tbc-analyse's Plugin Manager)";
+        return QString();
+    };
+    const QString recordName = QStringLiteral("plugin.json");
+    QFile recordFile(pluginDirectory.filePath(recordName));
+    if (!recordFile.open(QIODevice::ReadOnly)) {
+        return reject(QStringLiteral("it has no install record (plugin.json)"));
+    }
+    const QJsonObject record = QJsonDocument::fromJson(recordFile.readAll()).object();
+    recordFile.close();
+    if (record.value(QStringLiteral("plugin_id")).toString() != pluginId) {
+        return reject(QStringLiteral("its install record does not name %1").arg(pluginId));
+    }
+    const QJsonArray recordedFiles = record.value(QStringLiteral("files")).toArray();
+    if (recordedFiles.isEmpty()) {
+        return reject(QStringLiteral("its install record lists no files"));
+    }
+    QSet<QString> recordedNames;
+    for (const QJsonValue &recordedFile : recordedFiles) {
+        const QJsonObject entry = recordedFile.toObject();
+        const QString name = QDir::cleanPath(entry.value(QStringLiteral("name")).toString());
+        if (name.isEmpty() || name == QStringLiteral(".") || QDir::isAbsolutePath(name)
+            || name == QStringLiteral("..") || name.startsWith(QStringLiteral("../")) || name == recordName) {
+            return reject(QStringLiteral("its install record lists an invalid file name"));
+        }
+        QFile file(pluginDirectory.filePath(name));
+        if (!file.open(QIODevice::ReadOnly)) {
+            return reject(QStringLiteral("%1 is missing").arg(name));
+        }
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        if (!hash.addData(&file)
+            || QString::fromLatin1(hash.result().toHex()) != entry.value(QStringLiteral("sha256")).toString().toLower()) {
+            return reject(QStringLiteral("%1 has changed since it was installed").arg(name));
+        }
+        recordedNames.insert(name);
+    }
+    QDirIterator entries(pluginDirectoryPath, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+                         QDirIterator::Subdirectories);
+    while (entries.hasNext()) {
+        const QFileInfo entryInfo = entries.nextFileInfo();
+        const QString name = pluginDirectory.relativeFilePath(entryInfo.filePath());
+        if (entryInfo.isSymLink() || entryInfo.isJunction()) {
+            return reject(QStringLiteral("%1 is a link").arg(name));
+        }
+        if (entryInfo.isDir() || name == recordName) {
+            continue;
+        }
+        if (!recordedNames.contains(name)) {
+            return reject(QStringLiteral("%1 is not in its install record").arg(name));
+        }
     }
     return pluginDirectoryPath;
 }
@@ -488,6 +557,9 @@ bool runTeletextHtmlExport(const TeletextIntegrationOptions &options, QString *e
         // system paths so the teletext GPU backend can import them.
         pythonPathValue = QDir(cudaLitePluginDirectory).filePath(QStringLiteral("site-packages"))
             + QDir::listSeparator() + pythonPathValue;
+        // Bytecode caches written into the plugin would be unrecorded files
+        // (and code), and the next export would refuse the plugin.
+        environment.insert(QStringLiteral("PYTHONDONTWRITEBYTECODE"), QStringLiteral("1"));
     }
     const QString existingPythonPath = environment.value(QStringLiteral("PYTHONPATH"));
     if (existingPythonPath.isEmpty()) {
