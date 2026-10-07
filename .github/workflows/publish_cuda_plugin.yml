@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       plugin_version:
-        description: "Plugin version (e.g. 1.0.0); the release tag will be cuda-plugin-v{version}"
+        description: "Plugin version (e.g. 1.0.0); the release tag will be cuda-plugin-v{version} (or cuda-lite-plugin-v{version} when dispatched from the lite job)"
         required: true
         default: "1.0.0"
   push:
     tags:
       - "cuda-plugin-v*"
+      - "cuda-lite-plugin-v*"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -19,6 +20,9 @@ env:
 jobs:
   build-and-publish:
     name: Build + publish CUDA plugin packages
+    # Only run for workflow_dispatch or cuda-plugin-v* tags (not for the
+    # cuda-lite-plugin-v* tags, which belong to the lite job below).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/cuda-plugin-v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -141,3 +145,88 @@ jobs:
             gh release upload "$PLUGIN_TAG" --repo "$CACHE_REPOSITORY" --clobber "${ASSETS[@]}"
           fi
           echo "Published $PLUGIN_TAG to $CACHE_REPOSITORY"
+
+  build-and-publish-cuda-lite:
+    name: Build + publish Teletext GPU (lite) plugin packages
+    # Only run for workflow_dispatch or cuda-lite-plugin-v* tags.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/cuda-lite-plugin-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve lite plugin version + tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.plugin_version }}"
+          else
+            # Tag push: cuda-lite-plugin-v1.0.0 -> version 1.0.0
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#cuda-lite-plugin-v}"
+          fi
+          echo "LITE_PLUGIN_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "LITE_PLUGIN_TAG=cuda-lite-plugin-v$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved lite plugin version: $VERSION (tag: cuda-lite-plugin-v$VERSION)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build lite plugin packages (Linux + Windows)
+        shell: bash
+        run: |
+          bash scripts/cuda-plugin-package.sh build-cuda-lite-all \
+            --out ./cuda-lite-out \
+            --version "$LITE_PLUGIN_VERSION"
+          echo "=== outputs ==="
+          ls -la cuda-lite-out/
+
+      - name: Verify manifest JSON validity
+        shell: bash
+        run: |
+          for manifest in cuda-lite-out/*-manifest.json; do
+            echo "Checking $manifest"
+            python3 -c "import json; json.load(open('$manifest')); print('  valid JSON, files:', len(json.load(open('$manifest'))['files']))"
+          done
+
+      - name: Publish lite packages + manifests to tbc-tools-ci-cache Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CI_CACHE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          ASSETS=(
+            cuda-lite-out/tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz
+            cuda-lite-out/tbc-cuda-lite-plugin-linux-x86_64-manifest.json
+            cuda-lite-out/tbc-tools-cuda-lite-plugin-windows-x86_64.zip
+            cuda-lite-out/tbc-cuda-lite-plugin-windows-x86_64-manifest.json
+          )
+          # Create the release on the cache repo, or upload to an existing one.
+          if gh release create "$LITE_PLUGIN_TAG" "${ASSETS[@]}" \
+            --repo "$CACHE_REPOSITORY" \
+            --title "Teletext GPU (lite) plugin $LITE_PLUGIN_VERSION" \
+            --notes "pyopencl runtime plugin (bundled OpenCL ICD loader) for GPU-accelerated
+          teletext deconvolution in tbc-process-vbi via the OpenCL backend of the
+          user's GPU driver (NVIDIA/AMD/Intel). Wheels-only package; the driver
+          provides the OpenCL ICD. Linux: pyopencl wheels for system Pythons
+          cp310-cp313 (numpy from the system). Windows: Python embeddable
+          distribution + the pyopencl wheel closure.
+
+          Packages:
+          - tbc-tools-cuda-lite-plugin-linux-x86_64.tar.gz
+          - tbc-tools-cuda-lite-plugin-windows-x86_64.zip
+
+          SHA-256 verified against plugins/catalog.json files[] at install time
+          by the GUI plugin manager (generic backend)."; then
+            echo "Created release $LITE_PLUGIN_TAG + uploaded assets."
+          else
+            echo "Release $LITE_PLUGIN_TAG already exists; uploading assets with --clobber."
+            gh release upload "$LITE_PLUGIN_TAG" --repo "$CACHE_REPOSITORY" --clobber "${ASSETS[@]}"
+          fi
+          echo "Published $LITE_PLUGIN_TAG to $CACHE_REPOSITORY"

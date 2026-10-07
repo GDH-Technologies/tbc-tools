@@ -191,6 +191,12 @@ bool PluginCatalog::parseCatalog(const QByteArray &payload, QString &error)
         e.category = p.value(QStringLiteral("category")).toString().trimmed();
         e.backend = p.value(QStringLiteral("backend")).toString().trimmed().toLower();
         e.homepage = p.value(QStringLiteral("homepage")).toString().trimmed();
+        for (const QJsonValue &pv : p.value(QStringLiteral("platforms")).toArray()) {
+            const QString platform = pv.toString().trimmed().toLower();
+            if (!platform.isEmpty()) {
+                e.platforms.append(platform);
+            }
+        }
         if (e.id.isEmpty() || e.displayName.isEmpty() || e.description.isEmpty()
             || e.category.isEmpty() || e.backend.isEmpty()) {
             tbcDebugStream() << "PluginCatalog: skipping entry with missing required fields (id=" << e.id << ")";

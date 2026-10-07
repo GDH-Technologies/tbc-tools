@@ -208,7 +208,14 @@ void PluginManagerDialog::setConfiguration(Configuration *configuration)
 void PluginManagerDialog::populatePluginList()
 {
     m_pluginList->clear();
+    const QString currentPlatformArch = QStringLiteral("%1-%2")
+        .arg(CudaPluginManager::currentPlatform(), CudaPluginManager::currentArch());
     for (const PluginCatalogEntry &plugin : m_plugins) {
+        // Entries may declare the platforms they ship for (<platform>-<arch>);
+        // an empty list means the entry is available on every platform.
+        if (!plugin.platforms.isEmpty() && !plugin.platforms.contains(currentPlatformArch)) {
+            continue;
+        }
         auto *item = new QListWidgetItem(plugin.displayName, m_pluginList);
         item->setData(Qt::UserRole, plugin.id);
         item->setToolTip(plugin.description);

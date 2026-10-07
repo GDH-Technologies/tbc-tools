@@ -93,6 +93,50 @@ QString resolveTeletextVendorDirectory()
 
     return QString();
 }
+
+// The opt-in Teletext GPU runtime plugin is installed by tbc-analyse's Plugin
+// Manager under the shared plugins root (docs/plugins.md):
+// <GenericDataLocation>/tbc-tools/plugins/<id>. It ships the pyopencl runtime
+// (portable pycuda wheels do not exist for Linux), so GPU deconvolution runs
+// through the OpenCL backend using the user's OpenCL-capable driver ICD. The
+// catalog publishes one package per platform; the plugin id carries the
+// <platform>-<arch> suffix matching this binary.
+QString resolveCudaLitePluginDirectory()
+{
+#if defined(Q_OS_LINUX) || defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+#if defined(Q_OS_LINUX)
+    QString platformArch = QStringLiteral("linux");
+#elif defined(Q_OS_WIN)
+    QString platformArch = QStringLiteral("windows");
+#else
+    QString platformArch = QStringLiteral("macos");
+#endif
+#if defined(Q_PROCESSOR_X86_64)
+    platformArch += QStringLiteral("-x86_64");
+#elif defined(Q_PROCESSOR_ARM)
+    platformArch += QStringLiteral("-arm64");
+#else
+    return QString();
+#endif
+#else
+    return QString();
+#endif
+    const QString basePath = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (basePath.trimmed().isEmpty()) {
+        return QString();
+    }
+    const QString pluginDirectoryPath = QDir(basePath).filePath(
+        QStringLiteral("tbc-tools/plugins/tbc-tools.cuda-lite-%1").arg(platformArch));
+    const QDir pluginDirectory(pluginDirectoryPath);
+    if (!pluginDirectory.exists()) {
+        return QString();
+    }
+    if (!QFileInfo::exists(pluginDirectory.filePath(QStringLiteral("site-packages")))) {
+        return QString();
+    }
+    return pluginDirectoryPath;
+}
+
 QString runPythonProbe(const QString &pythonExecutable,
                        const QString &script,
                        const QProcessEnvironment &environment,
@@ -135,7 +179,7 @@ QString runPythonProbe(const QString &pythonExecutable,
     return stdoutText;
 }
 
-QString resolvePythonExecutable()
+QString resolvePythonExecutable(const QString &cudaLitePluginDirectory = QString())
 {
     const QString overrideValue =
         qEnvironmentVariable("TELETEXT_PYTHON").trimmed();
@@ -148,6 +192,22 @@ QString resolvePythonExecutable()
         const QFileInfo overrideInfo(overrideValue);
         if (overrideInfo.exists() && overrideInfo.isFile() && overrideInfo.isExecutable()) {
             return overrideInfo.absoluteFilePath();
+        }
+    }
+    if (!cudaLitePluginDirectory.isEmpty()) {
+        // The GPU runtime plugin may bundle its own interpreter (Windows
+        // embeddable layout python/python.exe; optional future Linux layout
+        // python/bin/python3). It provides the pyopencl runtime and takes
+        // precedence over the system interpreters when present.
+        const QStringList pluginPythonCandidates = {
+            QDir(cudaLitePluginDirectory).filePath(QStringLiteral("python/python.exe")),
+            QDir(cudaLitePluginDirectory).filePath(QStringLiteral("python/bin/python3"))
+        };
+        for (const QString &candidatePath : pluginPythonCandidates) {
+            const QFileInfo candidateInfo(candidatePath);
+            if (candidateInfo.exists() && candidateInfo.isFile() && candidateInfo.isExecutable()) {
+                return candidateInfo.absoluteFilePath();
+            }
         }
     }
     const QStringList candidates = {
@@ -255,6 +315,16 @@ bool copyFileReplacing(const QString &sourcePath, const QString &targetPath, QSt
         return false;
     }
 
+    // A read-only source (e.g. files inside the read-only Nix store) keeps its
+    // read-only permission bits on the copy, which breaks later in-place
+    // modification such as CSS font embedding. Restore owner write access.
+    const QFile::Permissions copiedPermissions = QFile::permissions(targetPath);
+    if (!(copiedPermissions & (QFile::WriteOwner | QFile::WriteUser))) {
+        if (!QFile::setPermissions(targetPath, copiedPermissions | QFile::WriteOwner | QFile::WriteUser)) {
+            qWarning() << "Could not restore write permission on copied file:" << targetPath;
+        }
+    }
+
     return true;
 }
 
@@ -322,6 +392,16 @@ bool embedTeletextFontsInCss(const QString &outputDirectoryPath, QString *errorM
         QStringLiteral("font-family: teletext4, teletext2, \"Courier New\", \"Liberation Mono\", \"DejaVu Sans Mono\", monospace;")
     );
 
+    // The CSS may be read-only (e.g. copied from a read-only Nix store by an
+    // earlier run); make it writable before rewriting with embedded fonts.
+    const QFile::Permissions cssPermissions = QFile::permissions(cssPath);
+    if (!(cssPermissions & (QFile::WriteOwner | QFile::WriteUser))) {
+        if (!QFile::setPermissions(cssPath, cssPermissions | QFile::WriteOwner | QFile::WriteUser)) {
+            setError(errorMessage, QObject::tr("Could not make teletext CSS writable for font embedding: %1").arg(cssPath));
+            return false;
+        }
+    }
+
     if (!cssFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         setError(errorMessage, QObject::tr("Could not write teletext CSS after font embedding: %1").arg(cssPath));
         return false;
@@ -384,7 +464,13 @@ bool runTeletextHtmlExport(const TeletextIntegrationOptions &options, QString *e
         return false;
     }
 
-    const QString pythonExecutable = resolvePythonExecutable();
+    const QString cudaLitePluginDirectory = resolveCudaLitePluginDirectory();
+    if (!cudaLitePluginDirectory.isEmpty()) {
+        qInfo() << "Teletext export: GPU runtime plugin (tbc-tools.cuda-lite) found:"
+                << cudaLitePluginDirectory;
+    }
+
+    const QString pythonExecutable = resolvePythonExecutable(cudaLitePluginDirectory);
     if (pythonExecutable.isEmpty()) {
         setError(errorMessage, QObject::tr("Could not locate Python interpreter (python3/python)."));
         return false;
@@ -396,12 +482,19 @@ bool runTeletextHtmlExport(const TeletextIntegrationOptions &options, QString *e
     }
 
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    QString pythonPathValue = vendorDirectory;
+    if (!cudaLitePluginDirectory.isEmpty()) {
+        // Plugin-provided pyopencl site-packages take precedence over the
+        // system paths so the teletext GPU backend can import them.
+        pythonPathValue = QDir(cudaLitePluginDirectory).filePath(QStringLiteral("site-packages"))
+            + QDir::listSeparator() + pythonPathValue;
+    }
     const QString existingPythonPath = environment.value(QStringLiteral("PYTHONPATH"));
     if (existingPythonPath.isEmpty()) {
-        environment.insert(QStringLiteral("PYTHONPATH"), vendorDirectory);
+        environment.insert(QStringLiteral("PYTHONPATH"), pythonPathValue);
     } else {
         environment.insert(QStringLiteral("PYTHONPATH"),
-                           vendorDirectory + QDir::listSeparator() + existingPythonPath);
+                           pythonPathValue + QDir::listSeparator() + existingPythonPath);
     }
     const QString forceCpuRaw = qEnvironmentVariable("TELETEXT_FORCE_CPU").trimmed().toLower();
     const bool forceCpu =
@@ -556,6 +649,13 @@ else:
         qWarning() << "Teletext export: CUDA Python module not available";
     }
     const bool pyopenclUsable = pyopenclRuntimeAvailable && !pyopenclSelectedContext.isEmpty();
+    if (!cudaLitePluginDirectory.isEmpty() && !forceCpu && !preferOpenCl && !pycudaAvailable) {
+        // The GPU runtime plugin ships pyopencl only (no portable pycuda
+        // wheels exist), so prefer the OpenCL ordering over the CUDA-first
+        // auto-detect that would log a guaranteed-failed CUDA attempt.
+        preferOpenCl = true;
+        qInfo() << "Teletext export: OpenCL-first backend ordering enabled by GPU runtime plugin";
+    }
 
     const qint32 teletextThreads = qMax<qint32>(1, options.maxThreads);
     const qint32 minDuplicates = qMax<qint32>(1, options.minDuplicates);

@@ -66,6 +66,9 @@
 #include <QCheckBox>
 #include <QRadioButton>
 #include <QVBoxLayout>
+#include <QFormLayout>
+#include <QSpinBox>
+#include <QDialogButtonBox>
 #include <QtConcurrent/QtConcurrent>
 #include <optional>
 #include <utility>
@@ -627,18 +630,25 @@ qint32 minActiveFrameLineForSystem(VideoSystem system)
     }
 }
 
+// Is the given file present and executable (used for configured tool paths and
+// for resolving tools beside the application / in PATH)?
+bool isRunnableExecutableFile(const QString &candidatePath)
+{
+    const QFileInfo candidateInfo(candidatePath);
+#if defined(Q_OS_WIN)
+    return candidateInfo.exists() && candidateInfo.isFile();
+#else
+    return candidateInfo.exists() && candidateInfo.isFile() && candidateInfo.isExecutable();
+#endif
+}
+
 QString resolveExternalExecutable(const QStringList &toolNames)
 {
     if (toolNames.isEmpty()) {
         return QString();
     }
     const auto isRunnableFile = [](const QString &candidatePath) {
-        const QFileInfo candidateInfo(candidatePath);
-#if defined(Q_OS_WIN)
-        return candidateInfo.exists() && candidateInfo.isFile();
-#else
-        return candidateInfo.exists() && candidateInfo.isFile() && candidateInfo.isExecutable();
-#endif
+        return isRunnableExecutableFile(candidatePath);
     };
 
     const QStringList candidateToolNames = [&toolNames]() {
@@ -1206,6 +1216,26 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     // Frame Capture: the single-frame saves, then this, then slideshow extraction
     ui->menuFrameCapture->insertAction(ui->actionExtract_slideshow_stills, saveAllModesPngAction);
     ui->menuFrameCapture->insertSeparator(ui->actionExtract_slideshow_stills);
+    exportSourceRfSegmentAction = new QAction(tr("Export source RF segment for frame..."), this);
+    connect(exportSourceRfSegmentAction, &QAction::triggered,
+            this, &MainWindow::on_actionExport_source_RF_segment_for_frame_triggered);
+    if (ui->menuFile) {
+        if (ui->actionExit) {
+            ui->menuFile->insertAction(ui->actionExit, exportSourceRfSegmentAction);
+        } else {
+            ui->menuFile->addAction(exportSourceRfSegmentAction);
+        }
+    }
+    openRfInFlacChopGuiAction = new QAction(tr("Open frame RF segment in FLAC-Chop..."), this);
+    connect(openRfInFlacChopGuiAction, &QAction::triggered,
+            this, &MainWindow::on_actionOpen_frame_RF_segment_in_FlacChop_triggered);
+    if (ui->menuFile) {
+        if (ui->actionExit) {
+            ui->menuFile->insertAction(ui->actionExit, openRfInFlacChopGuiAction);
+        } else {
+            ui->menuFile->addAction(openRfInFlacChopGuiAction);
+        }
+    }
     setAcceptDrops(true);
     if (centralWidget()) {
         centralWidget()->setAcceptDrops(true);
@@ -1964,6 +1994,9 @@ void MainWindow::setGuiEnabled(bool enabled)
 
     // ... and those that need a source or its metadata
     ui->actionVBI->setEnabled(enabled);
+    if (exportSourceRfSegmentAction) {
+        exportSourceRfSegmentAction->setEnabled(enabled);
+    }
     ui->actionZoom_In->setEnabled(enabled);
     ui->actionZoom_Out->setEnabled(enabled);
     ui->actionZoom_1x->setEnabled(enabled);
@@ -6366,6 +6399,9 @@ void MainWindow::saveAllModesAsPngs()
     exportModeDialog.setIcon(QMessageBox::Question);
     exportModeDialog.setWindowTitle(tr("Save all mode views as PNGs"));
     exportModeDialog.setText(tr("Choose what to export:"));
+    QCheckBox *alsoExportRfCheckBox = new QCheckBox(tr("Also export source RF segment (FLAC-Chop)"), &exportModeDialog);
+    alsoExportRfCheckBox->setChecked(configuration.getSaveAllAlsoExportRf());
+    exportModeDialog.setCheckBox(alsoExportRfCheckBox);
     QAbstractButton *everythingButton = exportModeDialog.addButton(tr("Everything"), QMessageBox::AcceptRole);
     QAbstractButton *imageButton = exportModeDialog.addButton(tr("Image"), QMessageBox::ActionRole);
     QAbstractButton *scopesButton = exportModeDialog.addButton(tr("Scopes"), QMessageBox::ActionRole);
@@ -6379,6 +6415,12 @@ void MainWindow::saveAllModesAsPngs()
     const QAbstractButton *selectedExportModeButton = exportModeDialog.clickedButton();
     if (!selectedExportModeButton || selectedExportModeButton == cancelButton) {
         return;
+    }
+
+    const bool alsoExportRf = alsoExportRfCheckBox && alsoExportRfCheckBox->isChecked();
+    if (alsoExportRf != configuration.getSaveAllAlsoExportRf()) {
+        configuration.setSaveAllAlsoExportRf(alsoExportRf);
+        configuration.writeConfiguration();
     }
 
     const bool exportImages =
@@ -6839,6 +6881,12 @@ void MainWindow::saveAllModesAsPngs()
     configuration.setPngDirectory(outputFolderPath);
     configuration.writeConfiguration();
 
+    if (alsoExportRf) {
+        // Non-interactive RF segment export: uses the persisted FLAC-Chop path
+        // and padding settings; feedback via the status bar and progress dialog.
+        runRfSegmentExport(false);
+    }
+
     if (failedFiles.isEmpty()) {
         QMessageBox::information(this, tr("Save complete"),
                                  tr("Saved %1 PNG files to:\n%2")
@@ -6852,6 +6900,708 @@ void MainWindow::saveAllModesAsPngs()
                              .arg(savedCount)
                              .arg(outputFolderPath)
                              .arg(failedFiles.size()));
+}
+
+// RF segment export via FLAC-Chop (issue #29) ------------------------------------------------------------------------
+
+// Menu option: export the source RF segment for the currently selected frame
+void MainWindow::on_actionExport_source_RF_segment_for_frame_triggered()
+{
+    runRfSegmentExport(true);
+}
+
+// Menu option: open the frame's RF range in the FLAC-Chop GUI with IN/OUT
+// markers pre-set, for interactive fine-tuning before chopping.
+void MainWindow::on_actionOpen_frame_RF_segment_in_FlacChop_triggered()
+{
+    runRfSegmentExport(true, true);
+}
+
+// Probe the source RF capture via the FLAC-Chop CLI to obtain the real RF
+// sample rate and stream length (ms padding cannot be converted without them).
+// Runs synchronously with a timeout; probing only reads FLAC headers/tags.
+MainWindow::RfExportProbeResult MainWindow::probeRfSource(const QString &flacChopPath, const QString &rfSourcePath)
+{
+    RfExportProbeResult result;
+
+    QProcess probeProcess;
+    probeProcess.start(flacChopPath, {QStringLiteral("--probe"), rfSourcePath, QStringLiteral("--json")});
+    if (!probeProcess.waitForStarted(10000)) {
+        result.errorString = tr("Could not start the FLAC-Chop probe using:\n%1").arg(flacChopPath);
+        return result;
+    }
+    if (!probeProcess.waitForFinished(60000)) {
+        if (probeProcess.state() != QProcess::NotRunning) {
+            probeProcess.kill();
+            probeProcess.waitForFinished(5000);
+        }
+        result.errorString = tr("The FLAC-Chop probe timed out after 60 seconds.");
+        return result;
+    }
+    if (probeProcess.exitStatus() != QProcess::NormalExit || probeProcess.exitCode() != 0) {
+        const QString probeError = QString::fromUtf8(probeProcess.readAllStandardError()).trimmed();
+        result.errorString = tr("The FLAC-Chop probe failed (exit code %1): %2")
+                                 .arg(probeProcess.exitCode())
+                                 .arg(probeError.isEmpty() ? tr("no error output") : probeError);
+        return result;
+    }
+
+    const QJsonDocument probeDocument = QJsonDocument::fromJson(probeProcess.readAllStandardOutput());
+    if (!probeDocument.isObject()) {
+        result.errorString = tr("The FLAC-Chop probe returned unparsable JSON output.");
+        return result;
+    }
+    const QJsonObject probeObject = probeDocument.object();
+    result.realRateHz = probeObject.value(QStringLiteral("real_rate_hz")).toDouble(-1.0);
+    result.totalSamples = static_cast<qint64>(probeObject.value(QStringLiteral("total_samples")).toDouble(-1.0));
+    result.totalSamplesKnown = probeObject.value(QStringLiteral("total_samples_known")).toBool(false);
+    result.isRf = probeObject.value(QStringLiteral("is_rf")).toBool(false);
+    for (const QJsonValue &warningValue : probeObject.value(QStringLiteral("warnings")).toArray()) {
+        result.warnings << warningValue.toString();
+    }
+
+    result.ok = true;
+    return result;
+}
+
+// Export the RF segment for the currently selected frame. When interactive,
+// the user is prompted for padding and file pickers are used for anything that
+// cannot be resolved; when not (i.e. triggered from the save-all-PNGs check
+// box), the persisted settings are used and failures are only reported via the
+// status bar.
+void MainWindow::runRfSegmentExport(bool interactive, bool launchGuiOnly)
+{
+    if (!tbcSource.getIsSourceLoaded()) {
+        if (interactive) {
+            QMessageBox::warning(this, tr("Warning"), tr("No source file loaded."));
+        } else {
+            statusBar()->showMessage(tr("RF segment export skipped: no source loaded."), 3000);
+        }
+        return;
+    }
+
+    const qint32 totalFrames = qMax<qint32>(1, tbcSource.getNumberOfFrames());
+    const qint32 frameNumber = qBound<qint32>(1, currentFrameNumber, totalFrames);
+
+    // Resolve the FLAC-Chop binary: persisted path first (must still be
+    // runnable), then beside the application executable / in PATH.
+    QString flacChopPath = configuration.getRfExportFlacChopPath().trimmed();
+    if (!flacChopPath.isEmpty() && !isRunnableExecutableFile(flacChopPath)) {
+        flacChopPath.clear();
+    }
+    if (flacChopPath.isEmpty()) {
+        flacChopPath = resolveExternalExecutable({QStringLiteral("flac-chop")});
+    }
+    if (flacChopPath.isEmpty() && interactive) {
+        // Self-contained installs put flac-chop beside the application or in
+        // PATH; when it is not found anywhere, prompt for its location,
+        // validate the pick, and save it persistently so the background
+        // save-all-PNGs RF export can use it too.
+        QString pickDirectory = QCoreApplication::applicationDirPath();
+        if (pickDirectory.isEmpty() || !QFileInfo::exists(pickDirectory)) {
+            pickDirectory = QDir::homePath();
+        }
+        for (;;) {
+            const QString pickedPath = QFileDialog::getOpenFileName(
+                this,
+                tr("Locate the FLAC-Chop binary (flac-chop)"),
+                pickDirectory,
+                tr("FLAC-Chop (flac-chop*);;All files (*)"));
+            if (pickedPath.isEmpty()) {
+                return; // user cancelled the prompt
+            }
+            if (!isRunnableExecutableFile(pickedPath)) {
+                QMessageBox::warning(this, tr("Export source RF segment"),
+                                     tr("The selected file is not a runnable executable:\n%1")
+                                         .arg(pickedPath));
+                pickDirectory = QFileInfo(pickedPath).absolutePath();
+                continue;
+            }
+            // The binary must identify itself as FLAC-Chop (--version exits 0
+            // with the FLAC-Chop banner), so a wrong pick is rejected here
+            // instead of failing later with a confusing probe error.
+            QProcess versionProcess;
+            versionProcess.start(pickedPath, {QStringLiteral("--version")});
+            const bool versionOk = versionProcess.waitForStarted(10000)
+                                       && versionProcess.waitForFinished(10000)
+                                       && versionProcess.exitStatus() == QProcess::NormalExit
+                                       && versionProcess.exitCode() == 0
+                                       && QString::fromUtf8(versionProcess.readAllStandardOutput())
+                                              .startsWith(QLatin1String("FLAC-Chop"));
+            if (!versionOk) {
+                if (versionProcess.state() != QProcess::NotRunning) {
+                    versionProcess.kill();
+                    versionProcess.waitForFinished(5000);
+                }
+                QMessageBox::warning(this, tr("Export source RF segment"),
+                                     tr("The selected file is not FLAC-Chop (no valid --version response):\n%1")
+                                         .arg(pickedPath));
+                pickDirectory = QFileInfo(pickedPath).absolutePath();
+                continue;
+            }
+            flacChopPath = pickedPath;
+            configuration.setRfExportFlacChopPath(flacChopPath);
+            configuration.writeConfiguration();
+            statusBar()->showMessage(tr("FLAC-Chop location saved: %1").arg(flacChopPath), 5000);
+            break;
+        }
+    }
+    if (flacChopPath.isEmpty()) {
+        statusBar()->showMessage(tr("RF segment export skipped: FLAC-Chop was not found."
+                                    " Use 'Export source RF segment for frame...' once to locate it;"
+                                    " the location is saved for future exports."),
+                                 5000);
+        return;
+    }
+
+    // Locate the source RF capture: prefer the exact TBC basename, then
+    // progressively shorter '_'/'.'-token prefixes of it in the same folder.
+    // MISRC-GUI auto-naming keeps the decode suffix on the TBC
+    // (capture_luma_12-bit_20msps_vhsv.tbc decodes from
+    // capture_luma_12-bit_20msps.flac) and may add channel/bit-rate tags the
+    // TBC name dropped, or use the rfA_/rfB_ fallback form when no channel
+    // tag was configured.
+    QString sourceFilename = tbcSource.getCurrentSourceFilename();
+    if (sourceFilename.isEmpty()) {
+        sourceFilename = lastFilename;
+    }
+
+    // This export's own output naming (<base>__frame_NNNNNN_rf.flac) is never
+    // a source candidate and never a remembered source: exported snippets
+    // left in the capture folder must not outrank the original capture in
+    // the longest-prefix search below (issue #29).
+    const QRegularExpression rfSnippetPattern(
+        QStringLiteral("__frame_\\d+_rf\\.(?:flac|ldf)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto isRfSnippetName = [&rfSnippetPattern](const QString &fileName) {
+        return rfSnippetPattern.match(fileName).hasMatch();
+    };
+
+    QString rfSourcePath;
+    // Prefer the RF source remembered from the last successful export while
+    // it still exists and still sits next to the loaded TBC (so switching to
+    // a different capture folder re-runs discovery instead).
+    const QString rememberedRfSource = configuration.getRfExportSourcePath().trimmed();
+    if (!rememberedRfSource.isEmpty() && !sourceFilename.isEmpty()
+        && !isRfSnippetName(QFileInfo(rememberedRfSource).fileName())
+        && QFileInfo::exists(rememberedRfSource)
+        && QFileInfo(rememberedRfSource).absolutePath() == QFileInfo(sourceFilename).absolutePath()) {
+        rfSourcePath = rememberedRfSource;
+    }
+    if (rfSourcePath.isEmpty() && !sourceFilename.isEmpty()) {
+        const QFileInfo sourceInfo(sourceFilename);
+        const QDir sourceDir = sourceInfo.dir();
+        const QString baseLower = sourceInfo.completeBaseName().toLower();
+        QStringList prefixes;
+        QString prefixBase = sourceInfo.completeBaseName();
+        while (!prefixBase.isEmpty()) {
+            prefixes.append(prefixBase);
+            const qsizetype tokenCut = qMax(prefixBase.lastIndexOf(QLatin1Char('_')),
+                                            prefixBase.lastIndexOf(QLatin1Char('.')));
+            if (tokenCut <= 0) {
+                break;
+            }
+            prefixBase.truncate(tokenCut);
+        }
+        for (const QString &prefix : prefixes) {
+            const QString prefixLower = prefix.toLower();
+            QStringList nameCandidates;
+            for (const QString &rfSuffix : {QStringLiteral("flac"), QStringLiteral("ldf")}) {
+                const QString exactName = prefix + QLatin1Char('.') + rfSuffix;
+                if (!isRfSnippetName(exactName)) {
+                    nameCandidates.append(exactName);
+                }
+            }
+            const QFileInfoList dirEntries = sourceDir.entryInfoList(QDir::Files, QDir::Name);
+            for (const QFileInfo &entry : dirEntries) {
+                const QString entryLower = entry.fileName().toLower();
+                if (!entryLower.endsWith(QLatin1String(".flac"))
+                    && !entryLower.endsWith(QLatin1String(".ldf"))) {
+                    continue;
+                }
+                if (isRfSnippetName(entry.fileName())) {
+                    continue;
+                }
+                const bool plainForm = entryLower.startsWith(prefixLower + QLatin1Char('_'));
+                const bool rfChannelForm = entryLower.startsWith(QLatin1String("rfa_") + prefixLower)
+                                           || entryLower.startsWith(QLatin1String("rfb_") + prefixLower);
+                if (plainForm || rfChannelForm) {
+                    nameCandidates.append(entry.fileName());
+                }
+            }
+            // Rank: existing candidates only; when the TBC name carries a
+            // channel tag (luma/chroma) prefer candidates sharing it, then the
+            // fewest extra tokens (shortest name), then alphabetical.
+            QString bestCandidate;
+            for (int pass = 0; pass < 2 && bestCandidate.isEmpty(); pass++) {
+                for (const QString &candidateName : nameCandidates) {
+                    const QString candidatePath = sourceDir.filePath(candidateName);
+                    if (!QFileInfo::exists(candidatePath)) {
+                        continue;
+                    }
+                    if (pass == 0) {
+                        bool sharesChannelTag = false;
+                        for (const QString &channelToken : {QStringLiteral("luma"), QStringLiteral("chroma")}) {
+                            if (baseLower.contains(channelToken)
+                                && candidateName.toLower().contains(channelToken)) {
+                                sharesChannelTag = true;
+                                break;
+                            }
+                        }
+                        if (!sharesChannelTag) {
+                            continue;
+                        }
+                    }
+                    if (bestCandidate.isEmpty()
+                        || candidateName.size() < bestCandidate.size()
+                        || (candidateName.size() == bestCandidate.size() && candidateName < bestCandidate)) {
+                        bestCandidate = candidateName;
+                    }
+                }
+            }
+            if (!bestCandidate.isEmpty()) {
+                rfSourcePath = sourceDir.filePath(bestCandidate);
+                break;
+            }
+        }
+    }
+    if (rfSourcePath.isEmpty()) {
+        if (!interactive) {
+            statusBar()->showMessage(tr("RF segment export skipped: could not locate the source RF FLAC capture."), 5000);
+            return;
+        }
+        QString startDirectory = sourceFilename.isEmpty()
+                                     ? configuration.getSourceDirectory()
+                                     : QFileInfo(sourceFilename).absolutePath();
+        if (startDirectory.isEmpty()) {
+            startDirectory = QDir::homePath();
+        }
+        rfSourcePath = QFileDialog::getOpenFileName(
+            this,
+            tr("Locate the source RF capture for frame %1").arg(frameNumber),
+            startDirectory,
+            tr("RF FLAC capture (*.flac *.ldf);;All files (*)"));
+        if (rfSourcePath.isEmpty()) {
+            return;
+        }
+    }
+
+    // Probe the capture once for the real sample rate and stream length.
+    statusBar()->showMessage(tr("Probing the RF capture with FLAC-Chop..."), 0);
+    const RfExportProbeResult probe = probeRfSource(flacChopPath, rfSourcePath);
+    if (!probe.ok) {
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), probe.errorString);
+        } else {
+            statusBar()->showMessage(probe.errorString, 5000);
+        }
+        return;
+    }
+    if (!probe.isRf) {
+        const QString message = tr("The probed capture does not report itself as an RF source (is_rf is false):\n%1")
+                                    .arg(rfSourcePath);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+    if (probe.realRateHz <= 0.0) {
+        const QString message = tr("The FLAC-Chop probe did not report a usable real_rate_hz for:\n%1")
+                                    .arg(rfSourcePath);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+
+    // Remember the working binary path for future exports.
+    if (configuration.getRfExportFlacChopPath() != flacChopPath) {
+        configuration.setRfExportFlacChopPath(flacChopPath);
+        configuration.writeConfiguration();
+    }
+    // Remember the RF source that probed successfully so later exports (and
+    // the background save-all-PNGs export) keep targeting the original
+    // capture instead of re-running discovery over exported snippets
+    // (issue #29).
+    if (configuration.getRfExportSourcePath() != rfSourcePath) {
+        configuration.setRfExportSourcePath(rfSourcePath);
+        configuration.writeConfiguration();
+    }
+
+    // Frame -> RF sample range: start at the fileLoc of the frame's first
+    // field, end at the fileLoc of the first field of frame N+1. fileLoc is a
+    // block-aligned sample index in the decode chain's internal rate domain
+    // (see the scaling below) that can sit up to blockcut samples before the
+    // true field start, which is why padding below is mandatory.
+    const qint32 totalFields = tbcSource.getNumberOfFields();
+    const qint32 firstFieldNumber = tbcSource.getFrameFirstFieldNumber(frameNumber);
+    if (firstFieldNumber < 1) {
+        const QString message = tr("Could not determine the first field of frame %1 from the metadata.").arg(frameNumber);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+    const qint64 startFileLoc = tbcSource.getFieldFileLoc(firstFieldNumber);
+    if (startFileLoc < 0) {
+        const QString message = tr("Field %1 of frame %2 is a padding field with no RF sample location (fileLoc == -1);\n"
+                                   "the RF segment for this frame cannot be exported.")
+                                    .arg(firstFieldNumber)
+                                    .arg(frameNumber);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+
+    const bool hasNextFrame = frameNumber < totalFrames;
+    const qint32 nextFirstFieldNumber = hasNextFrame
+                                            ? tbcSource.getFrameFirstFieldNumber(frameNumber + 1)
+                                            : -1;
+    qint64 endFileLoc = -1;
+    if (nextFirstFieldNumber > 0) {
+        endFileLoc = tbcSource.getFieldFileLoc(nextFirstFieldNumber);
+    }
+    if (endFileLoc < 0 && !hasNextFrame) {
+        // Last frame: extrapolate the end from the previous inter-frame delta.
+        const qint32 previousFirstFieldNumber = (frameNumber > 1)
+                                                    ? tbcSource.getFrameFirstFieldNumber(frameNumber - 1)
+                                                    : -1;
+        const qint64 previousFileLoc = (previousFirstFieldNumber > 0)
+                                           ? tbcSource.getFieldFileLoc(previousFirstFieldNumber)
+                                           : -1;
+        if (previousFileLoc >= 0 && previousFileLoc < startFileLoc) {
+            endFileLoc = startFileLoc + (startFileLoc - previousFileLoc);
+        }
+    }
+    if (endFileLoc < 0) {
+        // The next frame's first field is a padding field (fileLoc == -1) or
+        // unmapped: fall back to the next sequential field with source data.
+        const qint32 scanFrom = (nextFirstFieldNumber > 0) ? nextFirstFieldNumber + 1 : firstFieldNumber + 1;
+        for (qint32 scanFieldNumber = scanFrom; scanFieldNumber <= totalFields; scanFieldNumber++) {
+            const qint64 candidateFileLoc = tbcSource.getFieldFileLoc(scanFieldNumber);
+            if (candidateFileLoc > startFileLoc) {
+                endFileLoc = candidateFileLoc;
+                break;
+            }
+        }
+    }
+    if (endFileLoc < 0) {
+        const QString message = tr("Could not determine the RF end boundary of frame %1\n"
+                                   "(no following field with source data in the metadata).")
+                                    .arg(frameNumber);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+    if (endFileLoc <= startFileLoc) {
+        const QString message = tr("The RF metadata for frame %1 is not monotonic\n"
+                                   "(first field of frame at sample %2, next frame starts at sample %3).")
+                                    .arg(frameNumber)
+                                    .arg(startFileLoc)
+                                    .arg(endFileLoc);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+
+    // Scale the metadata positions out of the decode chain's fixed internal
+    // sample rate into real RF samples. vhs-decode/cvbs-decode always decode
+    // at 40 Msps ("we pass 40 as sample frequency, as any other will be
+    // resampled by the loader function"), so fileLoc is in 40 Msps units
+    // regardless of the capture rate, while the RF capture is at its real
+    // recorded rate (e.g. 20 Msps MISRC). Positions convert as
+    // rfSample = fileLoc * (realRateHz / 40e6): halved for a 20 Msps capture,
+    // unchanged for a 40 Msps capture (verified on issue #29: an unscaled
+    // fileLoc landed at twice the intended RF position).
+    const double decodeDomainRateHz = 40000000.0;
+    const double fileLocToRfScale = probe.realRateHz / decodeDomainRateHz;
+    const qint64 startRfLoc = qRound64(static_cast<double>(startFileLoc) * fileLocToRfScale);
+    const qint64 endRfLoc = qRound64(static_cast<double>(endFileLoc) * fileLocToRfScale);
+
+    // Padding (ms) around the frame boundaries; interactive mode prompts and
+    // remembers, the save-all-PNGs path uses the persisted values. The
+    // FLAC-Chop GUI hand-off uses the persisted values silently (the user
+    // fine-tunes the range in the GUI instead).
+    qint32 padBeforeMs = configuration.getRfExportPadBeforeMs();
+    qint32 padAfterMs = configuration.getRfExportPadAfterMs();
+    if (interactive && !launchGuiOnly) {
+        QDialog padDialog(this);
+        padDialog.setWindowTitle(tr("Export source RF segment for frame %1").arg(frameNumber));
+        auto *padDialogLayout = new QVBoxLayout(&padDialog);
+        padDialogLayout->setContentsMargins(14, 12, 14, 12);
+        padDialogLayout->setSpacing(8);
+
+        auto *sourceLabel = new QLabel(tr("<b>Source RF capture:</b> %1")
+                                           .arg(QDir::toNativeSeparators(rfSourcePath)),
+                                       &padDialog);
+        sourceLabel->setWordWrap(true);
+        padDialogLayout->addWidget(sourceLabel);
+
+        QStringList probeInfoTokens;
+        probeInfoTokens << tr("Rate: %1 Hz").arg(probe.realRateHz);
+        if (probe.totalSamplesKnown && probe.totalSamples > 0) {
+            probeInfoTokens << tr("Total samples: %1").arg(probe.totalSamples);
+        }
+        auto *probeInfoLabel = new QLabel(probeInfoTokens.join(QStringLiteral(" \u00b7 ")), &padDialog);
+        probeInfoLabel->setWordWrap(true);
+        padDialogLayout->addWidget(probeInfoLabel);
+
+        auto *scaleInfoLabel = new QLabel(
+            tr("Metadata positions are scaled from the decoder's 40 Msps internal rate to the capture rate (%1 Hz, x%2).")
+                .arg(probe.realRateHz, 0, 'f', 0)
+                .arg(fileLocToRfScale, 0, 'f', 4),
+            &padDialog);
+        scaleInfoLabel->setWordWrap(true);
+        padDialogLayout->addWidget(scaleInfoLabel);
+
+        for (const QString &probeWarning : probe.warnings) {
+            auto *probeWarningLabel = new QLabel(tr("Probe warning: %1").arg(probeWarning), &padDialog);
+            probeWarningLabel->setWordWrap(true);
+            padDialogLayout->addWidget(probeWarningLabel);
+        }
+
+        auto *padExplanationLabel = new QLabel(
+            tr("RF sample positions are block-aligned and can start before the true field boundary,\n"
+               "so the export is padded around the frame:"),
+            &padDialog);
+        padExplanationLabel->setWordWrap(true);
+        padDialogLayout->addWidget(padExplanationLabel);
+
+        auto *paddingFormLayout = new QFormLayout();
+        auto *padBeforeSpinBox = new QSpinBox(&padDialog);
+        padBeforeSpinBox->setRange(0, 60000);
+        padBeforeSpinBox->setSuffix(tr(" ms"));
+        padBeforeSpinBox->setValue(padBeforeMs);
+        auto *padAfterSpinBox = new QSpinBox(&padDialog);
+        padAfterSpinBox->setRange(0, 60000);
+        padAfterSpinBox->setSuffix(tr(" ms"));
+        padAfterSpinBox->setValue(padAfterMs);
+        paddingFormLayout->addRow(tr("Pad before frame:"), padBeforeSpinBox);
+        paddingFormLayout->addRow(tr("Pad after frame:"), padAfterSpinBox);
+        padDialogLayout->addLayout(paddingFormLayout);
+
+        auto *rangeLabel = new QLabel(&padDialog);
+        rangeLabel->setWordWrap(true);
+        padDialogLayout->addWidget(rangeLabel);
+
+        const auto updateRangePreview = [&]() {
+            const qint64 beforeSamples =
+                qRound64((static_cast<double>(padBeforeSpinBox->value()) * probe.realRateHz) / 1000.0);
+            const qint64 afterSamples =
+                qRound64((static_cast<double>(padAfterSpinBox->value()) * probe.realRateHz) / 1000.0);
+            qint64 previewStart = startRfLoc - beforeSamples;
+            if (previewStart < 0) previewStart = 0;
+            qint64 previewEnd = endRfLoc + afterSamples;
+            if (probe.totalSamplesKnown && probe.totalSamples > 0 && previewEnd > probe.totalSamples) {
+                previewEnd = probe.totalSamples;
+            }
+            if (previewEnd < previewStart) previewEnd = previewStart;
+            rangeLabel->setText(tr("Export range: start sample %1, length %2 samples")
+                                    .arg(previewStart)
+                                    .arg(previewEnd - previewStart));
+        };
+        updateRangePreview();
+        connect(padBeforeSpinBox, &QSpinBox::valueChanged, &padDialog, updateRangePreview);
+        connect(padAfterSpinBox, &QSpinBox::valueChanged, &padDialog, updateRangePreview);
+
+        auto *padButtonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &padDialog);
+        connect(padButtonBox, &QDialogButtonBox::accepted, &padDialog, &QDialog::accept);
+        connect(padButtonBox, &QDialogButtonBox::rejected, &padDialog, &QDialog::reject);
+        padDialogLayout->addWidget(padButtonBox);
+
+        padDialog.exec();
+        if (padDialog.result() != QDialog::Accepted) {
+            statusBar()->clearMessage();
+            return;
+        }
+        padBeforeMs = padBeforeSpinBox->value();
+        padAfterMs = padAfterSpinBox->value();
+        configuration.setRfExportPadBeforeMs(padBeforeMs);
+        configuration.setRfExportPadAfterMs(padAfterMs);
+        configuration.writeConfiguration();
+    }
+
+    // Convert the millisecond padding into RF samples using the probed rate.
+    const qint64 padBeforeSamples =
+        qRound64((static_cast<double>(padBeforeMs) * probe.realRateHz) / 1000.0);
+    const qint64 padAfterSamples =
+        qRound64((static_cast<double>(padAfterMs) * probe.realRateHz) / 1000.0);
+    qint64 exportStart = startRfLoc - padBeforeSamples;
+    if (exportStart < 0) exportStart = 0;
+    qint64 exportEnd = endRfLoc + padAfterSamples;
+
+    // Clamp the export range to the probed RF stream length.
+    if (probe.totalSamplesKnown && probe.totalSamples > 0) {
+        if (exportStart >= probe.totalSamples) {
+            const QString message = tr("The padded start sample (%1) is beyond the end of the RF capture (%2 samples).")
+                                        .arg(exportStart)
+                                        .arg(probe.totalSamples);
+            if (interactive) {
+                QMessageBox::warning(this, tr("Export source RF segment"), message);
+            } else {
+                statusBar()->showMessage(message, 5000);
+            }
+            return;
+        }
+        if (exportEnd > probe.totalSamples) {
+            exportEnd = probe.totalSamples;
+        }
+    }
+    const qint64 exportLength = exportEnd - exportStart;
+    if (exportLength <= 0) {
+        const QString message = tr("The computed RF export range for frame %1 is empty\n"
+                                   "(start sample %2, end sample %3).")
+                                    .arg(frameNumber)
+                                    .arg(exportStart)
+                                    .arg(exportEnd);
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+
+    // Hand-off mode: launch the FLAC-Chop GUI with the frame's RF range
+    // pre-loaded as IN/OUT marker positions (real RF samples with --units
+    // samples), so the range can be fine-tuned and chopped interactively.
+    if (launchGuiOnly) {
+        const QStringList guiArguments = {QStringLiteral("--gui"), rfSourcePath,
+                                          QStringLiteral("--in"), QString::number(exportStart),
+                                          QStringLiteral("--out"), QString::number(exportEnd),
+                                          QStringLiteral("--units"), QStringLiteral("samples")};
+        if (QProcess::startDetached(flacChopPath, guiArguments)) {
+            statusBar()->showMessage(tr("Opened RF segment for frame %1 in FLAC-Chop (IN %2, OUT %3 samples).")
+                                         .arg(frameNumber)
+                                         .arg(exportStart)
+                                         .arg(exportEnd), 5000);
+        } else {
+            QMessageBox::warning(this, tr("Export source RF segment"),
+                                 tr("Could not start the FLAC-Chop GUI using:\n%1").arg(flacChopPath));
+        }
+        return;
+    }
+
+    // One export at a time.
+    if (rfExportProcess && rfExportProcess->state() != QProcess::NotRunning) {
+        const QString message = tr("An RF segment export is already running; please wait for it to finish.");
+        if (interactive) {
+            QMessageBox::warning(this, tr("Export source RF segment"), message);
+        } else {
+            statusBar()->showMessage(message, 5000);
+        }
+        return;
+    }
+
+    const QString outputFileName = QStringLiteral("%1__frame_%2_rf.flac")
+                                       .arg(outputBaseNameForCurrentSource(),
+                                            QString::number(frameNumber).rightJustified(6, QLatin1Char('0')));
+    rfExportOutputPath = QDir(outputRootDirectoryForCurrentSource()).filePath(outputFileName);
+    rfExportOutputTail.clear();
+
+    if (!rfExportProcess) {
+        rfExportProcess = new QProcess(this);
+        connect(rfExportProcess, &QProcess::finished, this, &MainWindow::handleRfExportFinished);
+        connect(rfExportProcess, &QProcess::errorOccurred, this, &MainWindow::handleRfExportError);
+        connect(rfExportProcess, &QProcess::readyReadStandardOutput, this, &MainWindow::handleRfExportOutput);
+        connect(rfExportProcess, &QProcess::readyReadStandardError, this, &MainWindow::handleRfExportOutput);
+    }
+
+    // Background chop: flac-chop <src.flac> <out.flac> <start> <len> --units samples
+    statusBar()->showMessage(tr("Exporting RF segment for frame %1 (sample %2, %3 samples)...")
+                                 .arg(frameNumber)
+                                 .arg(exportStart)
+                                 .arg(exportLength), 0);
+    rfExportProcess->start(flacChopPath, {rfSourcePath, rfExportOutputPath,
+                                          QString::number(exportStart), QString::number(exportLength),
+                                          QStringLiteral("--units"), QStringLiteral("samples")});
+
+    rfExportProgressDialog = new QProgressDialog(tr("Exporting RF segment for frame %1...").arg(frameNumber),
+                                                 tr("Cancel"), 0, 0, this);
+    rfExportProgressDialog->setWindowTitle(tr("Export source RF segment"));
+    rfExportProgressDialog->setWindowModality(Qt::WindowModal);
+    rfExportProgressDialog->setMinimumDuration(0);
+    rfExportProgressDialog->setAutoClose(false);
+    rfExportProgressDialog->setAutoReset(false);
+    connect(rfExportProgressDialog, &QProgressDialog::canceled, this, [this]() {
+        if (rfExportProcess && rfExportProcess->state() != QProcess::NotRunning) {
+            statusBar()->showMessage(tr("Cancelling RF segment export..."), 3000);
+            rfExportProcess->kill();
+        }
+    });
+    rfExportProgressDialog->show();
+}
+
+void MainWindow::handleRfExportFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    if (rfExportProgressDialog) {
+        rfExportProgressDialog->reset();
+        rfExportProgressDialog->deleteLater();
+        rfExportProgressDialog = nullptr;
+    }
+
+    const bool exportSucceeded = (exitStatus == QProcess::NormalExit && exitCode == 0);
+    if (exportSucceeded) {
+        statusBar()->showMessage(tr("RF segment export complete."), 5000);
+        QMessageBox::information(this, tr("Export complete"),
+                                 tr("RF segment exported to:\n%1").arg(rfExportOutputPath));
+    } else {
+        statusBar()->showMessage(tr("RF segment export failed."), 5000);
+        QMessageBox::warning(this, tr("Export failed"),
+                             tr("FLAC-Chop failed (exit code %1).\n\nOutput:\n%2")
+                                 .arg(exitCode)
+                                 .arg(rfExportOutputTail.isEmpty() ? tr("(no output)") : rfExportOutputTail));
+    }
+}
+
+void MainWindow::handleRfExportError(QProcess::ProcessError processError)
+{
+    // Crashed is always followed by finished() with a non-normal exit status,
+    // and other errors may also still be followed by finished(); report only
+    // FailedToStart here (no finished() signal arrives in that case).
+    if (processError != QProcess::FailedToStart) {
+        return;
+    }
+
+    if (rfExportProgressDialog) {
+        rfExportProgressDialog->reset();
+        rfExportProgressDialog->deleteLater();
+        rfExportProgressDialog = nullptr;
+    }
+
+    statusBar()->showMessage(tr("RF segment export failed."), 5000);
+    QMessageBox::warning(this, tr("Export failed"),
+                         tr("FLAC-Chop could not be started.\n\nCheck the configured FLAC-Chop path and try again."));
+}
+
+// Accumulate FLAC-Chop's output (both channels) for failure diagnostics,
+// keeping only the tail so long exports cannot grow the buffer unboundedly.
+void MainWindow::handleRfExportOutput()
+{
+    if (!rfExportProcess) {
+        return;
+    }
+
+    rfExportOutputTail += QString::fromUtf8(rfExportProcess->readAllStandardOutput());
+    rfExportOutputTail += QString::fromUtf8(rfExportProcess->readAllStandardError());
+    if (rfExportOutputTail.size() > 4000) {
+        rfExportOutputTail.remove(0, rfExportOutputTail.size() - 4000);
+    }
 }
 
 // Zoom in (menu, shortcut and the media bar's zoom-in button)

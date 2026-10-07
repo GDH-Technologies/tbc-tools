@@ -87,12 +87,13 @@ Per-plugin fields:
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `id` | string | yes | Stable plugin id, e.g. `tbc-tools.cuda-runtime`. Used as the install subdirectory name and the routing key. Must be unique within the catalog. |
+| `id` | string | yes | Stable plugin id, e.g. `tbc-tools.cuda-runtime`. Used as the install subdirectory name and the routing key. Must be unique within the catalog. Per-platform generic plugins carry the platform in the id (e.g. `tbc-tools.cuda-lite-linux-x86_64`). |
 | `display_name` | string | yes | Shown in the plugin list. |
 | `description` | string | yes | Shown in the details panel. |
 | `category` | string | yes | Grouping label, e.g. `GPU acceleration`. |
 | `backend` | string | yes | One of `cuda-runtime`, `generic`. Determines which installer handles the plugin. |
 | `homepage` | string (URL) | no | Optional link for more info. |
+| `platforms` | array of string | no | Optional platform gate: entries like `linux-x86_64` / `windows-x86_64` (`<platform>-<arch>` as reported by the manager). Entries that declare a non-empty list are hidden on other platforms; omit (or leave empty) to show everywhere. |
 | `version` | string | `generic` only | The catalog-advertised version of this plugin. Used for update detection. |
 | `package_url` | string (URL) | `generic` only | Direct download URL for the archive (`.zip`/`.tar.gz`/`.tgz`). |
 | `files` | array | `generic` only | Per-file manifest for SHA-256 verification (see below). |
@@ -330,6 +331,42 @@ about its on-disk layout changes.
 - The catalog's `package_url` is taken as-is from the remote catalog;
   maintainers must only publish URLs they control over HTTPS. (Future
   hardening: pin allowed URL hosts in the catalog.)
+
+## Teletext GPU Runtime (lite) plugin (`tbc-tools.cuda-lite-*`)
+
+GPU-accelerated teletext deconvolution (vhs-teletext) is an **opt-in generic
+plugin** published per platform:
+
+- `tbc-tools.cuda-lite-linux-x86_64` — pyopencl manylinux wheels (bundled OpenCL
+  ICD loader) for system Pythons cp310–cp313 + the pure-Python deps
+  (pytools/platformdirs/typing_extensions/siphash24). ~2 MB. numpy is **not**
+  bundled: the teletext dependency probe already requires it.
+- `tbc-tools.cuda-lite-windows-x86_64` — Python embeddable distribution
+  (its `._pth` removed so `PYTHONPATH` works) + the pyopencl win_amd64 wheel
+  closure including numpy. ~24 MB.
+
+Both are `generic`-backend entries: download → extract → per-file SHA-256
+verify from the catalog `files[]`. The OpenCL ICD (`/etc/OpenCL/vendors`) comes
+from the user's GPU driver (NVIDIA/AMD/Intel); the wheel bundles only the ICD
+*loader*.
+
+Runtime integration (`src/tbc-process-vbi/teletextintegration.cpp`):
+
+1. `resolveCudaLitePluginDirectory()` looks for
+   `plugins/tbc-tools.cuda-lite-<platform>-<arch>` under the shared plugins
+   root and requires a `site-packages` subdir.
+2. When found, its `site-packages` is prepended to the `PYTHONPATH` passed to
+   the teletext Python subprocess, and a plugin-bundled interpreter
+   (`python/python.exe` on Windows) is preferred over the system Python.
+3. With pyopencl usable and no pycuda, the deconvolution uses the OpenCL-first
+   backend ordering (skipping the guaranteed-failed CUDA attempt). Existing
+   `TELETEXT_PREFER_OPENCL` / `TELETEXT_FORCE_CPU` / `TELETEXT_PYTHON`
+   overrides still win.
+
+Portable **pycuda** is not shipped: pycuda publishes no Linux wheels
+(source-only, needs nvcc at install time). Inside `nix develop` the flake
+provides pycuda/pyopencl/pocl directly, so the dev-shell behaviour is
+unchanged.
 
 ## Publishing / adding a plugin
 

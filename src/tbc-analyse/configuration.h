@@ -131,6 +131,18 @@ public:
     void setUiScaleFactor(double uiScaleFactor);
     double getUiScaleFactor(void);
 
+    // Get and set methods - RF segment export (FLAC-Chop)
+    void setRfExportFlacChopPath(QString flacChopPath);
+    QString getRfExportFlacChopPath(void);
+    void setRfExportSourcePath(QString sourcePath);
+    QString getRfExportSourcePath(void);
+    void setRfExportPadBeforeMs(qint32 padBeforeMs);
+    qint32 getRfExportPadBeforeMs(void);
+    void setRfExportPadAfterMs(qint32 padAfterMs);
+    qint32 getRfExportPadAfterMs(void);
+    void setSaveAllAlsoExportRf(bool saveAllAlsoExportRf);
+    bool getSaveAllAlsoExportRf(void);
+
     // Get and set methods - update checker
     void setUpdateCheckEnabled(bool updateCheckEnabled);
     bool getUpdateCheckEnabled(void);
@@ -230,6 +242,15 @@ private:
         QString installPath;              // Absolute path where the plugin DLLs/SOs were installed
     };
 
+    // RF segment export options (FLAC-Chop integration, issue #29)
+    struct RfExport {
+        QString flacChopPath;     // Persisted FLAC-Chop binary path (empty = auto-resolve)
+        QString sourcePath;       // RF capture remembered from the last successful export (empty = discover)
+        qint32 padBeforeMs;       // Padding before the frame's first field (ms)
+        qint32 padAfterMs;        // Padding after the frame's end boundary (ms)
+        bool saveAllAlsoExportRf; // "Also export source RF segment" checkbox in save-all-PNGs
+    };
+
     // Overall settings structure
     struct Settings {
         qint32 version;
@@ -238,6 +259,7 @@ private:
         ViewOptions viewOptions;
         UpdateCheck updateCheck;
         CudaPlugin cudaPlugin;
+        RfExport rfExport;
         VbiProcessingOptions vbiProcessing;
         FrameSnapshot::Options frameSnapshot;
         SlideshowExtractOptions slideshowExtract;

@@ -13,6 +13,8 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QProcess>
+#include <QProgressDialog>
 #include <QtDebug>
 #include <QStandardPaths>
 #include <QDir>
@@ -115,6 +117,8 @@ private slots:
     void on_actionExtract_slideshow_stills_triggered();
     void saveAllModesAsPngs();
     void copyCurrentDisplayToClipboard();
+    void on_actionExport_source_RF_segment_for_frame_triggered();
+    void on_actionOpen_frame_RF_segment_in_FlacChop_triggered();
     void on_actionZoom_In_triggered();
     void on_actionZoom_Out_triggered();
     void on_actionZoom_1x_triggered();
@@ -183,6 +187,11 @@ private slots:
     void onSourceLoaded(bool success);
     void onSourceSaved(bool success);
     void onAsyncFrameRenderFinished();
+
+    // RF segment export (FLAC-Chop) background process handlers
+    void handleRfExportFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void handleRfExportError(QProcess::ProcessError processError);
+    void handleRfExportOutput();
 	
 	// UI handler
 	void resize_on_aspect();
@@ -411,12 +420,33 @@ private:
     void processPendingSourceOpenRequest();
     bool runExternalToolWithProgress(const QString &program, const QStringList &arguments,
                                      const QString &toolDisplayName, QString *errorMessage);
+
+    // RF segment export via FLAC-Chop (issue #29). Resolves the FLAC-Chop
+    // binary and the source RF FLAC capture, probes the capture for its real
+    // sample rate and length, converts the current frame's metadata fileLoc
+    // range into a padded RF sample range (fileLoc is scaled from the decode
+    // chain's fixed 40 Msps internal domain to the probed real_rate_hz, and
+    // the ms padding is converted with the same probed rate), then chops in
+    // the background via QProcess.
+    struct RfExportProbeResult {
+        bool ok = false;
+        double realRateHz = -1.0;
+        qint64 totalSamples = -1;
+        bool totalSamplesKnown = false;
+        bool isRf = false;
+        QStringList warnings;
+        QString errorString;
+    };
+    RfExportProbeResult probeRfSource(const QString &flacChopPath, const QString &rfSourcePath);
+    void runRfSegmentExport(bool interactive, bool launchGuiOnly = false);
     void queueAnalysisRefreshPreservingUserState(const QString &processedInputFile);
     UiStateSnapshot captureUiStateSnapshot() const;
     void applyUiStateSnapshot(const UiStateSnapshot &snapshot);
     QActionGroup *themesActionGroup = nullptr;
     QString themeChoice;
     QAction *saveAllModesPngAction = nullptr;
+    QAction *exportSourceRfSegmentAction = nullptr;
+    QAction *openRfInFlacChopGuiAction = nullptr;
     QAction *copyCurrentDisplayAction = nullptr;
     QAction *notesViewerAction = nullptr;
     QAction *skipBySegmentsAction = nullptr;
@@ -433,6 +463,10 @@ private:
     // Runs once a save started by maybeSave() has succeeded
     std::function<void()> afterSaveAction;
     bool sourceOperationInProgress = false;
+    QProcess *rfExportProcess = nullptr;
+    QProgressDialog *rfExportProgressDialog = nullptr;
+    QString rfExportOutputPath;
+    QString rfExportOutputTail;
     void updateTimelineMarkers();
     void updateNotesViewerState();
     void setInPointAtCurrentFrame();
