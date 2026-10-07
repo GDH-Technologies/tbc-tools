@@ -198,7 +198,7 @@ STALE_SYSTEM_MIME_FILES=(
     /usr/local/share/mime/packages/application-video-tbc.xml
 )
 
-APP_ICON_SIZES=(16 32 64 128)
+APP_ICON_SIZES=(16 32 64 128 256)
 
 # Assets that PRE-EXISTED this tool and were adopted byte-identically: the RF
 # MIME package, the RF mimetype icons and the decode-launcher app icon were all
