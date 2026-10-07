@@ -1218,7 +1218,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     ui->menuFrameCapture->insertSeparator(ui->actionExtract_slideshow_stills);
     exportSourceRfSegmentAction = new QAction(tr("Export source RF segment for frame..."), this);
     connect(exportSourceRfSegmentAction, &QAction::triggered,
-            this, &MainWindow::on_actionExport_source_RF_segment_for_frame_triggered);
+            this, &MainWindow::exportSourceRfSegmentForFrame);
     if (ui->menuFile) {
         if (ui->actionExit) {
             ui->menuFile->insertAction(ui->actionExit, exportSourceRfSegmentAction);
@@ -1228,7 +1228,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     }
     openRfInFlacChopGuiAction = new QAction(tr("Open frame RF segment in FLAC-Chop..."), this);
     connect(openRfInFlacChopGuiAction, &QAction::triggered,
-            this, &MainWindow::on_actionOpen_frame_RF_segment_in_FlacChop_triggered);
+            this, &MainWindow::openFrameRfSegmentInFlacChop);
     if (ui->menuFile) {
         if (ui->actionExit) {
             ui->menuFile->insertAction(ui->actionExit, openRfInFlacChopGuiAction);
@@ -6905,14 +6905,14 @@ void MainWindow::saveAllModesAsPngs()
 // RF segment export via FLAC-Chop (issue #29) ------------------------------------------------------------------------
 
 // Menu option: export the source RF segment for the currently selected frame
-void MainWindow::on_actionExport_source_RF_segment_for_frame_triggered()
+void MainWindow::exportSourceRfSegmentForFrame()
 {
     runRfSegmentExport(true);
 }
 
 // Menu option: open the frame's RF range in the FLAC-Chop GUI with IN/OUT
 // markers pre-set, for interactive fine-tuning before chopping.
-void MainWindow::on_actionOpen_frame_RF_segment_in_FlacChop_triggered()
+void MainWindow::openFrameRfSegmentInFlacChop()
 {
     runRfSegmentExport(true, true);
 }

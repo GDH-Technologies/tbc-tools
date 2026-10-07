@@ -117,8 +117,8 @@ private slots:
     void on_actionExtract_slideshow_stills_triggered();
     void saveAllModesAsPngs();
     void copyCurrentDisplayToClipboard();
-    void on_actionExport_source_RF_segment_for_frame_triggered();
-    void on_actionOpen_frame_RF_segment_in_FlacChop_triggered();
+    void exportSourceRfSegmentForFrame();
+    void openFrameRfSegmentInFlacChop();
     void on_actionZoom_In_triggered();
     void on_actionZoom_Out_triggered();
     void on_actionZoom_1x_triggered();
