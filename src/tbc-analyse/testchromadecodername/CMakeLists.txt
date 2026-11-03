@@ -5,6 +5,9 @@ add_executable(testchromadecodername
 
 target_include_directories(testchromadecodername PRIVATE
     ..
+    # tbc-chroma keeps FFTW's include path private, and its headers include
+    # fftw3.h; tbc-analyse adds the path the same way
+    ${FFTW_INCLUDE_DIR}
 )
 
 target_link_libraries(testchromadecodername PRIVATE
