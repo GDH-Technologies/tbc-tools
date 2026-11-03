@@ -534,9 +534,13 @@ int main(int argc, char *argv[])
             return failTest(QStringLiteral("Workspace dir is not tbc-analyse-aaa prefixed: %1")
                                 .arg(workspaceProbe.path()));
         }
-        if (workspaceProbe.path().startsWith(systemTempLocation)) {
-            return failTest(QStringLiteral("Workspace dir landed under the system temp location: %1")
-                                .arg(workspaceProbe.path()));
+        // Inside the JSON directory's temp root, not merely outside system
+        // temp: in a Nix build TMPDIR is the build directory, so the fixtures
+        // (and every correct workspace) sit under the system temp location.
+        if (!QDir::cleanPath(workspaceProbe.path())
+                 .startsWith(QDir::cleanPath(writableTempRoot) + QLatin1Char('/'))) {
+            return failTest(QStringLiteral("Workspace dir is not under the JSON directory's temp root (%1): %2")
+                                .arg(writableTempRoot, workspaceProbe.path()));
         }
 
 #if !defined(Q_OS_WIN)
