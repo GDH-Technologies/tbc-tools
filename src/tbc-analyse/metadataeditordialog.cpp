@@ -128,6 +128,7 @@ void MetadataEditorDialog::populateChromaDecoderCombo(VideoSystem system)
         ui->chromaDecoderComboBox->addItem(tr("ntsc1d"), QStringLiteral("ntsc1d"));
         ui->chromaDecoderComboBox->addItem(tr("ntsc2d"), QStringLiteral("ntsc2d"));
         ui->chromaDecoderComboBox->addItem(tr("ntsc3d"), QStringLiteral("ntsc3d"));
+        ui->chromaDecoderComboBox->addItem(tr("ntsc3dnoadapt"), QStringLiteral("ntsc3dnoadapt"));
         ui->chromaDecoderComboBox->addItem(tr("nntransform3d"), QStringLiteral("nntransform3d"));
     }
 }

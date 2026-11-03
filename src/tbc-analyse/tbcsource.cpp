@@ -2124,6 +2124,14 @@ void TbcSource::applyChromaSettingsFromMetadata(const TbcMetaData::VideoParamete
             } else if (decoder == "ntsc3d") {
                 ntscConfiguration.dimensions = 3;
                 ntscConfiguration.nnTransform3D = false;
+            } else if (decoder == "ntsc3dnoadapt") {
+                // No-adaptation 3D: adaptive is expressed through the decoder
+                // name (the export passes -f explicitly, which makes
+                // tbc-chroma-decoder ignore the metadata ntscAdaptive field),
+                // so the decoder string itself must switch adaptation off.
+                ntscConfiguration.dimensions = 3;
+                ntscConfiguration.nnTransform3D = false;
+                ntscConfiguration.adaptive = false;
             } else if (decoder == "nntransform3d" || decoder == "nntsc3d") {
                 ntscConfiguration.dimensions = 3;
                 ntscConfiguration.nnTransform3D = true;
@@ -2180,8 +2188,11 @@ QString TbcSource::chromaDecoderName(VideoSystem system,
         case 2:
             return QStringLiteral("ntsc2d");
         case 3:
-            return ntscConfig.nnTransform3D ? QStringLiteral("nntransform3d")
-                                            : QStringLiteral("ntsc3d");
+            if (ntscConfig.nnTransform3D) {
+                return QStringLiteral("nntransform3d");
+            }
+            return ntscConfig.adaptive ? QStringLiteral("ntsc3d")
+                                       : QStringLiteral("ntsc3dnoadapt");
         default:
             break;
         }
@@ -2205,6 +2216,14 @@ TbcMetaData::VideoParameters TbcSource::getVideoParametersWithViewChroma() const
     TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
     if (videoParameters.chromaDecoder.isEmpty()) {
         videoParameters.chromaDecoder = getChromaDecoderName();
+    }
+    // The export names the decoder with -f, and tbc-chroma-decoder then ignores
+    // ntscAdaptive, so adaptive off has to travel in the name. Metadata saved
+    // before the name carried it, or edited in the metadata editor, still says
+    // ntsc3d here.
+    if (videoParameters.system == NTSC && videoParameters.ntscAdaptive == 0
+        && videoParameters.chromaDecoder.trimmed().toLower() == QLatin1String("ntsc3d")) {
+        videoParameters.chromaDecoder = QStringLiteral("ntsc3dnoadapt");
     }
     if (videoParameters.chromaGain < 0.0) {
         videoParameters.chromaGain = palConfiguration.chromaGain;
