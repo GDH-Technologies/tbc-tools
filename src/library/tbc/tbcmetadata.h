@@ -329,7 +329,7 @@ public:
         void write(JsonWriter &writer) const;
     };
 
-    // A recording segment: the editable layer over the decoder's records.
+    // A segment: the editable layer over the decoder's records.
     // Derived by the tbc-tools segments library (source "derived") or edited by
     // an operator (source "user"). Field numbers are 0-based, half-open.
     struct Segment {

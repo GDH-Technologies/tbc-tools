@@ -2,7 +2,7 @@
 
     segmentchapters.h
 
-    tbc-segments - Recording segments as export chapters
+    tbc-segments - Segments as export chapters
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -28,11 +28,11 @@
 #include <QString>
 #include <QVector>
 
-#include "restartmarks.h"
+#include "shotboundaries.h"
 #include "tbcmetadata.h"
 
 /*!
-    Which stored recording segments become chapters.
+    Which stored segments become chapters.
 */
 enum class FfmetadataSegmentMode {
     EnabledSegments,   // one chapter per enabled stored segment (the default)
@@ -49,24 +49,38 @@ struct SegmentChapter {
 
 /*!
     The stored segments selected by mode, in field order, as chapters over the
-    whole file (the caller clips them to its export range). A segment without
+    whole file (the caller limits them to its export range). A segment without
     a title is "Segment <id>". Empty when the metadata holds no segments or
     mode is NoSegments: the caller then falls back to its own chapters.
 */
 QVector<SegmentChapter> segmentChapters(const TbcMetaData &metaData, FfmetadataSegmentMode mode);
 
-/*!
-    Cut chapters at camcorder restarts: every enabled mark that does not split
-    (a split mark is a segment boundary, so a chapter boundary already) and
-    falls strictly inside a chapter cuts it. The pieces of a cut chapter are
-    titled "<title> · take 1", "· take 2"...; uncut chapters are unchanged.
-*/
-QVector<SegmentChapter> cutChaptersAtRestarts(const QVector<SegmentChapter> &chapters, const QVector<SegmentMark> &marks);
+// Glossary: chapters by (docs/Tools/tbc-segments-glossary.md#chapters-by)
+enum class ChaptersBy {
+    Segment,   // one chapter per selected segment (the default)
+    Scene,     // one chapter per scene inside each content span
+    Shot       // one chapter per shot inside each content span
+};
+
+// "segment" / "scene" / "shot", as on the command line; an empty name is
+// Segment. Anything else is Segment too, with *ok set false when ok is given.
+ChaptersBy chaptersByFromName(const QString &name, bool *ok = nullptr);
 
 /*!
-    The restart marks an export uses: those stored in the .tbc.db beside
-    metadataPath, else a detection over the whole file.
+    Chapters by scene or by shot: each content span chapter is replaced by its
+    scenes or shots (sceneshots.h), titled with their titles and filtered by
+    their own enabled flags under EnabledSegments. Other chapters (noise,
+    blank, unknown under AllSegments) stay as they are. by = Segment returns
+    the chapters unchanged.
 */
-QVector<SegmentMark> restartMarksForExport(const TbcMetaData &metaData, const QString &metadataPath);
+QVector<SegmentChapter> chaptersBy(const TbcMetaData &metaData, FfmetadataSegmentMode mode, ChaptersBy by,
+                                   const QVector<ShotBoundary> &boundaries);
+
+/*!
+    The shot boundaries an export uses: those stored in the .tbc.db beside
+    metadataPath, else those in its sidecar (ShotBoundaryStore::writeSidecar,
+    for a snapshot with no .tbc.db), else a detection over the whole file.
+*/
+QVector<ShotBoundary> shotBoundariesForExport(const TbcMetaData &metaData, const QString &metadataPath);
 
 #endif // SEGMENTCHAPTERS_H

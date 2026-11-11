@@ -19,7 +19,6 @@
 #include <QStandardPaths>
 #include <QWidget>
 
-#include "segmentpreferences.h"
 #include "segmentscontroller.h"
 #endif
 
@@ -36,7 +35,7 @@
 #if !defined(Q_OS_WIN)
 namespace {
 
-TbcMetaData::Segment segment(qint32 id, qint32 startField, qint32 endFieldExclusive, const QString &kind = QStringLiteral("clip"),
+TbcMetaData::Segment segment(qint32 id, qint32 startField, qint32 endFieldExclusive, const QString &kind = contentSpanKind(),
                              const QString &source = QStringLiteral("derived"))
 {
     TbcMetaData::Segment result;
@@ -45,7 +44,7 @@ TbcMetaData::Segment segment(qint32 id, qint32 startField, qint32 endFieldExclus
     result.endFieldExclusive = endFieldExclusive;
     result.kind = kind;
     result.source = source;
-    result.enabled = kind == QLatin1String("clip");
+    result.enabled = kind == contentSpanKind();
     return result;
 }
 
@@ -54,7 +53,7 @@ TbcMetaData::Segment segment(qint32 id, qint32 startField, qint32 endFieldExclus
 struct FakeHost {
     QVector<TbcMetaData::Segment> segments;
     QVector<TbcMetaData::Segment> derived;
-    QVector<SegmentMark> detected;      // what a fresh detection finds
+    QVector<ShotBoundary> detected;     // what a fresh detection finds
     qint32 currentFrame = 1;
     qint32 edits = 0;
     qint32 inPoint = -1;
@@ -72,13 +71,11 @@ struct FakeHost {
         h.segments = [this]() -> const QVector<TbcMetaData::Segment> & { return segments; };
         h.setSegments = [this](const QVector<TbcMetaData::Segment> &s) { segments = s; };
         // The real layer rule on fake data: merge the detection with the
-        // marks in hand, then cut the derived clips at the marks that split
-        h.deriveLayer = [this](const SegmentsThresholds &t, const QVector<SegmentMark> &stored) {
-            QVector<SegmentMark> fresh = detected;
-            for (SegmentMark &mark : fresh) mark.split = t.splitAtRestarts;
+        // boundaries in hand; the segments are the derived ones
+        h.deriveLayer = [this](const SegmentsThresholds &, const QVector<ShotBoundary> &stored) {
             SegmentLayer layer;
-            layer.marks = mergeMarks(stored, fresh);
-            layer.segments = splitSegmentsAtMarks(derived, layer.marks);
+            layer.shotBoundaries = mergeShotBoundaries(stored, detected);
+            layer.segments = derived;
             return layer;
         };
         h.metadataPath = []() { return QString(); };
@@ -107,7 +104,7 @@ struct FakeHost {
     }
 };
 
-// Clip [0,60), noise [60,80), clip [80,200)
+// Content span [0,60), noise [60,80), content span [80,200)
 QVector<TbcMetaData::Segment> threeSegments()
 {
     return {segment(1, 0, 60), segment(2, 60, 80, QStringLiteral("noise")), segment(3, 80, 200)};
@@ -159,21 +156,21 @@ void testTimelineMarkers()
     CHECK(positions == QVector<qint32>({31, 41}));
     CHECK(tooltips.size() == 2);
     CHECK(tooltips.at(1).contains(QStringLiteral("[disabled]")));
-    // Tints: the noise span and the disabled clip
+    // Tints: the noise span and the disabled content span
     CHECK(spans.size() == 2);
     CHECK(spans.at(0).startPosition == 31 && spans.at(0).endPosition == 40);
     CHECK(spans.at(1).startPosition == 41 && spans.at(1).endPosition == 100);
 }
 
-void testSplitAndSetInOut()
+void testCutAndSetInOut()
 {
     QWidget window;
     FakeHost host;
     host.segments = threeSegments();
     SegmentsController controller(&window, host.hooks());
     QString status;
-    CHECK(!controller.splitSegmentAtField(0, &status));          // a segment start is no split
-    CHECK(controller.splitSegmentAtField(100, &status));
+    CHECK(!controller.cutSegmentAtField(0, &status));            // a segment start is no cut
+    CHECK(controller.cutSegmentAtField(100, &status));
     CHECK(host.edits == 1);
     CHECK(host.segments.size() == 4);
     CHECK(host.segments.at(2).endFieldExclusive == 100 && host.segments.at(2).source == QLatin1String("user"));
@@ -190,7 +187,7 @@ void testRederiveKeepsUserSegments()
 {
     QWidget window;
     FakeHost host;
-    host.segments = {segment(1, 0, 60), segment(7, 60, 120, QStringLiteral("clip"), QStringLiteral("user")), segment(3, 120, 200)};
+    host.segments = {segment(1, 0, 60), segment(7, 60, 120, contentSpanKind(), QStringLiteral("user")), segment(3, 120, 200)};
     host.derived = {segment(1, 0, 50), segment(2, 50, 100), segment(3, 100, 200)};
     SegmentsController controller(&window, host.hooks());
     controller.rederiveSegments(SegmentsThresholds());
@@ -211,117 +208,105 @@ void testTimelineMenu()
     QMenu menu;
     const auto handle = controller.addTimelineMenuActions(&menu, 50, QStringLiteral("50"), 98);
     QAction *setInOut = nullptr;
-    QAction *split = nullptr;
+    QAction *cut = nullptr;
     QAction *openViewer = nullptr;
     for (QAction *action : menu.actions()) {
         if (action->text().startsWith(QStringLiteral("Set In/Out From Segment"))) setInOut = action;
-        if (action->text().startsWith(QStringLiteral("Split Segment Here"))) split = action;
+        if (action->text().startsWith(QStringLiteral("Cut Segment Here"))) cut = action;
         if (action->text() == QStringLiteral("Open Segments Viewer...")) openViewer = action;
     }
-    CHECK(setInOut && split && openViewer);
+    CHECK(setInOut && cut && openViewer);
     CHECK(setInOut->text() == QStringLiteral("Set In/Out From Segment 3"));
-    CHECK(split->isEnabled());
+    CHECK(cut->isEnabled());
     QAction unrelated(QStringLiteral("other"));
     CHECK(!handle(&unrelated));
     CHECK(!handle(nullptr));
-    CHECK(handle(split));
+    CHECK(handle(cut));
     CHECK(host.segments.size() == 4 && host.segments.at(3).startField == 98);
 
-    // Without segments: no segment items, only adding a restart mark and the viewer
+    // Without segments: no segment items, only adding a shot boundary and the viewer
     host.segments.clear();
     QMenu empty;
     controller.addTimelineMenuActions(&empty, 1, QStringLiteral("1"), 0);
     CHECK(empty.actions().size() == 2);
-    CHECK(empty.actions().at(0)->text().startsWith(QStringLiteral("Add Restart Mark Here")));
+    CHECK(empty.actions().at(0)->text().startsWith(QStringLiteral("Add Shot Boundary Here")));
     CHECK(empty.actions().at(1)->text() == QStringLiteral("Open Segments Viewer..."));
 }
 
-SegmentMark restartAt(qint32 id, qint32 field)
+ShotBoundary boundaryAt(qint32 id, qint32 field)
 {
-    SegmentMark mark;
-    mark.id = id;
-    mark.field = field;
-    mark.confidence = 0.9;
-    mark.reason = QStringLiteral("matched field pair");
-    return mark;
+    ShotBoundary boundary;
+    boundary.id = id;
+    boundary.field = field;
+    boundary.confidence = 0.9;
+    boundary.reason = QStringLiteral("matched field pair");
+    return boundary;
 }
 
-// Marks: detected at load when none are stored; ticks and chapter-skip stops
-// for the enabled ones; nothing split by default
-void testMarksAtLoad()
+// Shot boundaries: detected at load when none are stored; a tick and a
+// chapter-skip stop each unless rejected; they never change the segments
+void testShotBoundariesAtLoad()
 {
-    SegmentPreferences::setSplitAtRestarts(false);
     QWidget window;
     FakeHost host;
     host.segments = threeSegments();
     host.derived = threeSegments();
-    host.detected = {restartAt(1, 20), restartAt(2, 120)};
+    host.detected = {boundaryAt(1, 20), boundaryAt(2, 120)};
     SegmentsController controller(&window, host.hooks());
     controller.sourceLoaded();
-    CHECK(controller.marks().size() == 2 && !controller.marks().at(0).split);
-    CHECK(host.edits == 0 && host.segments.size() == 3);    // marked, not split
+    CHECK(controller.shotBoundaries().size() == 2 && controller.shotBoundaries().at(0).verdict == QLatin1String("detected"));
+    CHECK(host.edits == 0 && host.segments.size() == 3);
     QVector<qint32> positions;
     QStringList tooltips;
-    controller.restartTicks(&positions, &tooltips);
+    controller.shotBoundaryTicks(&positions, &tooltips);
     CHECK(positions == QVector<qint32>({11, 61}));
     CHECK(tooltips.at(0).contains(QStringLiteral("matched field pair")));
-    // Chapter skip stops at the marks as well as the segment starts
     CHECK(controller.nextSegmentStartFrame(1, 100) == 11);
     CHECK(controller.nextSegmentStartFrame(41, 100) == 61);
     CHECK(controller.previousSegmentStartFrame(61) == 41);
     controller.sourceUnloaded();
-    CHECK(controller.marks().isEmpty());
+    CHECK(controller.shotBoundaries().isEmpty());
 }
 
-// A mark the user splits cuts its clip and becomes a user mark; the global
-// switch splits every derived mark, and leaves user marks alone
-void testSplitMarks()
+// Marking a scene change from the timeline confirms the boundary and makes
+// it the user's; the segments stay as they are (scenes are worked out); a
+// rejected boundary loses its tick; elsewhere the menu adds a boundary
+void testSceneChangeFromMenu()
 {
-    SegmentPreferences::setSplitAtRestarts(false);
     QWidget window;
     FakeHost host;
     host.segments = threeSegments();
     host.derived = threeSegments();
-    host.detected = {restartAt(1, 20), restartAt(2, 120)};
+    host.detected = {boundaryAt(1, 20), boundaryAt(2, 120)};
     SegmentsController controller(&window, host.hooks());
     controller.sourceLoaded();
 
-    // Through the timeline menu at the first mark's frame
     QMenu menu;
     const auto handle = controller.addTimelineMenuActions(&menu, 11, QStringLiteral("11"), 20);
-    QAction *split = nullptr;
+    QAction *markScene = nullptr;
     for (QAction *action : menu.actions()) {
-        if (action->text().startsWith(QStringLiteral("Split At Restart Here"))) split = action;
+        if (action->text().startsWith(QStringLiteral("Mark Scene Change"))) markScene = action;
     }
-    CHECK(split != nullptr);
-    CHECK(handle(split));
-    CHECK(controller.marks().at(0).split && controller.marks().at(0).source == QLatin1String("user"));
-    CHECK(host.segments.size() == 4 && host.segments.at(1).startField == 20 && host.segments.at(1).kind == QLatin1String("clip"));
+    CHECK(markScene != nullptr);
+    CHECK(handle(markScene));
+    const ShotBoundary &first = controller.shotBoundaries().at(0);
+    CHECK(first.sceneChange && first.source == QLatin1String("user") && first.verdict == QLatin1String("confirmed"));
+    CHECK(host.edits == 1 && host.segments.size() == 3);
 
-    // The global switch: the derived mark at 120 splits too; the user's stays as it is
-    controller.setSplitAtRestarts(true);
-    CHECK(SegmentPreferences::splitAtRestarts());
-    CHECK(host.segments.size() == 5);
-    controller.setSplitAtRestarts(false);
-    CHECK(host.segments.size() == 4);            // the user's split stands
-    CHECK(controller.marks().at(0).split && !controller.marks().at(1).split);
-
-    // Dismissing a mark (from the viewer) undoes its split and drops its tick
-    QVector<SegmentMark> edited = controller.marks();
-    edited[0].enabled = false;
-    controller.applyMarks(edited);
-    CHECK(host.segments.size() == 3);
+    QVector<ShotBoundary> edited = controller.shotBoundaries();
+    edited[1].verdict = QStringLiteral("rejected");
+    controller.applyShotBoundaries(edited);
     QVector<qint32> positions;
     QStringList tooltips;
-    controller.restartTicks(&positions, &tooltips);
-    CHECK(positions == QVector<qint32>({61}));
+    controller.shotBoundaryTicks(&positions, &tooltips);
+    CHECK(positions == QVector<qint32>({11}));
+    CHECK(tooltips.at(0).contains(QStringLiteral("scene change")));
 
-    // Somewhere without a mark the menu offers to add one
     QMenu other;
     controller.addTimelineMenuActions(&other, 90, QStringLiteral("90"), 178);
     bool offersAdd = false;
     for (QAction *action : other.actions()) {
-        if (action->text().startsWith(QStringLiteral("Add Restart Mark Here"))) offersAdd = true;
+        if (action->text().startsWith(QStringLiteral("Add Shot Boundary Here"))) offersAdd = true;
     }
     CHECK(offersAdd);
 }
@@ -346,13 +331,11 @@ int main(int argc, char *argv[])
     testLookupsAndReadout();
     testChapterSkipTargets();
     testTimelineMarkers();
-    testSplitAndSetInOut();
+    testCutAndSetInOut();
     testRederiveKeepsUserSegments();
     testTimelineMenu();
-    testMarksAtLoad();
-    testSplitMarks();
-    SegmentPreferences::setSplitAtRestarts(false);
-    SegmentPreferences::setRestartChapters(false);
+    testShotBoundariesAtLoad();
+    testSceneChangeFromMenu();
     std::cout << "testsegmentscontroller: all tests passed\n";
     return 0;
 #endif

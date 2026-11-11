@@ -204,7 +204,7 @@ public:
     qint32 startOfNextChapter(qint32 currentFrameNumber);
     qint32 startOfChapter(qint32 currentFrameNumber);
 
-    // Recording segments: the editable layer of the metadata, and the
+    // Segments: the editable layer of the metadata, and the
     // decoder's evidence behind them. Segments derived at load (from stored
     // decoder events / picture metrics when none were stored) are marked so
     // the GUI can say so; they persist only when the user saves.
@@ -215,7 +215,7 @@ public:
     bool hasSegmentEvidence() const;
     bool getSegmentsDerivedAtLoad() const;
     QVector<TbcMetaData::Segment> deriveSegments(const SegmentsThresholds &thresholds) const;
-    SegmentLayer deriveSegmentLayer(const SegmentsThresholds &thresholds, const QVector<SegmentMark> &storedMarks) const;
+    SegmentLayer deriveSegmentLayer(const SegmentsThresholds &thresholds, const QVector<ShotBoundary> &storedBoundaries) const;
     // Library rules, single-sourced: the frames an export of a segment covers
     // (mixed-frame rule), the frame holding a 0-based field, the 0-based
     // first field of a 1-based frame.

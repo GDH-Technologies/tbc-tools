@@ -78,7 +78,7 @@ tables:
   skipped/duplicated/dropped fields at a seam, a `--resume` seam), keyed by
   the first written field at or after the event. `source` is `decoder` or
   `tbc-segments` (reconstructed).
-- `segment` — the editable recording-segment layer (`start_field`,
+- `segment` — the editable segment layer (`start_field`,
   `end_field_exclusive`, 0-based half-open; `kind` clip/blank/noise/unknown;
   `source` derived/user; `enabled`; title, comment, provenance).
 

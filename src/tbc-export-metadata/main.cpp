@@ -32,6 +32,7 @@
 #include "audacity.h"
 #include "csv.h"
 #include "ffmetadata.h"
+#include "glossary_generated.h"
 #include "segmentsreport.h"
 #include "vitcffmetadata.h"
 #include "closedcaptions.h"
@@ -70,7 +71,7 @@ struct ExportCommandLineOptions {
     QCommandLineOption ffmetadataLengthOption;
     QCommandLineOption ffmetadataAllSegmentsOption;
     QCommandLineOption ffmetadataNoSegmentsOption;
-    QCommandLineOption ffmetadataRestartChaptersOption;
+    QCommandLineOption ffmetadataChaptersByOption;
     QCommandLineOption writeSegmentsJsonOption;
     QCommandLineOption writeClosedCaptionsOption;
 
@@ -122,13 +123,15 @@ struct ExportCommandLineOptions {
                                QCoreApplication::translate("main", "FFMETADATA / segments JSON export frame length"),
                                QCoreApplication::translate("main", "frames")),
         ffmetadataAllSegmentsOption("ffmetadata-all-segments",
-                                    QCoreApplication::translate("main", "Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)")),
+                                    QCoreApplication::translate("main", "Write a chapter for every stored segment, disabled ones included (default: enabled segments only)")),
         ffmetadataNoSegmentsOption("ffmetadata-no-segments",
-                                   QCoreApplication::translate("main", "Ignore stored recording segments; write LaserDisc navigation chapters only")),
-        ffmetadataRestartChaptersOption("ffmetadata-restart-chapters",
-                                        QCoreApplication::translate("main", "Cut each segment's chapter at its camcorder restart marks (one chapter per take)")),
+                                   QCoreApplication::translate("main", "Ignore stored segments; write LaserDisc navigation chapters only")),
+        ffmetadataChaptersByOption("ffmetadata-chapters-by",
+                                   QCoreApplication::translate("main", "Chapters by segment (default), scene or shot. ")
+                                       + Glossary::tooltip(Glossary::Term::ChaptersBy),
+                                   QCoreApplication::translate("main", "segment|scene|shot")),
         writeSegmentsJsonOption("segments-json",
-                                QCoreApplication::translate("main", "Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; '-' for stdout"),
+                                QCoreApplication::translate("main", "Write the segment report (stored or derived segments, events, frame ranges) as JSON; '-' for stdout"),
                                 QCoreApplication::translate("main", "file")),
         writeClosedCaptionsOption("closed-captions",
                                   QCoreApplication::translate("main", "Write closed captions as Scenarist SCC V1.0 format"),
@@ -157,7 +160,7 @@ struct ExportCommandLineOptions {
         parser.addOption(ffmetadataLengthOption);
         parser.addOption(ffmetadataAllSegmentsOption);
         parser.addOption(ffmetadataNoSegmentsOption);
-        parser.addOption(ffmetadataRestartChaptersOption);
+        parser.addOption(ffmetadataChaptersByOption);
         parser.addOption(writeSegmentsJsonOption);
         parser.addOption(writeClosedCaptionsOption);
     }
@@ -296,7 +299,7 @@ int main(int argc, char *argv[])
         initialOptions.exportFfmetadataVitcTimecode = !parser.isSet(options.ffmetadataNoVitcTimecodeOption);
         initialOptions.exportClosedCaptions = parser.isSet(options.writeClosedCaptionsOption);
         initialOptions.exportSegmentsJson = parser.isSet(options.writeSegmentsJsonOption);
-        initialOptions.ffmetadataRestartChapters = parser.isSet(options.ffmetadataRestartChaptersOption);
+        initialOptions.ffmetadataChaptersBy = parser.value(options.ffmetadataChaptersByOption);
         initialOptions.ffmetadataSegmentMode = parser.isSet(options.ffmetadataNoSegmentsOption) ? 2
                                                : parser.isSet(options.ffmetadataAllSegmentsOption) ? 1 : 0;
         parsePositiveOption(parser, options.ffmetadataStartOption, &initialOptions.ffmetadataStart, nullptr);
@@ -466,11 +469,18 @@ int main(int argc, char *argv[])
                                                   : parser.isSet(options.ffmetadataAllSegmentsOption)
                                                       ? FfmetadataSegmentMode::AllSegments
                                                       : FfmetadataSegmentMode::EnabledSegments;
-        const QVector<SegmentMark> restartChapterMarks = parser.isSet(options.ffmetadataRestartChaptersOption)
-                                                             ? restartMarksForExport(metaData, inputFileName)
-                                                             : QVector<SegmentMark>();
+        bool chaptersByOk = true;
+        const ChaptersBy chaptersBy = chaptersByFromName(parser.value(options.ffmetadataChaptersByOption), &chaptersByOk);
+        if (!chaptersByOk) {
+            qCritical().noquote() << QStringLiteral("--ffmetadata-chapters-by must be segment, scene or shot, not '%1'")
+                                         .arg(parser.value(options.ffmetadataChaptersByOption));
+            return 1;
+        }
+        const QVector<ShotBoundary> shotBoundaries = chaptersBy == ChaptersBy::Segment
+                                                         ? QVector<ShotBoundary>()
+                                                         : shotBoundariesForExport(metaData, inputFileName);
         if (!writeFfmetadata(metaData, fileName, startFrame, lengthFrames, includeVitcTimecode, segmentMode,
-                             restartChapterMarks)) {
+                             chaptersBy, shotBoundaries)) {
             qCritical() << "Failed to write output file:" << fileName;
             return 1;
         }

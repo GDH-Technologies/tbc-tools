@@ -22,11 +22,11 @@
 
 ************************************************************************/
 
+
 #include "segmentpreferences.h"
 
 #include <QSettings>
 #include <QStandardPaths>
-#include <QString>
 
 namespace {
 
@@ -35,26 +35,22 @@ QString iniPath()
     return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/tbc-analyse.ini");
 }
 
-bool readFlag(const char *key)
-{
-    QSettings settings(iniPath(), QSettings::IniFormat);
-    return settings.value(QStringLiteral("segments/") + QLatin1String(key), false).toBool();
-}
-
-void writeFlag(const char *key, bool value)
-{
-    QSettings settings(iniPath(), QSettings::IniFormat);
-    settings.setValue(QStringLiteral("segments/") + QLatin1String(key), value);
-    settings.sync();
-}
-
 } // namespace
 
 namespace SegmentPreferences {
 
-bool splitAtRestarts() { return readFlag("splitAtRestarts"); }
-void setSplitAtRestarts(bool enabled) { writeFlag("splitAtRestarts", enabled); }
-bool restartChapters() { return readFlag("restartChapters"); }
-void setRestartChapters(bool enabled) { writeFlag("restartChapters", enabled); }
+QString chaptersBy()
+{
+    QSettings settings(iniPath(), QSettings::IniFormat);
+    const QString value = settings.value(QStringLiteral("segments/chaptersBy"), QStringLiteral("segment")).toString();
+    return (value == QLatin1String("scene") || value == QLatin1String("shot")) ? value : QStringLiteral("segment");
+}
+
+void setChaptersBy(const QString &chaptersBy)
+{
+    QSettings settings(iniPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("segments/chaptersBy"), chaptersBy);
+    settings.sync();
+}
 
 } // namespace SegmentPreferences

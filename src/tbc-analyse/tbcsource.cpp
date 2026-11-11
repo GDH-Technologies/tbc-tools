@@ -1803,7 +1803,7 @@ qint32 TbcSource::startOfChapter(qint32 currentFrameNumber)
     return 1;
 }
 
-// Recording segments --------------------------------------------------------------------------------------------------
+// Segments --------------------------------------------------------------------------------------------------
 
 const QVector<TbcMetaData::Segment> &TbcSource::getSegments() const
 {
@@ -1841,9 +1841,9 @@ QVector<TbcMetaData::Segment> TbcSource::deriveSegments(const SegmentsThresholds
     return deriveSegmentsForFile(metaData, thresholds, QStringLiteral("tbc-analyse"));
 }
 
-SegmentLayer TbcSource::deriveSegmentLayer(const SegmentsThresholds &thresholds, const QVector<SegmentMark> &storedMarks) const
+SegmentLayer TbcSource::deriveSegmentLayer(const SegmentsThresholds &thresholds, const QVector<ShotBoundary> &storedBoundaries) const
 {
-    return deriveLayerForFile(metaData, thresholds, QStringLiteral("tbc-analyse"), storedMarks);
+    return deriveLayerForFile(metaData, thresholds, QStringLiteral("tbc-analyse"), storedBoundaries);
 }
 
 // Derived-at-load segments (tbc-segments' rule) do not mark the metadata

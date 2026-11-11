@@ -200,11 +200,7 @@
         </widget>
        </item>
        <item>
-        <widget class="QCheckBox" name="ffmetadataRestartChaptersCheckBox">
-         <property name="text">
-          <string>Chapter at each camcorder restart (one chapter per take)</string>
-         </property>
-        </widget>
+        <widget class="QComboBox" name="ffmetadataChaptersByComboBox"/>
        </item>
       </layout>
      </item>
