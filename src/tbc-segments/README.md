@@ -82,7 +82,12 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
   -t, --threads <n>           worker threads for the walk (logical CPUs)
   --scene-threshold-ire <x>   same-parity difference marking a scene change (12)
   --noise-threshold-ire <x>   back-porch noise marking snow (6)
-  --blank-luma-ire <x>        active luma at or below which a quiet field is blank (5)
+  --blank-luma-ire <x>        active luma at or below which a quiet field is blank (5),
+                              when its levels have collapsed too (below):
+  --blank-level-dev-ire <x>   blanking this far below, or sync tip this far
+                              above, nominal (5); a dark recorded scene keeps
+                              its levels and stays picture
+  --blank-below-black-ire <x> or active luma below this (-5): no picture at all
   --min-clip-fields <n>       shorter sections are 'unknown', never a clip (10)
   --min-non-clip-run-fields <n>  a noise/blank run this long splits a section (50)
   --force-walk                walk even when metrics are stored
@@ -226,9 +231,18 @@ within a field of a `gap` marks it `decoderConfirmed`.
 ### Segments and frames
 
 Every gapless section becomes one segment, split further at noise or blank
-runs of at least `--min-non-clip-run-fields`. Each piece is classified `noise`
-(mostly noise or no burst), `blank` (mostly black), `unknown` (shorter than
+runs of at least `--min-non-clip-run-fields`. Snow dips under the noise
+threshold on a field or two, so inside a run a gap shorter than
+`--min-clip-fields` counts as part of it. Each piece is classified `noise`
+(mostly noise or no burst), `blank` (mostly blank: dark, quiet and with the
+levels collapsed, see `--blank-level-dev-ire`), `unknown` (shorter than
 `--min-clip-fields`, or mostly sync loss) or `clip`; only clips are enabled.
+Adjacent non-clip pieces then merge into one, across gaps too (the decoder
+resyncs inside snow), as noise or blank by whichever covers more of it; and a
+piece shorter than `--min-clip-fields` between two clips (a one-field section
+left at a resync) joins the following clip, so the boundary stays where it
+started. One unrecorded stretch is therefore one segment, however often the
+snow flickers.
 `startFrame` / `lengthFrames` are the 1-based frame range an export of the
 segment covers (`tbc-video-export --start/--length`), under the mixed-frame
 rule: a frame whose second field starts a segment belongs to the segment that
@@ -242,7 +256,9 @@ metadata in memory: gaps, parity and skipped fields, sync-loss runs, dropout
 storms, a 32-bit rollover round-tripped through JSON, `--start/--length`
 clipping, the RF rate taken from the metadata, decoder-event merging, stored
 picture metrics driving the field-data events, segment derivation and
-classification, the presets, frame containment and segment tiling under the
+classification (a dark scene with normal levels stays picture; snow with
+single-field dips and a resync inside it is one noise segment; a one-field
+section between two clips joins the next), the presets, frame containment and segment tiling under the
 mixed-frame rule, and an exact equivalence of the sections with
 tbc-audio-align's `ExtractGapLessSection` + `TbcJsonFixup` over jittered,
 gapped, backward-stepping and 32-bit-wrapped `fileLoc` series in PAL and NTSC.

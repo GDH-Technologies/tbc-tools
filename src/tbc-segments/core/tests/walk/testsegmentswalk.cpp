@@ -137,8 +137,10 @@ void writeSyntheticTbc(const QString &lumaPath, const QString &chromaPath, qint3
         for (qint32 line = 0; line < kHeight; line++) {
             for (qint32 x = 0; x < kWidth; x++) {
                 double level;
-                if (x < 38) level = -40.0;                       // sync tip
-                else if (x < 135) level = 0.0;                   // porch (burst lives in the chroma file)
+                // Blank tape has no picture and its levels collapse: the sync
+                // tip and the porch both sit near -18 IRE, as on a real decode
+                if (x < 38) level = blank ? -18.0 : -40.0;       // sync tip
+                else if (x < 135) level = blank ? -18.0 : 0.0;   // porch (burst lives in the chroma file)
                 else level = picture;
                 if (noisy) level = -40.0 + 140.0 * rng.generateDouble();
                 lumaField[line * kWidth + x] = ire(level);
