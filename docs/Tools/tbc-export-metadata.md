@@ -37,6 +37,8 @@ Options:
   --ffmetadata-all-segments Write a chapter for every stored recording segment, disabled ones included
                             (default: enabled segments only)
   --ffmetadata-no-segments  Ignore stored recording segments; write LaserDisc navigation chapters only
+  --ffmetadata-restart-chapters  Cut each segment's chapter at its camcorder restart marks
+                            (one chapter per take)
   --segments-json <file>    Write the recording-segment report (stored or derived segments, events,
                             frame ranges) as JSON; '-' for stdout
   --ffmpeg-vitc <file>      Write FFmpeg readvitc filter style VITC text (lavfi.readvitc.*)
@@ -61,10 +63,17 @@ marker is still spliced in. `--ffmetadata-all-segments` includes disabled
 segments; `--ffmetadata-no-segments` restores the navigation-only output. A
 decode without stored segments is unchanged.
 
+`--ffmetadata-restart-chapters` also cuts each segment's chapter at its
+camcorder restart marks (see `docs/Tools/tbc-segments.md`): the pieces are
+titled `<title> · take 1`, `· take 2`... A mark that already splits its clip
+is a segment boundary, so it does not cut twice. The marks are the ones stored
+in the `.tbc.db`, else a detection over the file. Off by default: the MKV keeps
+one chapter per segment.
+
 `--segments-json` writes tbc-segments' report (schema 1) from the metadata
-alone: the stored segments (derived through the library when none are
-stored), the events derived from the field records and any stored picture
-metrics, and each segment's 1-based `startFrame`/`lengthFrames` under the
+alone: the stored segments (derived when none are stored), the events
+derived from the field records and any stored picture metrics, the restart
+marks (stored, else detected), and each segment's 1-based `startFrame`/`lengthFrames` under the
 mixed-frame rule, so a caller can export every segment with
 `tbc-video-export --start/--length` and know the ranges tile the tape. No TBC
 is read. See `docs/Tools/tbc-segments.md`.

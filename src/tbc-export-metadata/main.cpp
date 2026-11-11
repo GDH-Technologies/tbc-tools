@@ -70,6 +70,7 @@ struct ExportCommandLineOptions {
     QCommandLineOption ffmetadataLengthOption;
     QCommandLineOption ffmetadataAllSegmentsOption;
     QCommandLineOption ffmetadataNoSegmentsOption;
+    QCommandLineOption ffmetadataRestartChaptersOption;
     QCommandLineOption writeSegmentsJsonOption;
     QCommandLineOption writeClosedCaptionsOption;
 
@@ -124,6 +125,8 @@ struct ExportCommandLineOptions {
                                     QCoreApplication::translate("main", "Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)")),
         ffmetadataNoSegmentsOption("ffmetadata-no-segments",
                                    QCoreApplication::translate("main", "Ignore stored recording segments; write LaserDisc navigation chapters only")),
+        ffmetadataRestartChaptersOption("ffmetadata-restart-chapters",
+                                        QCoreApplication::translate("main", "Cut each segment's chapter at its camcorder restart marks (one chapter per take)")),
         writeSegmentsJsonOption("segments-json",
                                 QCoreApplication::translate("main", "Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; '-' for stdout"),
                                 QCoreApplication::translate("main", "file")),
@@ -154,6 +157,7 @@ struct ExportCommandLineOptions {
         parser.addOption(ffmetadataLengthOption);
         parser.addOption(ffmetadataAllSegmentsOption);
         parser.addOption(ffmetadataNoSegmentsOption);
+        parser.addOption(ffmetadataRestartChaptersOption);
         parser.addOption(writeSegmentsJsonOption);
         parser.addOption(writeClosedCaptionsOption);
     }
@@ -292,6 +296,7 @@ int main(int argc, char *argv[])
         initialOptions.exportFfmetadataVitcTimecode = !parser.isSet(options.ffmetadataNoVitcTimecodeOption);
         initialOptions.exportClosedCaptions = parser.isSet(options.writeClosedCaptionsOption);
         initialOptions.exportSegmentsJson = parser.isSet(options.writeSegmentsJsonOption);
+        initialOptions.ffmetadataRestartChapters = parser.isSet(options.ffmetadataRestartChaptersOption);
         initialOptions.ffmetadataSegmentMode = parser.isSet(options.ffmetadataNoSegmentsOption) ? 2
                                                : parser.isSet(options.ffmetadataAllSegmentsOption) ? 1 : 0;
         parsePositiveOption(parser, options.ffmetadataStartOption, &initialOptions.ffmetadataStart, nullptr);
@@ -461,7 +466,11 @@ int main(int argc, char *argv[])
                                                   : parser.isSet(options.ffmetadataAllSegmentsOption)
                                                       ? FfmetadataSegmentMode::AllSegments
                                                       : FfmetadataSegmentMode::EnabledSegments;
-        if (!writeFfmetadata(metaData, fileName, startFrame, lengthFrames, includeVitcTimecode, segmentMode)) {
+        const QVector<SegmentMark> restartChapterMarks = parser.isSet(options.ffmetadataRestartChaptersOption)
+                                                             ? restartMarksForExport(metaData, inputFileName)
+                                                             : QVector<SegmentMark>();
+        if (!writeFfmetadata(metaData, fileName, startFrame, lengthFrames, includeVitcTimecode, segmentMode,
+                             restartChapterMarks)) {
             qCritical() << "Failed to write output file:" << fileName;
             return 1;
         }

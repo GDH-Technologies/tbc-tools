@@ -51,6 +51,25 @@ Segments stored in the metadata (by tbc-analyse's Segments viewer or a
 previous `--write-segments`) are reported as they are; the derivation runs only
 when none are stored.
 
+## Camcorder restart marks
+
+A camcorder that stops and starts recording leaves no gap or snow on the tape,
+so the rules above cannot split there. The picture still changes between two
+fields: the same-parity field difference spikes on two adjacent fields, matched,
+with quiet fields either side. tbc-segments marks each such restart inside the
+clips. A photo flash (one bright field, spikes two fields apart) and the
+exposure settling after it are ruled out, and so is a cut on a screen in shot
+(a ramp over two or three fields). Each mark carries a confidence and a reason.
+
+A restart is always marked. It splits its clip into two segments only when its
+split flag is set: off by default, set on new marks by `--split-restarts` or
+tbc-analyse's Split at restarts, or per mark in tbc-analyse's Segments viewer
+(Marks tab). `tbc-export-metadata --ffmetadata-restart-chapters` (and
+tbc-video-export `--export-metadata-restart-chapters`) cut each segment's
+chapter at its marks instead. Marks live in the `.tbc.db`, in this module's
+own `segment_mark` table, and appear in the report as `marks`, `restart` events
+and `counts.restart`. See the module README for the rule and its options.
+
 ## Storing results
 
 `--write` stores walked picture metrics, the RF rate given with
@@ -58,8 +77,9 @@ when none are stored.
 events (`gap`, `skipped_field`, `duplicate_field`, `source: tbc-segments`,
 only when the decoder stored no events of its own) back into the metadata,
 SQLite first: a JSON-only decode gets a `.tbc.db` and the JSON is rewritten as
-a projection. `--write-segments` adds the derived segments when none are
-stored (`--force` replaces derived ones; user segments are always kept). With
+a projection. `--write-segments` adds the derived segments and restart marks when none are
+stored (`--force` replaces derived ones; user segments and marks are always
+kept). With
 metrics stored, later runs never touch the TBC again; `--verify-stored` walks
 it once more and fails above 0.05 IRE of disagreement.
 

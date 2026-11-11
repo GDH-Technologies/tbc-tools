@@ -28,6 +28,7 @@
 #include <QString>
 #include <QVector>
 
+#include "restartmarks.h"
 #include "tbcmetadata.h"
 
 /*!
@@ -53,5 +54,19 @@ struct SegmentChapter {
     mode is NoSegments: the caller then falls back to its own chapters.
 */
 QVector<SegmentChapter> segmentChapters(const TbcMetaData &metaData, FfmetadataSegmentMode mode);
+
+/*!
+    Cut chapters at camcorder restarts: every enabled mark that does not split
+    (a split mark is a segment boundary, so a chapter boundary already) and
+    falls strictly inside a chapter cuts it. The pieces of a cut chapter are
+    titled "<title> · take 1", "· take 2"...; uncut chapters are unchanged.
+*/
+QVector<SegmentChapter> cutChaptersAtRestarts(const QVector<SegmentChapter> &chapters, const QVector<SegmentMark> &marks);
+
+/*!
+    The restart marks an export uses: those stored in the .tbc.db beside
+    metadataPath, else a detection over the whole file.
+*/
+QVector<SegmentMark> restartMarksForExport(const TbcMetaData &metaData, const QString &metadataPath);
 
 #endif // SEGMENTCHAPTERS_H

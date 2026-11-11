@@ -10,6 +10,7 @@
 #include "segmentsviewerdialog.h"
 
 #include <QAbstractItemView>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDoubleSpinBox>
@@ -24,6 +25,7 @@
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <QtMath>
 
@@ -45,7 +47,13 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     infoLabel_->setWordWrap(true);
     mainLayout->addWidget(infoLabel_);
 
+    tabs_ = new QTabWidget(this);
+    auto *segmentsPage = new QWidget(tabs_);
+    auto *segmentsLayout = new QVBoxLayout(segmentsPage);
+    segmentsLayout->setContentsMargins(0, 0, 0, 0);
+
     table_ = new QTableWidget(0, ColCount, this);
+    table_->setObjectName(QStringLiteral("segmentsTable"));
     table_->setHorizontalHeaderLabels({tr("#"), tr("Start"), tr("End"), tr("Frames"), tr("Duration"),
                                        tr("Kind"), tr("Source"), tr("Enabled"), tr("Title"), tr("Comment")});
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -57,7 +65,7 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     }
     table_->horizontalHeader()->setSectionResizeMode(ColTitle, QHeaderView::Stretch);
     table_->horizontalHeader()->setSectionResizeMode(ColComment, QHeaderView::Stretch);
-    mainLayout->addWidget(table_, 1);
+    segmentsLayout->addWidget(table_, 1);
 
     auto *navLayout = new QHBoxLayout();
     goStartButton_ = new QPushButton(tr("Go To Start"), this);
@@ -68,7 +76,7 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
         navLayout->addWidget(button);
     }
     navLayout->addStretch(1);
-    mainLayout->addLayout(navLayout);
+    segmentsLayout->addLayout(navLayout);
 
     auto *editLayout = new QHBoxLayout();
     moveStartButton_ = new QPushButton(tr("Move Start Here"), this);
@@ -81,7 +89,46 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
         editLayout->addWidget(button);
     }
     editLayout->addStretch(1);
-    mainLayout->addLayout(editLayout);
+    segmentsLayout->addLayout(editLayout);
+    tabs_->addTab(segmentsPage, tr("Segments"));
+
+    // Marks: camcorder restarts inside the clips. Always marked; a mark
+    // splits its clip only when its Split box is ticked.
+    auto *marksPage = new QWidget(tabs_);
+    auto *marksLayout = new QVBoxLayout(marksPage);
+    marksLayout->setContentsMargins(0, 0, 0, 0);
+    marksTable_ = new QTableWidget(0, MarkColCount, marksPage);
+    marksTable_->setObjectName(QStringLiteral("marksTable"));
+    marksTable_->setHorizontalHeaderLabels({tr("#"), tr("Time"), tr("Frame"), tr("Kind"), tr("Confidence"), tr("Reason"),
+                                            tr("Source"), tr("Split"), tr("Enabled"), tr("Comment")});
+    marksTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    marksTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    marksTable_->verticalHeader()->setVisible(false);
+    for (int c = 0; c < MarkColCount; ++c) {
+        marksTable_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+    }
+    marksTable_->horizontalHeader()->setSectionResizeMode(MarkColReason, QHeaderView::Stretch);
+    marksTable_->horizontalHeader()->setSectionResizeMode(MarkColComment, QHeaderView::Stretch);
+    marksLayout->addWidget(marksTable_, 1);
+    auto *marksButtons = new QHBoxLayout();
+    markGoButton_ = new QPushButton(tr("Go To Mark"), marksPage);
+    addMarkButton_ = new QPushButton(tr("Add Mark At Current Frame"), marksPage);
+    for (QPushButton *button : {markGoButton_, addMarkButton_}) {
+        button->setAutoDefault(false);
+        marksButtons->addWidget(button);
+    }
+    marksButtons->addStretch(1);
+    splitAtRestartsCheck_ = new QCheckBox(tr("Split at restarts"), marksPage);
+    splitAtRestartsCheck_->setToolTip(tr("Every derived restart mark splits its clip into two segments (a preference: "
+                                         "it also applies to files opened later). Marks you edited keep their own Split."));
+    restartChaptersCheck_ = new QCheckBox(tr("Chapter at each restart in exports"), marksPage);
+    restartChaptersCheck_->setToolTip(tr("Video exports with metadata cut each segment's chapter at its restart marks "
+                                         "(tbc-video-export --export-metadata-restart-chapters)."));
+    marksButtons->addWidget(splitAtRestartsCheck_);
+    marksButtons->addWidget(restartChaptersCheck_);
+    marksLayout->addLayout(marksButtons);
+    tabs_->addTab(marksPage, tr("Marks"));
+    mainLayout->addWidget(tabs_, 1);
 
     auto *deriveLayout = new QGridLayout();
     deriveLayout->addWidget(new QLabel(tr("Re-derive"), this), 0, 0);
@@ -162,9 +209,33 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     connect(presetCombo_, &QComboBox::currentIndexChanged, this, &SegmentsViewerDialog::applyPreset);
     connect(rederiveButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::rederive);
     connect(applyButton_, &QPushButton::clicked, this, [this]() {
-        emit segmentsUpdated(segments_);
-        dirty_ = false;
+        flushUnappliedEdits();
         updateButtons();
+    });
+    connect(marksTable_, &QTableWidget::itemSelectionChanged, this, &SegmentsViewerDialog::updateButtons);
+    connect(marksTable_, &QTableWidget::cellChanged, this, &SegmentsViewerDialog::handleMarkItemChanged);
+    connect(marksTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
+        if (row < 0 || row >= marks_.size() || column == MarkColComment || column == MarkColSplit
+            || column == MarkColEnabled) {
+            return;
+        }
+        emit goToFieldRequested(marks_.at(row).field);
+    });
+    connect(markGoButton_, &QPushButton::clicked, this, [this]() {
+        const int row = selectedMarkRow();
+        if (row >= 0) {
+            emit goToFieldRequested(marks_.at(row).field);
+        }
+    });
+    connect(addMarkButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::addMarkAtCurrentFrame);
+    connect(splitAtRestartsCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (applyingState_) return;
+        flushUnappliedEdits();
+        emit splitAtRestartsToggled(enabled);
+    });
+    connect(restartChaptersCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (applyingState_) return;
+        emit restartChaptersToggled(enabled);
     });
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -200,6 +271,25 @@ void SegmentsViewerDialog::setState(const SegmentsViewerState &state)
         for (int row = 0; row < segments_.size() && row < table_->rowCount(); ++row) {
             refreshRow(row);
         }
+    }
+    if (!marksDirty_) {
+        if (!(state.marks == marks_) || marksTable_->rowCount() != marks_.size()) {
+            marks_ = state.marks;
+            rebuildMarksTable();
+        } else {
+            for (int row = 0; row < marks_.size(); ++row) refreshMarkRow(row);
+        }
+    } else {
+        for (int row = 0; row < marks_.size(); ++row) refreshMarkRow(row);
+    }
+    {
+        const bool wasApplying = applyingState_;
+        applyingState_ = true;
+        const QSignalBlocker splitBlocker(splitAtRestartsCheck_);
+        const QSignalBlocker chaptersBlocker(restartChaptersCheck_);
+        splitAtRestartsCheck_->setChecked(state.splitAtRestarts);
+        restartChaptersCheck_->setChecked(state.restartChapters);
+        applyingState_ = wasApplying;
     }
     updateInfoLabel();
     updateButtons();
@@ -356,7 +446,15 @@ void SegmentsViewerDialog::updateButtons()
     mergeButton_->setEnabled(hasRow && row + 1 < segments_.size());
     deleteButton_->setEnabled(hasRow);
     rederiveButton_->setEnabled(state_.totalFields > 0);
-    applyButton_->setEnabled(dirty_);
+    applyButton_->setEnabled(dirty_ || marksDirty_);
+    if (markGoButton_) {
+        markGoButton_->setEnabled(selectedMarkRow() >= 0);
+        bool canAdd = hasCurrent;
+        for (const SegmentMark &mark : marks_) {
+            if (qAbs(mark.field - state_.currentFirstField) <= 2) canAdd = false;
+        }
+        addMarkButton_->setEnabled(canAdd);
+    }
     const bool custom = presetCombo_->currentIndex() == 3;
     minClipFieldsSpin_->setEnabled(custom);
     minNonClipRunSpin_->setEnabled(custom);
@@ -385,7 +483,16 @@ void SegmentsViewerDialog::updateInfoLabel()
         if (state_.derivedAtLoad) {
             text += tr(" Derived when the file was opened; Save Metadata stores them.");
         }
-        if (dirty_) {
+        if (!marks_.isEmpty()) {
+            qint32 enabledMarks = 0, splitMarks = 0;
+            for (const SegmentMark &mark : marks_) {
+                if (!mark.enabled) continue;
+                enabledMarks++;
+                splitMarks += mark.split ? 1 : 0;
+            }
+            text += tr(" %1 restart marks (%2 split).").arg(enabledMarks).arg(splitMarks);
+        }
+        if (dirty_ || marksDirty_) {
             text += tr(" Unapplied edits.");
         }
     }
@@ -615,9 +722,166 @@ void SegmentsViewerDialog::rederive()
         thresholds.noiseThresholdIre = noiseIreSpin_->value();
         thresholds.sceneThresholdIre = sceneIreSpin_->value();
     }
-    if (dirty_) {
-        emit segmentsUpdated(segments_);
-        dirty_ = false;
-    }
+    flushUnappliedEdits();
     emit rederiveRequested(thresholds);
+}
+
+// Unapplied edits go to the main window before anything that re-derives
+void SegmentsViewerDialog::flushUnappliedEdits()
+{
+    if (dirty_) {
+        dirty_ = false;
+        emit segmentsUpdated(segments_);
+    }
+    if (marksDirty_) {
+        marksDirty_ = false;
+        emit marksUpdated(marks_);
+    }
+}
+
+void SegmentsViewerDialog::rebuildMarksTable()
+{
+    const bool wasApplying = applyingState_;
+    applyingState_ = true;
+    const QSignalBlocker blocker(marksTable_);
+    const int previousRow = marksTable_->currentRow();
+    marksTable_->setRowCount(0);
+    marksTable_->setRowCount(marks_.size());
+    for (int row = 0; row < marks_.size(); ++row) {
+        for (int c = 0; c < MarkColCount; ++c) {
+            auto *item = new QTableWidgetItem();
+            Qt::ItemFlags flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
+            if (c == MarkColComment) {
+                flags |= Qt::ItemIsEditable;
+            } else if (c == MarkColSplit || c == MarkColEnabled) {
+                flags |= Qt::ItemIsUserCheckable;
+            }
+            item->setFlags(flags);
+            marksTable_->setItem(row, c, item);
+        }
+        refreshMarkRow(row);
+    }
+    if (previousRow >= 0 && previousRow < marksTable_->rowCount()) {
+        marksTable_->selectRow(previousRow);
+    }
+    applyingState_ = wasApplying;
+}
+
+void SegmentsViewerDialog::refreshMarkRow(int row)
+{
+    if (row < 0 || row >= marks_.size() || row >= marksTable_->rowCount()) {
+        return;
+    }
+    const QSignalBlocker blocker(marksTable_);
+    const SegmentMark &mark = marks_.at(row);
+    qint32 frame = -1;
+    for (int i = 0; i < state_.marks.size() && i < state_.markFrames.size(); ++i) {
+        if (state_.marks.at(i).field == mark.field) {
+            frame = state_.markFrames.at(i);
+            break;
+        }
+    }
+    if (frame < 1) {
+        frame = mark.field / 2 + 1;
+    }
+    auto setText = [this, row](int column, const QString &text) {
+        if (QTableWidgetItem *item = marksTable_->item(row, column)) {
+            item->setText(text);
+        }
+    };
+    setText(MarkColId, QString::number(mark.id));
+    setText(MarkColTime, frameToTimecode(frame));
+    setText(MarkColFrame, QString::number(frame));
+    setText(MarkColKind, mark.kind);
+    setText(MarkColConfidence, QStringLiteral("%1%").arg(qRound(mark.confidence * 100.0)));
+    setText(MarkColReason, mark.reason);
+    setText(MarkColSource, mark.source);
+    if (QTableWidgetItem *item = marksTable_->item(row, MarkColReason)) {
+        item->setToolTip(mark.reason);
+    }
+    if (QTableWidgetItem *item = marksTable_->item(row, MarkColSplit)) {
+        item->setCheckState(mark.split ? Qt::Checked : Qt::Unchecked);
+        item->setText(mark.split ? tr("yes") : tr("no"));
+    }
+    if (QTableWidgetItem *item = marksTable_->item(row, MarkColEnabled)) {
+        item->setCheckState(mark.enabled ? Qt::Checked : Qt::Unchecked);
+        item->setText(mark.enabled ? tr("yes") : tr("dismissed"));
+    }
+    setText(MarkColComment, mark.comment);
+}
+
+int SegmentsViewerDialog::selectedMarkRow() const
+{
+    if (!marksTable_) return -1;
+    const int row = marksTable_->currentRow();
+    return (row >= 0 && row < marks_.size()) ? row : -1;
+}
+
+// An edited mark is the user's: a re-derive keeps it as it is
+void SegmentsViewerDialog::markMarkUserEdited(SegmentMark &mark)
+{
+    mark.source = QStringLiteral("user");
+    mark.updatedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    if (mark.createdBy.isEmpty()) {
+        mark.createdBy = QStringLiteral("tbc-analyse");
+    }
+    marksDirty_ = true;
+}
+
+void SegmentsViewerDialog::handleMarkItemChanged(int row, int column)
+{
+    if (applyingState_ || row < 0 || row >= marks_.size()) {
+        return;
+    }
+    QTableWidgetItem *item = marksTable_->item(row, column);
+    if (!item) {
+        return;
+    }
+    SegmentMark &mark = marks_[row];
+    if (column == MarkColComment) {
+        if (mark.comment == item->text().trimmed()) return;
+        mark.comment = item->text().trimmed();
+    } else if (column == MarkColSplit) {
+        const bool split = item->checkState() == Qt::Checked;
+        if (mark.split == split) return;
+        mark.split = split;
+    } else if (column == MarkColEnabled) {
+        const bool enabled = item->checkState() == Qt::Checked;
+        if (mark.enabled == enabled) return;
+        mark.enabled = enabled;
+    } else {
+        return;
+    }
+    markMarkUserEdited(mark);
+    refreshMarkRow(row);
+    updateInfoLabel();
+    updateButtons();
+}
+
+void SegmentsViewerDialog::addMarkAtCurrentFrame()
+{
+    const qint32 field = state_.currentFirstField;
+    if (field < 0) {
+        return;
+    }
+    for (const SegmentMark &existing : marks_) {
+        if (qAbs(existing.field - field) <= 2) return;
+    }
+    qint32 maxId = 0;
+    for (const SegmentMark &existing : marks_) maxId = qMax(maxId, existing.id);
+    for (const SegmentMark &existing : state_.marks) maxId = qMax(maxId, existing.id);
+    SegmentMark mark;
+    mark.id = maxId + 1;
+    mark.field = field;
+    mark.confidence = 1.0;
+    mark.reason = tr("added by hand");
+    mark.split = splitAtRestartsCheck_ && splitAtRestartsCheck_->isChecked();
+    markMarkUserEdited(mark);
+    int insertAt = 0;
+    while (insertAt < marks_.size() && marks_.at(insertAt).field < field) insertAt++;
+    marks_.insert(insertAt, mark);
+    rebuildMarksTable();
+    marksTable_->selectRow(insertAt);
+    updateInfoLabel();
+    updateButtons();
 }

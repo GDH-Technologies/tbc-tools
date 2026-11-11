@@ -179,23 +179,34 @@
       </widget>
      </item>
      <item row="9" column="1">
-      <widget class="QComboBox" name="ffmetadataSegmentsComboBox">
+      <layout class="QVBoxLayout" name="ffmetadataSegmentsLayout">
        <item>
-        <property name="text">
-         <string>Chapters from enabled segments (default)</string>
-        </property>
+        <widget class="QComboBox" name="ffmetadataSegmentsComboBox">
+         <item>
+          <property name="text">
+           <string>Chapters from enabled segments (default)</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Chapters from all segments</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>No segments (navigation chapters only)</string>
+          </property>
+         </item>
+        </widget>
        </item>
        <item>
-        <property name="text">
-         <string>Chapters from all segments</string>
-        </property>
+        <widget class="QCheckBox" name="ffmetadataRestartChaptersCheckBox">
+         <property name="text">
+          <string>Chapter at each camcorder restart (one chapter per take)</string>
+         </property>
+        </widget>
        </item>
-       <item>
-        <property name="text">
-         <string>No segments (navigation chapters only)</string>
-        </property>
-       </item>
-      </widget>
+      </layout>
      </item>
      <item row="10" column="0">
       <widget class="QLabel" name="ffmetadataRangeLabel">

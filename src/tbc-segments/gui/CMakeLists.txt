@@ -1,6 +1,8 @@
 # The tbc-analyse side of the module: the Segments viewer and the controller
 # that carries the main window's segment behaviour.
 add_library(tbc-segments-gui STATIC
+    segmentpreferences.cpp
+    segmentpreferences.h
     segmentscontroller.cpp
     segmentscontroller.h
     segmentsviewerdialog.cpp

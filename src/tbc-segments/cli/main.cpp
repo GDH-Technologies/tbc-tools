@@ -36,6 +36,8 @@
 
 #include "fieldmetrics.h"
 #include "fieldwalkpool.h"
+#include "markstore.h"
+#include "restartmarks.h"
 #include "segments.h"
 #include "tbc/logging.h"
 #include "tbcmetadata.h"
@@ -299,6 +301,12 @@ int main(int argc, char *argv[])
     QCommandLineOption blankBelowBlackOption("blank-below-black-ire", QCoreApplication::translate("main", "...or its active luma sits below this (default -5)"), "IRE");
     QCommandLineOption minClipOption("min-clip-fields", QCoreApplication::translate("main", "A section shorter than this is 'unknown', never a clip (default 10)"), "n");
     QCommandLineOption minNonClipRunOption("min-non-clip-run-fields", QCoreApplication::translate("main", "A noise/blank run at least this long splits a section (default 50)"), "n");
+    QCommandLineOption splitRestartsOption("split-restarts", QCoreApplication::translate("main", "Newly derived restart marks split their clip into segments (default: marked only)"));
+    QCommandLineOption noRestartMarksOption("no-restart-marks", QCoreApplication::translate("main", "Do not detect camcorder restart marks"));
+    QCommandLineOption restartPairOption("restart-pair-match", QCoreApplication::translate("main", "Restart: the weaker field-difference spike of the pair is at least this fraction of the stronger (default 0.9)"), "fraction");
+    QCommandLineOption restartPeakOption("restart-min-peak-ire", QCoreApplication::translate("main", "Restart: the pair's peak field difference (default 5)"), "IRE");
+    QCommandLineOption restartNeighbourOption("restart-max-neighbour-ratio", QCoreApplication::translate("main", "Restart: the fields either side of the pair at most this fraction of its peak (default 0.6)"), "fraction");
+    QCommandLineOption restartContrastOption("restart-min-contrast", QCoreApplication::translate("main", "Restart: peak over the local background (default 1.5)"), "ratio");
     QCommandLineOption noBurstOption("no-burst", QCoreApplication::translate("main", "Do not measure burst amplitude, and do not read the chroma TBC for it (halves the walk's I/O; no no_burst events; a stored burst amplitude is kept, not cleared)"));
     QCommandLineOption forceWalkOption("force-walk", QCoreApplication::translate("main", "Walk the TBC even when the metadata already holds picture metrics"));
     QCommandLineOption verifyStoredOption("verify-stored", QCoreApplication::translate("main", "Walk the TBC and compare with the stored metrics; exit 1 above 0.05 IRE"));
@@ -310,7 +318,8 @@ int main(int argc, char *argv[])
     for (const QCommandLineOption *opt : {&jsonOption, &startOption, &lengthOption, &rfRateOption, &sensitivityOption,
                                           &gapToleranceOption, &syncConfOption, &minRunOption, &dropoutStormOption,
                                           &tbcOption, &chromaOption, &threadsOption, &sceneOption, &noiseOption, &blankOption,
-                                          &blankLevelOption, &blankBelowBlackOption, &minClipOption, &minNonClipRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
+                                          &blankLevelOption, &blankBelowBlackOption, &splitRestartsOption, &noRestartMarksOption,
+                                          &restartPairOption, &restartPeakOption, &restartContrastOption, &restartNeighbourOption, &minClipOption, &minNonClipRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
                                           &writeOption, &writeSegmentsOption, &forceOption, &perFieldOption, &summaryOption}) {
         parser.addOption(*opt);
     }
@@ -357,10 +366,16 @@ int main(int argc, char *argv[])
         || !parseDouble(parser, blankLevelOption, &thresholds.blankLevelDevIre, 0.0, 200.0, &error)
         || !parseDouble(parser, blankBelowBlackOption, &thresholds.blankBelowBlackIre, -100.0, 100.0, &error)
         || !parseInt(parser, minClipOption, &thresholds.minClipFields, 1, 1000000, &error)
-        || !parseInt(parser, minNonClipRunOption, &thresholds.minNonClipRunFields, 1, 1000000, &error)) {
+        || !parseInt(parser, minNonClipRunOption, &thresholds.minNonClipRunFields, 1, 1000000, &error)
+        || !parseDouble(parser, restartPairOption, &thresholds.restartPairMatch, 0.0, 1.0, &error)
+        || !parseDouble(parser, restartPeakOption, &thresholds.restartMinPeakIre, 0.0, 200.0, &error)
+        || !parseDouble(parser, restartContrastOption, &thresholds.restartMinContrast, 1.0, 1000.0, &error)
+        || !parseDouble(parser, restartNeighbourOption, &thresholds.restartMaxNeighbourRatio, 0.0, 1.0, &error)) {
         qCritical().noquote() << error;
         return 1;
     }
+    thresholds.splitAtRestarts = parser.isSet(splitRestartsOption);
+    thresholds.restartMarks = !parser.isSet(noRestartMarksOption);
     const bool wantWrite = parser.isSet(writeOption);
     const bool wantWriteSegments = parser.isSet(writeSegmentsOption);
     const bool wantVerify = parser.isSet(verifyStoredOption);
@@ -445,12 +460,32 @@ int main(int argc, char *argv[])
 
     const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, rfRate, metrics.enabled ? &metrics : nullptr);
 
+    // Restart marks: stored in the .tbc.db by this module (markstore.h).
+    // The derivation needs the unsplit segments to find the clips to look in.
+    const QString markDatabase = MarkStore::databasePathFor(inputFilename);
+    QVector<SegmentMark> storedMarks;
+    {
+        QString markError;
+        if (!MarkStore::read(markDatabase, &storedMarks, nullptr, &markError)) {
+            qWarning().noquote() << "tbc-segments: cannot read the stored restart marks:" << markError;
+        }
+    }
+    const QVector<TbcMetaData::Segment> base = deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-segments"));
+    const QVector<SegmentMark> detected = detectRestartMarks(analysis, metrics, thresholds, base, QStringLiteral("tbc-segments"));
+    const bool replaceDerived = wantWriteSegments && parser.isSet(forceOption);
+    QVector<SegmentMark> marks = storedMarks;
+    QString marksSource = QStringLiteral("stored");
+    if (storedMarks.isEmpty() || replaceDerived) {
+        marks = mergeMarks(storedMarks, detected);
+        marksSource = marks.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
+    }
+
     // Segments: the stored layer wins; derive otherwise
     QVector<TbcMetaData::Segment> segments = metaData.getSegments();
     QString segmentsSource = segments.isEmpty() ? QStringLiteral("derived") : QStringLiteral("stored");
     QVector<TbcMetaData::Segment> derived;
-    if (segments.isEmpty() || (wantWriteSegments && parser.isSet(forceOption))) {
-        derived = deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-segments"));
+    if (segments.isEmpty() || replaceDerived) {
+        derived = splitSegmentsAtMarks(base, marks);
         if (segments.isEmpty()) segments = derived;
     }
 
@@ -510,6 +545,11 @@ int main(int argc, char *argv[])
                 qInfo() << "Metadata already holds segments; not replacing them (--force overrides)";
             }
         }
+        // Marks go in after the metadata (their tables are not the library's)
+        const bool storeMarks = wantWriteSegments && (storedMarks.isEmpty() || replaceDerived);
+        if (wantWriteSegments && !storeMarks) {
+            qInfo() << "Metadata already holds restart marks; not replacing them (--force overrides)";
+        }
         const bool changed = metricsDirty || captureDirty || eventsDirty || segmentsDirty;
         if (changed) {
             // The capture row is always written on an update: it is one row, and
@@ -529,14 +569,34 @@ int main(int argc, char *argv[])
                 return 1;
             }
             qInfo().noquote() << "Metadata written:" << canonical;
-        } else {
+        }
+        bool marksWritten = false;
+        if (storeMarks) {
+            const QString database = MarkStore::databasePathFor(inputFilename);
+            QString markError;
+            if (database.isEmpty()) {
+                if (!marks.isEmpty()) {
+                    qWarning() << "tbc-segments: restart marks need a .tbc.db; none exists yet, so they were not stored";
+                }
+            } else if (!MarkStore::write(database, marks, &marksWritten, &markError)) {
+                qCritical().noquote() << "Unable to store the restart marks:" << markError;
+                return 1;
+            } else if (marksWritten) {
+                marksSource = QStringLiteral("stored");
+                qInfo().noquote() << QStringLiteral("Restart marks written: %1").arg(marks.size());
+            } else if (!marks.isEmpty()) {
+                marksSource = QStringLiteral("stored");
+            }
+        }
+        if (!changed && !marksWritten) {
             qInfo() << "Nothing to write";
         }
     }
 
-    const QJsonObject report = buildReport(metaData, inputFilename, inputKind, startFrame, lengthFrames, range, thresholds,
-                                           analysis, metrics.enabled ? &metrics : nullptr, fieldDataInfo,
-                                           parser.isSet(perFieldOption), segments, segmentsSource);
+    QJsonObject report = buildReport(metaData, inputFilename, inputKind, startFrame, lengthFrames, range, thresholds,
+                                     analysis, metrics.enabled ? &metrics : nullptr, fieldDataInfo,
+                                     parser.isSet(perFieldOption), segments, segmentsSource);
+    addMarksToReport(&report, metaData, analysis, marks, marksSource);
     const QByteArray payload = QJsonDocument(report).toJson(QJsonDocument::Compact) + "\n";
 
     const QString jsonTarget = parser.value(jsonOption);
@@ -555,7 +615,8 @@ int main(int argc, char *argv[])
 
     if (parser.isSet(summaryOption)) {
         qInfo().noquote() << summariseAnalysis(analysis, range)
-                          << QStringLiteral("Segments: %1 (%2)").arg(segments.size()).arg(segmentsSource);
+                          << QStringLiteral("Segments: %1 (%2)").arg(segments.size()).arg(segmentsSource)
+                          << QStringLiteral("\nRestart marks: %1 (%2)").arg(marks.size()).arg(marksSource);
     }
     return 0;
 }

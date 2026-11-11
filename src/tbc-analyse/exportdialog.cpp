@@ -5,6 +5,7 @@
 
 #include "tbcsource.h"
 #include "segmentexportplan.h"
+#include "segmentpreferences.h"
 #include "configuration.h"
 #include "gui/processprogressrunner.h"
 
@@ -5312,6 +5313,17 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
         ExportArguments::isDefaultActiveAreaFraming(resolutionMode, hasAnyVerticalLineAdjustment);
     const bool letterboxCropRequested = advancedOptions.letterboxCrop;
     const bool forceAnamorphicRequested = advancedOptions.forceAnamorphic;
+    // tbc-segments: chapters cut at camcorder restarts (the Segments viewer's Marks tab)
+    if (includeExportMetadata && SegmentPreferences::restartChapters()) {
+        if (!executableSupportsOption(exportPath, QStringLiteral("--export-metadata-restart-chapters"))) {
+            if (errorMessage) {
+                *errorMessage = unsupportedOptionError(tr("Chapters at camcorder restarts"),
+                                                       QStringLiteral("--export-metadata-restart-chapters"));
+            }
+            return QStringList();
+        }
+        args << QStringLiteral("--export-metadata-restart-chapters");
+    }
     if (reverseFieldOrderRequested && !executableSupportsOption(exportPath, QStringLiteral("--reverse"))) {
         if (errorMessage) {
             *errorMessage = unsupportedOptionError(tr("Reverse field order"), QStringLiteral("--reverse"));

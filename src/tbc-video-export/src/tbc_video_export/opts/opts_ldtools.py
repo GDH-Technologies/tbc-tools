@@ -453,6 +453,16 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
     )
 
     export_metadata.add_argument(
+        "--export-metadata-restart-chapters",
+        action="store_true",
+        default=False,
+        help=(
+            "With --export-metadata, cut each recording segment's chapter at\n"
+            "its camcorder restart marks (one chapter per take). (default: no)\n\n"
+        ),
+    )
+
+    export_metadata.add_argument(
         "--export-metadata-keep-going",
         action="store_true",
         default=False,

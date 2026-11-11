@@ -14,6 +14,7 @@
 
 #if !defined(Q_OS_WIN)
 #include <QApplication>
+#include <QCheckBox>
 #include <QPushButton>
 #include <QTableWidget>
 
@@ -81,7 +82,7 @@ void testMoveAndSplitEnabled()
     std::cerr << "Testing Move Start/End and Split enablement\n";
 
     SegmentsViewerDialog dialog;
-    QTableWidget *table = dialog.findChild<QTableWidget *>();
+    QTableWidget *table = dialog.findChild<QTableWidget *>(QStringLiteral("segmentsTable"));
     CHECK(table != nullptr);
     QPushButton *moveStart = button(dialog, QStringLiteral("Move Start Here"));
     QPushButton *moveEnd = button(dialog, QStringLiteral("Move End Here"));
@@ -116,6 +117,63 @@ void testMoveAndSplitEnabled()
     CHECK(!moveStart->isEnabled() && !moveEnd->isEnabled() && !split->isEnabled());
 }
 
+// The Marks tab: ticking Split or unticking Enabled makes the mark the
+// user's and waits for Apply; Apply hands the marks over; the global
+// checkbox reports at once
+void testMarksTab()
+{
+    std::cerr << "Testing the Marks tab\n";
+    SegmentsViewerDialog dialog;
+    QTableWidget *marks = dialog.findChild<QTableWidget *>(QStringLiteral("marksTable"));
+    CHECK(marks != nullptr);
+    SegmentsViewerState state;
+    state.totalFrames = 50;
+    state.totalFields = 100;
+    state.currentFrame = 11;
+    state.currentFirstField = 20;
+    SegmentMark a;
+    a.id = 1; a.field = 30; a.confidence = 0.92; a.reason = QStringLiteral("matched field pair");
+    SegmentMark b = a;
+    b.id = 2; b.field = 70;
+    state.marks = {a, b};
+    state.markFrames = {16, 36};
+    dialog.setState(state);
+    CHECK(marks->rowCount() == 2);
+    CHECK(marks->item(0, 4)->text() == QStringLiteral("92%"));
+    CHECK(marks->item(1, 2)->text() == QStringLiteral("36"));
+
+    QVector<SegmentMark> applied;
+    QObject::connect(&dialog, &SegmentsViewerDialog::marksUpdated, [&applied](const QVector<SegmentMark> &m) { applied = m; });
+    bool splitToggled = false;
+    QObject::connect(&dialog, &SegmentsViewerDialog::splitAtRestartsToggled, [&splitToggled](bool on) { splitToggled = on; });
+
+    marks->item(0, 7)->setCheckState(Qt::Checked);      // Split
+    marks->item(1, 8)->setCheckState(Qt::Unchecked);    // Enabled: dismiss
+    QPushButton *apply = nullptr;
+    for (QPushButton *candidate : dialog.findChildren<QPushButton *>()) {
+        if (candidate->text().remove(QLatin1Char('&')) == QStringLiteral("Apply")) apply = candidate;
+    }
+    CHECK(apply && apply->isEnabled() && applied.isEmpty());
+    apply->click();
+    CHECK(applied.size() == 2);
+    CHECK(applied[0].split && applied[0].source == QLatin1String("user"));
+    CHECK(!applied[1].enabled && applied[1].source == QLatin1String("user") && applied[1].field == 70);
+
+    // Add a mark by hand at the current frame (field 20)
+    QPushButton *add = button(dialog, QStringLiteral("Add Mark At Current Frame"));
+    CHECK(add->isEnabled());
+    add->click();
+    CHECK(marks->rowCount() == 3 && marks->item(0, 6)->text() == QStringLiteral("user"));
+
+    QCheckBox *global = nullptr;
+    for (QCheckBox *candidate : dialog.findChildren<QCheckBox *>()) {
+        if (candidate->text() == QStringLiteral("Split at restarts")) global = candidate;
+    }
+    CHECK(global && !global->isChecked());
+    global->setChecked(true);
+    CHECK(splitToggled);
+}
+
 } // namespace
 #endif
 
@@ -128,6 +186,7 @@ int main(int argc, char *argv[])
 #if !defined(Q_OS_WIN)
     QApplication application(argc, argv);
     testMoveAndSplitEnabled();
+    testMarksTab();
 #else
     Q_UNUSED(argc);
     Q_UNUSED(argv);

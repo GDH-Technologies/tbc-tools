@@ -34,6 +34,9 @@ class WrapperLDExportMetadata(Wrapper):
                 self._state.file_helper.cc_file,
                 self._state.opts.convert_opt("start", "--start"),
                 self._state.opts.convert_opt("length", "--length"),
+                self._state.opts.convert_opt(
+                    "export_metadata_restart_chapters", "--ffmetadata-restart-chapters"
+                ),
                 self._state.file_helper.tbc_json.file_name,
             ),
         )

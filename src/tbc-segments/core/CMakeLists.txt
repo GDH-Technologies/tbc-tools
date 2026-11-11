@@ -3,6 +3,10 @@
 add_library(tbc-segments-core STATIC
     segments.cpp
     segments.h
+    markstore.cpp
+    markstore.h
+    restartmarks.cpp
+    restartmarks.h
     segmentexportplan.cpp
     segmentexportplan.h
     segmentchapters.cpp
@@ -17,12 +21,13 @@ add_library(tbc-segments-core STATIC
     fieldwalkpool.h
 )
 target_include_directories(tbc-segments-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(tbc-segments-core PUBLIC Qt::Core tbc-library)
+target_link_libraries(tbc-segments-core PUBLIC Qt::Core tbc-library PRIVATE Qt::Sql)
 
 if(BUILD_TESTING)
     # Metadata tier: synthesised metadata in memory
     add_executable(testsegments tests/testsegments.cpp)
     target_link_libraries(testsegments PRIVATE tbc-segments-core)
+    target_compile_definitions(testsegments PRIVATE TBC_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/test-data")
     add_test(NAME testsegments COMMAND testsegments)
 
     # Field-data tier: the walk over a small synthetic luma + chroma TBC

@@ -26,6 +26,9 @@ public:
     void setSegmentMarkers(const QVector<qint32> &boundaryPositions,
                            const QStringList &boundaryTooltips,
                            const QVector<TimelineSegmentSpan> &spans);
+    // One more layer of ticks (with tooltips) in its own colour: camcorder
+    // restart marks, from the tbc-segments module
+    void setExtraTicks(const QVector<qint32> &positions, const QStringList &tooltips, const QColor &color);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -39,6 +42,9 @@ private:
     QVector<qint32> segmentBoundaries_;
     QStringList segmentTooltips_;
     QVector<TimelineSegmentSpan> segmentSpans_;
+    QVector<qint32> extraTicks_;
+    QStringList extraTooltips_;
+    QColor extraColor_;
 };
 
 #endif // TIMELINEMARKERSLIDER_H

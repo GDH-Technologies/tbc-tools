@@ -32,10 +32,11 @@
 
 /*!
     Write the recording-segment report (tbc-segments' schema 1 JSON) from the
-    metadata alone: the stored segments (derived through the library when none
-    are stored), the events derived from the metadata and any stored picture
-    metrics, and each segment's 1-based frame range under the mixed-frame
-    rule. No TBC is read. fileName "-" writes to stdout.
+    metadata alone: the stored segments (derived when none are stored), the
+    events derived from the metadata and any stored picture metrics, the
+    restart marks (stored in the .tbc.db beside inputPath, else detected) and
+    each segment's 1-based frame range under the mixed-frame rule. No TBC is
+    read. fileName "-" writes to stdout.
 
     @param inputPath The metadata file the report describes (recorded in it).
     @param startFrameOneBased Optional 1-based start frame; < 1 for the first.

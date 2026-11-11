@@ -15,15 +15,18 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include "restartmarks.h"
 #include "segments.h"
 #include "tbcmetadata.h"
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QSpinBox;
 class QTableWidget;
+class QTabWidget;
 
 // One segment with the frames an export of it covers (mixed-frame rule),
 // computed by the main window through TbcSource.
@@ -45,12 +48,20 @@ struct SegmentsViewerState {
     bool derivedAtLoad = false;
     bool evidenceAvailable = false;    // decoder events or picture metrics stored
     QVector<SegmentsViewerRow> rows;
+    // Restart marks (with the 1-based frame each falls in) and the module's
+    // preferences shown beside them
+    QVector<SegmentMark> marks;
+    QVector<qint32> markFrames;
+    bool splitAtRestarts = false;
+    bool restartChapters = false;
 };
 
 // The Segments viewer: list, jump, set In/Out, enable/disable, rename,
-// move a boundary, split/merge, delete, re-derive. Edits are applied to the
-// metadata by the main window on Apply (the segment layer; decoder records
-// stay immutable) and saved with Save Metadata.
+// move a boundary, split/merge, delete, re-derive; and, on its Marks tab, the
+// camcorder restart marks (go to, split or not, dismiss, comment, add by
+// hand) with the split-at-restarts and restart-chapter preferences. Edits are
+// applied by the controller on Apply (the segment layer and the marks;
+// decoder records stay immutable) and saved with Save Metadata.
 class SegmentsViewerDialog : public QDialog
 {
     Q_OBJECT
@@ -64,9 +75,22 @@ signals:
     void setInOutRequested(qint32 segmentIndex);
     void segmentsUpdated(const QVector<TbcMetaData::Segment> &segments);
     void rederiveRequested(const SegmentsThresholds &thresholds);
+    void marksUpdated(const QVector<SegmentMark> &marks);
+    void splitAtRestartsToggled(bool enabled);
+    void restartChaptersToggled(bool enabled);
 
 private:
     enum Column { ColId = 0, ColStart, ColEnd, ColFrames, ColDuration, ColKind, ColSource, ColEnabled, ColTitle, ColComment, ColCount };
+    enum MarkColumn { MarkColId = 0, MarkColTime, MarkColFrame, MarkColKind, MarkColConfidence, MarkColReason,
+                      MarkColSource, MarkColSplit, MarkColEnabled, MarkColComment, MarkColCount };
+
+    void rebuildMarksTable();
+    void refreshMarkRow(int row);
+    int selectedMarkRow() const;
+    void markMarkUserEdited(SegmentMark &mark);
+    void handleMarkItemChanged(int row, int column);
+    void addMarkAtCurrentFrame();
+    void flushUnappliedEdits();
 
     QString frameToTimecode(qint32 frameNumber) const;
     QString fieldsToDuration(qint32 fields) const;
@@ -92,6 +116,14 @@ private:
     bool dirty_ = false;
     bool applyingState_ = false;
 
+    QVector<SegmentMark> marks_;               // working copy
+    bool marksDirty_ = false;
+    QTabWidget *tabs_ = nullptr;
+    QTableWidget *marksTable_ = nullptr;
+    QPushButton *markGoButton_ = nullptr;
+    QPushButton *addMarkButton_ = nullptr;
+    QCheckBox *splitAtRestartsCheck_ = nullptr;
+    QCheckBox *restartChaptersCheck_ = nullptr;
     QTableWidget *table_ = nullptr;
     QLabel *infoLabel_ = nullptr;
     QPushButton *goStartButton_ = nullptr;

@@ -1841,6 +1841,11 @@ QVector<TbcMetaData::Segment> TbcSource::deriveSegments(const SegmentsThresholds
     return deriveSegmentsForFile(metaData, thresholds, QStringLiteral("tbc-analyse"));
 }
 
+SegmentLayer TbcSource::deriveSegmentLayer(const SegmentsThresholds &thresholds, const QVector<SegmentMark> &storedMarks) const
+{
+    return deriveLayerForFile(metaData, thresholds, QStringLiteral("tbc-analyse"), storedMarks);
+}
+
 // Derived-at-load segments (tbc-segments' rule) do not mark the metadata
 // dirty; they persist when the user saves for any reason.
 void TbcSource::deriveSegmentsAtLoad()

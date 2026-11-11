@@ -324,6 +324,37 @@ void testSegmentsJson(const QTemporaryDir &dir)
     CHECK(bareReport.value(QStringLiteral("range")).toObject().value(QStringLiteral("lengthFrames")).toInt() == 100);
 }
 
+// Restart chapters: off by default; with marks, a segment's chapter is cut
+// into takes that tile it exactly; a mark that splits (already a segment
+// boundary), a dismissed mark and one on a chapter start cut nothing
+void testRestartChapters(const QTemporaryDir &dir)
+{
+    TbcMetaData m;
+    buildMetadata(m, 400);
+    addSegments(m);
+    const auto restart = [](qint32 field, bool enabled = true, bool split = false) {
+        SegmentMark mark;
+        mark.field = field;
+        mark.enabled = enabled;
+        mark.split = split;
+        return mark;
+    };
+    const QString plainPath = tmpPath(dir, QStringLiteral("restart-off.txt"));
+    CHECK(writeFfmetadata(m, plainPath, -1, -1, true, FfmetadataSegmentMode::EnabledSegments, {}));
+    CHECK(parse(plainPath).chapters.size() == 2);
+
+    const QString path = tmpPath(dir, QStringLiteral("restart-on.txt"));
+    CHECK(writeFfmetadata(m, path, -1, -1, true, FfmetadataSegmentMode::EnabledSegments,
+                          {restart(40), restart(70), restart(300, true, true), restart(320, false), restart(250)}));
+    const Parsed p = parse(path);
+    CHECK(p.chapters.size() == 4);
+    CHECK(p.chapters[0].start == 0 && p.chapters[0].end == 39 && p.chapters[0].title == QStringLiteral("Intro · take 1"));
+    CHECK(p.chapters[1].start == 40 && p.chapters[1].end == 69 && p.chapters[1].title == QStringLiteral("Intro · take 2"));
+    CHECK(p.chapters[2].start == 70 && p.chapters[2].end == 100 && p.chapters[2].title == QStringLiteral("Intro · take 3"));
+    CHECK(p.chapters[3].start == 250 && p.chapters[3].end == 399 && p.chapters[3].title == QLatin1String("Segment 3"));
+    CHECK(p.chapters[2].comment.isEmpty() && p.chapters[3].comment == QLatin1String("second take"));
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -337,6 +368,7 @@ int main(int argc, char *argv[])
     testRangeRebasing(dir);
     testUserMarkerSplice(dir);
     testSegmentsJson(dir);
+    testRestartChapters(dir);
     std::cout << "testffmetadata: all checks passed\n";
     return 0;
 }

@@ -29,20 +29,34 @@ bool hasSegmentEvidence(const TbcMetaData &metaData)
     return !metaData.getDecoderEvents().isEmpty() || metaData.hasPictureMetrics();
 }
 
-QVector<TbcMetaData::Segment> deriveSegmentsForFile(const TbcMetaData &metaData,
-                                                    const SegmentsThresholds &thresholds,
-                                                    const QString &createdBy)
+SegmentLayer deriveLayerForFile(const TbcMetaData &metaData,
+                                const SegmentsThresholds &thresholds,
+                                const QString &createdBy,
+                                const QVector<SegmentMark> &storedMarks)
 {
+    SegmentLayer layer;
     FieldRange range;
     range.startField = 0;
     range.endFieldExclusive = metaData.getNumberOfFields();
     if (range.endFieldExclusive <= 0) {
-        return QVector<TbcMetaData::Segment>();
+        return layer;
     }
     const FieldMetrics metrics = FieldMetrics::fromMetadata(metaData);
     const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0,
                                                       metrics.enabled ? &metrics : nullptr);
-    return deriveSegments(metaData, analysis, thresholds, createdBy);
+    const QVector<TbcMetaData::Segment> base = deriveSegments(metaData, analysis, thresholds, createdBy);
+    const QVector<SegmentMark> detected = detectRestartMarks(analysis, metrics, thresholds, base, createdBy);
+    layer.marks = mergeMarks(storedMarks, detected);
+    layer.segments = splitSegmentsAtMarks(base, layer.marks);
+    return layer;
+}
+
+QVector<TbcMetaData::Segment> deriveSegmentsForFile(const TbcMetaData &metaData,
+                                                    const SegmentsThresholds &thresholds,
+                                                    const QString &createdBy,
+                                                    const QVector<SegmentMark> &storedMarks)
+{
+    return deriveLayerForFile(metaData, thresholds, createdBy, storedMarks).segments;
 }
 
 qint32 deriveSegmentsAtLoad(TbcMetaData &metaData, const QString &createdBy)

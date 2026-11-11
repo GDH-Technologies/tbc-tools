@@ -47,8 +47,8 @@ the feature stays apart from the shared tool sources and can move as one:
 
 | Directory | Target | What |
 | --- | --- | --- |
-| `core/` | `tbc-segments-core` (static, Qt Core) | the rules (`segments.h`), the report (`segmentsreport.h`, used by `tbc-export-metadata --segments-json`), whole-file derivation for a loaded file (`segmentsderive.h`), segments as export chapters (`segmentchapters.h`, used by `--ffmetadata`), the per-segment export plan (`segmentexportplan.h`, used by tbc-analyse's Export tab), the field walk (`fieldmetrics.h`, `fieldwalkpool.h`) |
-| `gui/` | `tbc-segments-gui` (static, Qt Widgets) | the Segments viewer (`segmentsviewerdialog.h`) and `SegmentsController`, which carries tbc-analyse's segment behaviour (viewer, edits, re-derive, set In/Out, timeline ticks and tints, chapter skip, readout, timeline menu); the main window reaches it through `SegmentsController::Hooks` |
+| `core/` | `tbc-segments-core` (static, Qt Core) | the rules (`segments.h`), camcorder restart marks (`restartmarks.h`) and their store in the `.tbc.db` (`markstore.h`), the report (`segmentsreport.h`, used by `tbc-export-metadata --segments-json`), whole-file derivation for a loaded file (`segmentsderive.h`), segments as export chapters (`segmentchapters.h`, used by `--ffmetadata`), the per-segment export plan (`segmentexportplan.h`, used by tbc-analyse's Export tab), the field walk (`fieldmetrics.h`, `fieldwalkpool.h`) |
+| `gui/` | `tbc-segments-gui` (static, Qt Widgets) | the Segments viewer with its Marks tab (`segmentsviewerdialog.h`), the module's preferences (`segmentpreferences.h`) and `SegmentsController`, which carries tbc-analyse's segment behaviour (viewer, edits, re-derive, set In/Out, timeline ticks and tints, chapter skip, readout, timeline menu); the main window reaches it through `SegmentsController::Hooks` |
 | `cli/` | `tbc-segments` | this command and its script tests |
 
 The data model (`TbcMetaData::Segment`, `DecoderEvent`, `PictureMetrics` and
@@ -88,6 +88,15 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
                               above, nominal (5); a dark recorded scene keeps
                               its levels and stays picture
   --blank-below-black-ire <x> or active luma below this (-5): no picture at all
+  --no-restart-marks          do not detect camcorder restart marks
+  --split-restarts            newly derived restart marks split their clip
+                              (default: marked only)
+  --restart-pair-match <f>    restart: the weaker spike of the pair is at least
+                              this fraction of the stronger (0.9)
+  --restart-min-peak-ire <x>  restart: the pair's peak field difference (5)
+  --restart-min-contrast <x>  restart: peak over the local background (1.5)
+  --restart-max-neighbour-ratio <f>  restart: the fields either side of the
+                              pair at most this fraction of its peak (0.6)
   --min-clip-fields <n>       shorter sections are 'unknown', never a clip (10)
   --min-non-clip-run-fields <n>  a noise/blank run this long splits a section (50)
   --force-walk                walk even when metrics are stored
@@ -249,6 +258,56 @@ rule: a frame whose second field starts a segment belongs to the segment that
 owns its first field, so contiguous segments tile the frame range exactly once
 and a segment holding only a second field (no frame of its own) reports 0 / 0.
 
+### Camcorder restart marks
+
+A camcorder that stops and starts recording leaves a clean edit: no RF gap,
+no snow, no sync loss, so nothing above splits there. What it does leave is a
+picture that changes between two fields. The same-parity field difference
+(field n against n-2) then spikes on two adjacent fields, n and n+1, each
+comparing a new-take field with an old-take one, and drops back at n+2. That
+is a restart mark when:
+
+- the pair matches: the weaker spike is at least `--restart-pair-match` (0.9)
+  of the stronger, and the peak is at least `--restart-min-peak-ire` (5);
+- it stands out: the peak is at least `--restart-min-contrast` (1.5) times the
+  local background (the larger median of fields n-12..n-2 and n+3..n+14);
+- its neighbours are quiet: fields n-1 and n+2 sit no higher than halfway from
+  the background to the peak, and no higher than
+  `--restart-max-neighbour-ratio` (0.6) of it (motion keeps them high);
+- neither field is snow, and no flash falls in the 12 fields before it.
+
+A photo flash lights a single field, so its spikes land on n and n+2 with n+1
+quiet, and the pair test rejects it. The camera's exposure can then settle
+over the next few fields into a matched pair, which is why a flash
+(one field more than 10 IRE above its neighbours) in the window before rules
+a pair out. A cut inside a video playing on a screen in shot ramps over
+2-3 fields, so its spikes don't match.
+
+Marks are found only inside clips, away from their edges. Each carries a
+confidence (50% for passing, the rest from how cleanly it passes) and a
+reason in words. The rule was tuned on a hand-labelled Video8 tape:
+`test-data/segments/video8-restart-labels.json` holds the field metrics around
+30 restarts and 10 look-alikes (flashes and their aftermath, cuts on a screen),
+and `testsegments` checks every restart is marked and none of the rest is.
+
+**A restart is always marked. Whether it splits its clip is the mark's own
+flag, and it is off by default:** a tape derives one segment per stretch of
+recording, with a mark at every take. `--split-restarts` (or tbc-analyse's
+Split at restarts) sets the flag on newly derived marks; a mark the user
+edits keeps its own.
+
+Marks are stored in the `.tbc.db` in this module's own tables: `segment_mark`
+(field, kind, source, enabled, split, confidence, reason, detail, comment,
+provenance) and `tbc_segments_meta` (`marks_schema = 1`). They are not part of
+the tbc library's schema or its `user_version`, and the `.tbc.json` never
+carries them. `--write-segments` stores them with the segments under the same
+rule: when none are stored, or with `--force` (derived marks replaced, user
+and dismissed marks kept). A tool that rewrites the whole database drops them.
+tbc-analyse's Save does exactly that, and writes them back straight after.
+The report gains `marks` (each with field, seconds, frame, source, enabled,
+split, confidence, reason, detail), `marksSource` (`stored`, `derived` or
+`none`), a `restart` event per enabled mark, and `counts.restart`.
+
 ## Tests
 
 `testsegments` (`core/tests`, ctest) synthesises
@@ -258,7 +317,9 @@ clipping, the RF rate taken from the metadata, decoder-event merging, stored
 picture metrics driving the field-data events, segment derivation and
 classification (a dark scene with normal levels stays picture; snow with
 single-field dips and a resync inside it is one noise segment; a one-field
-section between two clips joins the next), the presets, frame containment and segment tiling under the
+section between two clips joins the next), restart marks against the
+hand-labelled fixture, mark merging, splitting at marks and the mark store's
+round trip, the presets, frame containment and segment tiling under the
 mixed-frame rule, and an exact equivalence of the sections with
 tbc-audio-align's `ExtractGapLessSection` + `TbcJsonFixup` over jittered,
 gapped, backward-stepping and 32-bit-wrapped `fileLoc` series in PAL and NTSC.
@@ -271,4 +332,7 @@ walked to the metadata's count). `tbc-segments-smoke` runs the shipped
 stored burst amplitude. `testsegmentsviewer` and `testsegmentscontroller`
 (`gui/tests`, offscreen) cover the viewer's buttons and the controller's
 lookups, readout, chapter-skip targets, timeline ticks and tints, split,
-re-derive (user segments kept) and timeline menu.
+re-derive (user segments kept), timeline menu, and the marks: detected at
+load, ticks and skip stops, split from the menu, the global switch, dismissal,
+and the Marks tab's edits. `tools/extract-restart-fixture.py` builds a fixture
+like the restart one from any labelled `.tbc.db`.
