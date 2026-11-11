@@ -32,7 +32,7 @@ bool hasSegmentEvidence(const TbcMetaData &metaData)
 SegmentLayer deriveLayerForFile(const TbcMetaData &metaData,
                                 const SegmentsThresholds &thresholds,
                                 const QString &createdBy,
-                                const QVector<SegmentMark> &storedMarks)
+                                const QVector<ShotBoundary> &storedBoundaries)
 {
     SegmentLayer layer;
     FieldRange range;
@@ -42,21 +42,19 @@ SegmentLayer deriveLayerForFile(const TbcMetaData &metaData,
         return layer;
     }
     const FieldMetrics metrics = FieldMetrics::fromMetadata(metaData);
-    const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0,
-                                                      metrics.enabled ? &metrics : nullptr);
-    const QVector<TbcMetaData::Segment> base = deriveSegments(metaData, analysis, thresholds, createdBy);
-    const QVector<SegmentMark> detected = detectRestartMarks(analysis, metrics, thresholds, base, createdBy);
-    layer.marks = mergeMarks(storedMarks, detected);
-    layer.segments = splitSegmentsAtMarks(base, layer.marks);
+    const FieldMetrics *metricsPtr = metrics.enabled ? &metrics : nullptr;
+    const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0, metricsPtr);
+    layer.segments = deriveSegments(metaData, analysis, thresholds, createdBy);
+    layer.shotBoundaries = mergeShotBoundaries(
+        storedBoundaries, detectShotBoundaries(analysis, metricsPtr, thresholds, layer.segments, createdBy));
     return layer;
 }
 
 QVector<TbcMetaData::Segment> deriveSegmentsForFile(const TbcMetaData &metaData,
                                                     const SegmentsThresholds &thresholds,
-                                                    const QString &createdBy,
-                                                    const QVector<SegmentMark> &storedMarks)
+                                                    const QString &createdBy)
 {
-    return deriveLayerForFile(metaData, thresholds, createdBy, storedMarks).segments;
+    return deriveLayerForFile(metaData, thresholds, createdBy).segments;
 }
 
 qint32 deriveSegmentsAtLoad(TbcMetaData &metaData, const QString &createdBy)

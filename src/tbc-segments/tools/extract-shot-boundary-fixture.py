@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Extract a restart-detection fixture from a .tbc.db.
+"""Extract a shot-boundary detection fixture from a .tbc.db.
 
 Reads the per-field picture metrics around hand-labelled points of a decode
-and writes them as a small JSON fixture for testsegments' restart test. Only
+and writes them as a small JSON fixture for testsegments' shot boundary test. Only
 scalar metrics are copied (no picture, no audio), in short windows.
 
-    extract-restart-fixture.py --db capture.tbc.db --labels labels.txt \
+    extract-shot-boundary-fixture.py --db capture.tbc.db --labels labels.txt \
         --out test-data/segments/<name>.json --description "..."
 
 labels.txt holds one point per line: a label and a timecode (HH:MM:SS.ss from
 field 0, at the decode's field rate), e.g.
 
-    restart     00:05:13.58
-    flash       01:23:38.51
-    screen_cut  01:51:00.29
+    shot_boundary  00:05:13.58
+    look_alike     01:23:38.51
 
-"restart" points must be marked; every other label must not be. The database
-is opened read-only.
+"shot_boundary" points must be found (Glossary: shot boundary,
+docs/Tools/tbc-segments-glossary.md#shot-boundary); "look_alike" points
+(flashes, cuts in a picture filmed off a screen) must not be. The database is
+opened read-only.
 """
 
 import argparse

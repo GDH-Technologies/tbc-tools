@@ -22,21 +22,20 @@
 
 ************************************************************************/
 
+
 #ifndef SEGMENTPREFERENCES_H
 #define SEGMENTPREFERENCES_H
 
+#include <QString>
+
 // The module's own settings, kept in tbc-analyse's ini under [segments] so
-// they need nothing from its Configuration class. Both default off.
+// they need nothing from its Configuration class.
 namespace SegmentPreferences {
 
-// Newly derived restart marks split their clip into segments
-bool splitAtRestarts();
-void setSplitAtRestarts(bool enabled);
-
-// Video exports cut each segment's chapter at its restart marks
-// (tbc-video-export --export-metadata-restart-chapters)
-bool restartChapters();
-void setRestartChapters(bool enabled);
+// Glossary: chapters by (docs/Tools/tbc-segments-glossary.md#chapters-by):
+// "segment" (the default), "scene" or "shot"
+QString chaptersBy();
+void setChaptersBy(const QString &chaptersBy);
 
 } // namespace SegmentPreferences
 

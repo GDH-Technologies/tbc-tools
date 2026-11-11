@@ -470,7 +470,7 @@ private:
     void setOutPointAtCurrentFrame();
     qint32 sliderPositionForFrame(qint32 frameNumber) const;
     qint32 frameForSliderPosition(qint32 sliderPosition) const;
-    // Recording segments
+    // Segments
     qint32 sliderPositionForField(qint32 field) const;
     qint32 currentFirstFieldZeroBased() const;
     bool skipBySegmentsEnabled() const;

@@ -31,10 +31,11 @@
 #include "tbcmetadata.h"
 
 /*!
-    Write the recording-segment report (tbc-segments' schema 1 JSON) from the
+    Write the segment report (tbc-segments' schema 1 JSON) from the
     metadata alone: the stored segments (derived when none are stored), the
     events derived from the metadata and any stored picture metrics, the
-    restart marks (stored in the .tbc.db beside inputPath, else detected) and
+    shot boundaries (stored in the .tbc.db beside inputPath, else detected),
+    the scenes and shots worked out from them, and
     each segment's 1-based frame range under the mixed-frame rule. No TBC is
     read. fileName "-" writes to stdout.
 

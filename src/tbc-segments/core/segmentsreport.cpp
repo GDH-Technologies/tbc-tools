@@ -24,8 +24,8 @@
 
 #include "segmentsreport.h"
 
-#include "markstore.h"
-#include "restartmarks.h"
+#include "shotboundaries.h"
+#include "shotboundarystore.h"
 #include "segments.h"
 #include "tbc/logging.h"
 
@@ -53,20 +53,26 @@ bool writeSegmentsJson(TbcMetaData &metaData,
     const FieldMetrics *metricsPtr = metrics.enabled ? &metrics : nullptr;
     const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0, metricsPtr);
 
-    // Restart marks: the stored ones, else a detection inside the clips
+    // Shot boundaries (Glossary: shot boundary, docs/Tools/tbc-segments-glossary.md#shot-boundary):
+    // the stored ones, else a detection inside the content spans
     const QVector<TbcMetaData::Segment> base = deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-export-metadata"));
-    QVector<SegmentMark> marks;
-    QString marksSource = QStringLiteral("stored");
-    MarkStore::read(MarkStore::databasePathFor(inputPath), &marks);
-    if (marks.isEmpty()) {
-        marks = mergeMarks({}, detectRestartMarks(analysis, metrics, thresholds, base, QStringLiteral("tbc-export-metadata")));
-        marksSource = marks.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
+    QVector<ShotBoundary> boundaries;
+    QString boundariesSource = QStringLiteral("stored");
+    const QString database = ShotBoundaryStore::databasePathFor(inputPath);
+    if (!database.isEmpty()) {
+        ShotBoundaryStore::read(database, &boundaries);
+    } else {
+        ShotBoundaryStore::readSidecar(inputPath, &boundaries);   // tbc-analyse's export snapshot
+    }
+    if (boundaries.isEmpty()) {
+        boundaries = mergeShotBoundaries({}, detectShotBoundaries(analysis, metricsPtr, thresholds, base, QStringLiteral("tbc-export-metadata")));
+        boundariesSource = boundaries.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
     }
 
     QVector<TbcMetaData::Segment> segments = metaData.getSegments();
     QString segmentsSource = QStringLiteral("stored");
     if (segments.isEmpty()) {
-        segments = splitSegmentsAtMarks(base, marks);
+        segments = base;
         segmentsSource = segments.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
     }
 
@@ -81,7 +87,7 @@ bool writeSegmentsJson(TbcMetaData &metaData,
                                   : QStringLiteral("sqlite");
     QJsonObject report = buildReport(metaData, inputPath, inputKind, startFrameOneBased, lengthFrames, range,
                                      thresholds, analysis, metricsPtr, fieldDataInfo, false, segments, segmentsSource);
-    addMarksToReport(&report, metaData, analysis, marks, marksSource);
+    addShotBoundariesToReport(&report, metaData, analysis, segments, boundaries, boundariesSource);
     QJsonObject tool = report.value(QStringLiteral("tool")).toObject();
     tool.insert(QStringLiteral("name"), QStringLiteral("tbc-export-metadata"));
     report.insert(QStringLiteral("tool"), tool);

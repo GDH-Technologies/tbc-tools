@@ -2,7 +2,7 @@
 
     segmentchapters.cpp
 
-    tbc-segments - Recording segments as export chapters
+    tbc-segments - Segments as export chapters
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -26,8 +26,9 @@
 
 #include <algorithm>
 
-#include "markstore.h"
+#include "sceneshots.h"
 #include "segmentsderive.h"
+#include "shotboundarystore.h"
 
 QVector<SegmentChapter> segmentChapters(const TbcMetaData &metaData, FfmetadataSegmentMode mode)
 {
@@ -57,42 +58,65 @@ QVector<SegmentChapter> segmentChapters(const TbcMetaData &metaData, FfmetadataS
     return chapters;
 }
 
-QVector<SegmentChapter> cutChaptersAtRestarts(const QVector<SegmentChapter> &chapters, const QVector<SegmentMark> &marks)
+ChaptersBy chaptersByFromName(const QString &name, bool *ok)
 {
-    QVector<qint32> cuts;
-    for (const SegmentMark &mark : marks) {
-        if (mark.enabled && !mark.split) cuts.append(mark.field);
-    }
-    if (cuts.isEmpty()) return chapters;
-    std::sort(cuts.begin(), cuts.end());
-    QVector<SegmentChapter> result;
-    for (const SegmentChapter &chapter : chapters) {
-        QVector<qint32> inside;
-        for (qint32 cut : cuts) {
-            if (cut > chapter.startField && cut < chapter.endFieldExclusive) inside.append(cut);
-        }
-        if (inside.isEmpty()) {
-            result.append(chapter);
-            continue;
-        }
-        qint32 start = chapter.startField;
-        inside.append(chapter.endFieldExclusive);
-        for (qint32 take = 0; take < inside.size(); take++) {
-            SegmentChapter piece = chapter;
-            piece.startField = start;
-            piece.endFieldExclusive = inside.at(take);
-            piece.title = QStringLiteral("%1 · take %2").arg(chapter.title).arg(take + 1);
-            result.append(piece);
-            start = inside.at(take);
-        }
-    }
-    return result;
+    if (ok) *ok = true;
+    if (name.compare(QLatin1String("scene"), Qt::CaseInsensitive) == 0) return ChaptersBy::Scene;
+    if (name.compare(QLatin1String("shot"), Qt::CaseInsensitive) == 0) return ChaptersBy::Shot;
+    if (ok && !name.isEmpty() && name.compare(QLatin1String("segment"), Qt::CaseInsensitive) != 0) *ok = false;
+    return ChaptersBy::Segment;
 }
 
-QVector<SegmentMark> restartMarksForExport(const TbcMetaData &metaData, const QString &metadataPath)
+QVector<SegmentChapter> chaptersBy(const TbcMetaData &metaData, FfmetadataSegmentMode mode, ChaptersBy by,
+                                   const QVector<ShotBoundary> &boundaries)
 {
-    QVector<SegmentMark> marks;
-    MarkStore::read(MarkStore::databasePathFor(metadataPath), &marks);
-    if (!marks.isEmpty()) return marks;
-    return deriveLayerForFile(metaData, SegmentsThresholds(), QStringLiteral("tbc-export-metadata")).marks;
+    const QVector<SegmentChapter> segmentList = segmentChapters(metaData, mode);
+    if (by == ChaptersBy::Segment || segmentList.isEmpty()) {
+        return segmentList;
+    }
+    const QVector<TbcMetaData::Segment> segments = metaData.getSegments();
+    const QVector<SegmentPart> parts = by == ChaptersBy::Scene ? scenesOf(segments, boundaries)
+                                                                : shotsOf(segments, boundaries);
+    QVector<SegmentChapter> chapters;
+    // Content span chapters are replaced by their parts; the rest stay
+    for (const TbcMetaData::Segment &segment : segments) {
+        if (!isContentSpanKind(segment.kind)) {
+            if (mode == FfmetadataSegmentMode::AllSegments) {
+                SegmentChapter chapter;
+                chapter.startField = segment.startField;
+                chapter.endFieldExclusive = segment.endFieldExclusive;
+                chapter.title = segment.title.trimmed().isEmpty() ? QStringLiteral("Segment %1").arg(segment.id)
+                                                                  : segment.title.trimmed();
+                chapter.comment = segment.comment.trimmed();
+                chapters.append(chapter);
+            }
+            continue;
+        }
+        for (const SegmentPart &part : parts) {
+            if (part.spanId != segment.id) continue;
+            if (mode == FfmetadataSegmentMode::EnabledSegments && !part.enabled) continue;
+            SegmentChapter chapter;
+            chapter.startField = part.startField;
+            chapter.endFieldExclusive = part.endFieldExclusive;
+            chapter.title = part.title;
+            chapters.append(chapter);
+        }
+    }
+    std::stable_sort(chapters.begin(), chapters.end(), [](const SegmentChapter &a, const SegmentChapter &b) {
+        return a.startField < b.startField;
+    });
+    return chapters;
+}
+
+QVector<ShotBoundary> shotBoundariesForExport(const TbcMetaData &metaData, const QString &metadataPath)
+{
+    QVector<ShotBoundary> boundaries;
+    const QString database = ShotBoundaryStore::databasePathFor(metadataPath);
+    if (!database.isEmpty()) {
+        ShotBoundaryStore::read(database, &boundaries);
+    } else {
+        ShotBoundaryStore::readSidecar(metadataPath, &boundaries);   // tbc-analyse's export snapshot
+    }
+    if (!boundaries.isEmpty()) return boundaries;
+    return deriveLayerForFile(metaData, SegmentsThresholds(), QStringLiteral("tbc-export-metadata")).shotBoundaries;
 }
