@@ -29,6 +29,7 @@
 #include <QTemporaryDir>
 #include <QVector>
 #include <cmath>
+#include <limits>
 #include <cstdlib>
 #include <iostream>
 
@@ -435,8 +436,9 @@ void testStoredMetricsDriveFieldDataEvents()
         p.lumaMeanIre = (i >= 200 && i < 220) ? 2.0 : 50.0;
         p.fieldDiffIre = (i == 60) ? 30.0 : 0.3;
         p.noiseIre = (i >= 120 && i < 140) ? 25.0 : 0.4;
-        p.blankingDevIre = 0.1;
-        p.syncTipDevIre = -0.2;
+        // A blank field's levels collapse (blanking below, sync tip above nominal)
+        p.blankingDevIre = (i >= 200 && i < 220) ? -18.0 : 0.1;
+        p.syncTipDevIre = (i >= 200 && i < 220) ? 22.0 : -0.2;
         p.burstAmpIre = (i >= 300 && i < 320) ? 0.5 : 40.0;
         m.updateFieldPictureMetrics(p, i + 1);
     }
@@ -468,8 +470,8 @@ void testDeriveSegments()
         p.lumaMeanIre = (i >= 200 && i < 260) ? 2.0 : 50.0;   // a long blank stretch
         p.fieldDiffIre = 0.3;
         p.noiseIre = (i >= 120 && i < 140) ? 25.0 : 0.4;    // a short noise burst
-        p.blankingDevIre = 0.1;
-        p.syncTipDevIre = -0.2;
+        p.blankingDevIre = (i >= 200 && i < 260) ? -18.0 : 0.1;
+        p.syncTipDevIre = (i >= 200 && i < 260) ? 22.0 : -0.2;
         p.burstAmpIre = 40.0;
         m.updateFieldPictureMetrics(p, i + 1);
     }
@@ -504,6 +506,112 @@ void testDeriveSegments()
     CHECK(split.size() == 6);
     CHECK(split[1].startField == 120 && split[1].endFieldExclusive == 140 && split[1].kind == QLatin1String("noise"));
     CHECK(split[2].startField == 140 && split[2].endFieldExclusive == 200 && split[2].kind == QLatin1String("clip"));
+}
+
+// Picture metrics for a simple synthetic tape: picture everywhere, with
+// overrides per field
+TbcMetaData::PictureMetrics pictureField()
+{
+    TbcMetaData::PictureMetrics p;
+    p.lumaMeanIre = 50.0;
+    p.fieldDiffIre = 0.3;
+    p.noiseIre = 0.4;
+    p.blankingDevIre = 0.1;
+    p.syncTipDevIre = -0.2;
+    p.burstAmpIre = 40.0;
+    return p;
+}
+
+// A dark recorded scene (luma at black, levels normal) is picture, not blank:
+// it neither raises blank_video nor splits its clip. With collapsed levels, or
+// with luma below black, the same stretch is blank; without level metrics the
+// luma test stands alone.
+void testDarkSceneIsNotBlank()
+{
+    const auto derive = [](double blankingDev, double syncTipDev, double luma) {
+        TbcMetaData m;
+        buildMetadata(m, 400);
+        for (qint32 i = 0; i < 400; i++) {
+            TbcMetaData::PictureMetrics p = pictureField();
+            if (i >= 200 && i < 261) {
+                p.lumaMeanIre = luma;
+                p.blankingDevIre = blankingDev;
+                p.syncTipDevIre = syncTipDev;
+            }
+            m.updateFieldPictureMetrics(p, i + 1);
+        }
+        const FieldMetrics stored = FieldMetrics::fromMetadata(m);
+        const SegmentsThresholds t;
+        const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
+        return qMakePair(countKind(a, "blank_video"), deriveSegments(m, a, t, QStringLiteral("testsegments")));
+    };
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+
+    const auto dark = derive(-0.4, 2.8, 1.6);         // the levels of a real dark scene
+    CHECK(dark.first == 0);
+    CHECK(dark.second.size() == 1 && dark.second[0].kind == QLatin1String("clip"));
+
+    const auto collapsed = derive(-18.0, 22.0, 1.6);  // the levels of real blank tape
+    CHECK(collapsed.first == 1);
+    CHECK(collapsed.second.size() == 3 && collapsed.second[1].kind == QLatin1String("blank"));
+
+    const auto belowBlack = derive(-0.4, 2.8, -20.0); // no picture at all
+    CHECK(belowBlack.first == 1 && belowBlack.second.size() == 3);
+
+    const auto unmeasured = derive(nan, nan, 1.6);    // no level metrics: luma alone
+    CHECK(unmeasured.first == 1 && unmeasured.second.size() == 3);
+}
+
+// Snow whose noise dips under the threshold on single fields, with a decoder
+// resync (a one-field section) inside it, is one noise segment, not a run of
+// fragments and slivers
+void testNoiseFragmentsMerge()
+{
+    TbcMetaData m;
+    buildMetadata(m, 600);
+    insertGap(m, 250, 1.0);
+    insertGap(m, 251, 1.0);       // [250,251) is a section of its own
+    for (qint32 i = 0; i < 600; i++) {
+        TbcMetaData::PictureMetrics p = pictureField();
+        if (i >= 100 && i < 400 && i != 150 && i != 320 && i != 321 && i != 370) {
+            p.noiseIre = 25.0;
+            p.fieldDiffIre = 20.0;
+        }
+        m.updateFieldPictureMetrics(p, i + 1);
+    }
+    const FieldMetrics stored = FieldMetrics::fromMetadata(m);
+    const SegmentsThresholds t;
+    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
+    CHECK(countKind(a, "noise") >= 4);   // the dips really do break the run
+    const QVector<TbcMetaData::Segment> segments = deriveSegments(m, a, t, QStringLiteral("testsegments"));
+    CHECK(segments.size() == 3);
+    CHECK(segments[0].startField == 0 && segments[0].endFieldExclusive == 100 && segments[0].kind == QLatin1String("clip"));
+    CHECK(segments[1].startField == 100 && segments[1].endFieldExclusive == 400 && segments[1].kind == QLatin1String("noise"));
+    CHECK(!segments[1].enabled);
+    CHECK(segments[2].startField == 400 && segments[2].endFieldExclusive == 600 && segments[2].kind == QLatin1String("clip"));
+    for (qint32 i = 0; i < segments.size(); i++) CHECK(segments[i].id == i + 1);
+}
+
+// A one-field section between two clips (a decoder resync at a record
+// restart) joins the following clip: the boundary stays where it started
+void testSliverBetweenClipsKeepsBoundary()
+{
+    TbcMetaData m;
+    buildMetadata(m, 600);
+    insertGap(m, 300, 1.0);
+    insertGap(m, 301, 1.0);
+    for (qint32 i = 0; i < 600; i++) {
+        m.updateFieldPictureMetrics(pictureField(), i + 1);
+    }
+    const FieldMetrics stored = FieldMetrics::fromMetadata(m);
+    const SegmentsThresholds t;
+    const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
+    CHECK(a.sections.size() == 3);
+    const QVector<TbcMetaData::Segment> segments = deriveSegments(m, a, t, QStringLiteral("testsegments"));
+    CHECK(segments.size() == 2);
+    CHECK(segments[0].endFieldExclusive == 300 && segments[0].kind == QLatin1String("clip"));
+    CHECK(segments[1].startField == 300 && segments[1].endFieldExclusive == 600 && segments[1].kind == QLatin1String("clip"));
+    CHECK(segments[1].id == 2 && segments[1].enabled);
 }
 
 void testPresets()
@@ -629,6 +737,9 @@ int main(int argc, char *argv[])
     testDecoderEventsMerge();
     testStoredMetricsDriveFieldDataEvents();
     testDeriveSegments();
+    testDarkSceneIsNotBlank();
+    testNoiseFragmentsMerge();
+    testSliverBetweenClipsKeepsBoundary();
     testPresets();
     testFrameRanges();
     testReportShape();

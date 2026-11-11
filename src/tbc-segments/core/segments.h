@@ -46,7 +46,10 @@ struct SegmentsThresholds {
     double dropoutStormThreshold = 0.25; // fraction of the active field area covered by dropouts
     double sceneThresholdIre = 12.0;     // same-parity field difference marking a scene change
     double noiseThresholdIre = 6.0;      // back-porch noise above which a field is snow
-    double blankLumaIre = 5.0;           // active luma at or below which a quiet field is blank
+    double blankLumaIre = 5.0;           // active luma at or below which a quiet field is blank...
+    double blankLevelDevIre = 5.0;       // ...when its levels have collapsed: blanking this far below, or
+                                         // sync tip this far above, nominal (a dark recorded picture keeps them)
+    double blankBelowBlackIre = -5.0;    // ...or its active luma sits below this (no picture at all)
 
     // Segment derivation
     qint32 minClipFields = 10;           // a section shorter than this is 'unknown', never a clip
@@ -173,8 +176,12 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
 // Recording segments from an analysis: every gapless section becomes one
 // segment, split further at noise/blank runs of at least
 // thresholds.minNonClipRunFields; each piece is classified clip | blank |
-// noise | unknown and enabled when it is a clip. Ids run 1..N in field order;
-// source is "derived"; createdBy names the tool.
+// noise | unknown and enabled when it is a clip. Adjacent non-clip pieces then
+// merge into one (across gaps too: snow broken by single quiet fields or
+// decoder resyncs is one stretch), and a piece shorter than minClipFields
+// between two clips joins the following clip, keeping the boundary where the
+// sliver started. Ids run 1..N in field order; source is "derived"; createdBy
+// names the tool.
 QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
                                              const SegmentsAnalysis &analysis,
                                              const SegmentsThresholds &thresholds,

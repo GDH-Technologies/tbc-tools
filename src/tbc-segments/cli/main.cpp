@@ -295,6 +295,8 @@ int main(int argc, char *argv[])
     QCommandLineOption sceneOption("scene-threshold-ire", QCoreApplication::translate("main", "Same-parity field difference marking a scene change (default 12)"), "IRE");
     QCommandLineOption noiseOption("noise-threshold-ire", QCoreApplication::translate("main", "Back-porch noise above which a field is snow (default 6)"), "IRE");
     QCommandLineOption blankOption("blank-luma-ire", QCoreApplication::translate("main", "Active luma at or below which a quiet field is blank (default 5)"), "IRE");
+    QCommandLineOption blankLevelOption("blank-level-dev-ire", QCoreApplication::translate("main", "A dark field is blank only when its blanking sits this far below, or its sync tip this far above, nominal (default 5)"), "IRE");
+    QCommandLineOption blankBelowBlackOption("blank-below-black-ire", QCoreApplication::translate("main", "...or its active luma sits below this (default -5)"), "IRE");
     QCommandLineOption minClipOption("min-clip-fields", QCoreApplication::translate("main", "A section shorter than this is 'unknown', never a clip (default 10)"), "n");
     QCommandLineOption minNonClipRunOption("min-non-clip-run-fields", QCoreApplication::translate("main", "A noise/blank run at least this long splits a section (default 50)"), "n");
     QCommandLineOption noBurstOption("no-burst", QCoreApplication::translate("main", "Do not measure burst amplitude, and do not read the chroma TBC for it (halves the walk's I/O; no no_burst events; a stored burst amplitude is kept, not cleared)"));
@@ -308,7 +310,7 @@ int main(int argc, char *argv[])
     for (const QCommandLineOption *opt : {&jsonOption, &startOption, &lengthOption, &rfRateOption, &sensitivityOption,
                                           &gapToleranceOption, &syncConfOption, &minRunOption, &dropoutStormOption,
                                           &tbcOption, &chromaOption, &threadsOption, &sceneOption, &noiseOption, &blankOption,
-                                          &minClipOption, &minNonClipRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
+                                          &blankLevelOption, &blankBelowBlackOption, &minClipOption, &minNonClipRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
                                           &writeOption, &writeSegmentsOption, &forceOption, &perFieldOption, &summaryOption}) {
         parser.addOption(*opt);
     }
@@ -352,6 +354,8 @@ int main(int argc, char *argv[])
         || !parseDouble(parser, sceneOption, &thresholds.sceneThresholdIre, 0.0, 200.0, &error)
         || !parseDouble(parser, noiseOption, &thresholds.noiseThresholdIre, 0.0, 200.0, &error)
         || !parseDouble(parser, blankOption, &thresholds.blankLumaIre, -50.0, 200.0, &error)
+        || !parseDouble(parser, blankLevelOption, &thresholds.blankLevelDevIre, 0.0, 200.0, &error)
+        || !parseDouble(parser, blankBelowBlackOption, &thresholds.blankBelowBlackIre, -100.0, 100.0, &error)
         || !parseInt(parser, minClipOption, &thresholds.minClipFields, 1, 1000000, &error)
         || !parseInt(parser, minNonClipRunOption, &thresholds.minNonClipRunFields, 1, 1000000, &error)) {
         qCritical().noquote() << error;

@@ -28,15 +28,19 @@ backfill, else measured by walking `--tbc <luma.tbc>`):
 | --- | --- |
 | `scene_change` | Same-parity field difference (field n against n−2) above the threshold. |
 | `noise` | Back-porch noise above the threshold: snow, unrecorded tape. |
-| `blank_video` | Quiet fields whose active luma sits at black. |
+| `blank_video` | Quiet fields with no picture: active luma at black and the levels collapsed (blanking well below, or the sync tip well above, nominal), or luma below black. A dark recorded scene keeps its levels and is not blank. |
 | `no_burst` | Colour-burst amplitude far below the file's median (from `<luma>_chroma.tbc` when present). |
 
 ## Segments
 
 Every gapless section becomes one segment, split further at noise or blank
-runs of at least `--min-non-clip-run-fields`; each piece is classified `clip`,
-`blank`, `noise` or `unknown` (shorter than `--min-clip-fields`, or mostly sync
-loss) and only clips are enabled for export. The report gives each segment its
+runs of at least `--min-non-clip-run-fields` (a gap shorter than
+`--min-clip-fields` inside a run is part of it: snow flickers); each piece is
+classified `clip`, `blank`, `noise` or `unknown` (shorter than
+`--min-clip-fields`, or mostly sync loss) and only clips are enabled for
+export. Adjacent non-clip pieces merge into one, across gaps too, and a sliver
+between two clips joins the following clip, so an unrecorded stretch is one
+segment however often its snow flickers or the decoder resyncs. The report gives each segment its
 0-based field range, its seconds, and the 1-based `startFrame` /
 `lengthFrames` an export of it covers (`tbc-video-export --start/--length`),
 under the mixed-frame rule: a frame whose second field starts a segment

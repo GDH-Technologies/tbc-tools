@@ -476,10 +476,23 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
                         [&](qint32 s, qint32 e) { double sum = 0; for (qint32 i = s; i < e; i++) sum += m.noiseIre[i]; return (sum / (e - s)) / (4.0 * t.noiseThresholdIre); },
                         [&](qint32 s, qint32 e) { QJsonObject d; double sum = 0; for (qint32 i = s; i < e; i++) sum += m.noiseIre[i]; d.insert("meanNoiseIre", sum / (e - s)); d.insert("fields", e - s); return d; });
 
+        // Blank is no picture: dark and quiet, and either below black or with
+        // the levels collapsed (blanking well below nominal, the sync tip well
+        // above it). A dark recorded scene keeps its levels and stays picture.
+        // Without level metrics the luma test stands alone.
+        const auto levelsSayBlank = [&](qint32 i) {
+            const double blanking = m.blankingDevIre[i];
+            const double syncTip = m.syncTipDevIre[i];
+            if (!std::isfinite(blanking) && !std::isfinite(syncTip)) return true;
+            return m.lumaMeanIre[i] < t.blankBelowBlackIre
+                   || (std::isfinite(blanking) && blanking <= -t.blankLevelDevIre)
+                   || (std::isfinite(syncTip) && syncTip >= t.blankLevelDevIre);
+        };
         QVector<bool> blank(n, false);
         for (qint32 i = 0; i < n; i++) {
             blank[i] = std::isfinite(m.lumaMeanIre[i]) && m.lumaMeanIre[i] <= t.blankLumaIre
-                       && std::isfinite(m.noiseIre[i]) && m.noiseIre[i] < a.effectiveNoiseThresholdIre;
+                       && std::isfinite(m.noiseIre[i]) && m.noiseIre[i] < a.effectiveNoiseThresholdIre
+                       && levelsSayBlank(i);
         }
         appendRunEvents(events, blank, minRun, QStringLiteral("blank_video"),
                         [](qint32, qint32) { return 0.5; },
@@ -676,6 +689,8 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
     thresholds.insert("sceneThresholdIre", t.sceneThresholdIre);
     thresholds.insert("noiseThresholdIre", t.noiseThresholdIre);
     thresholds.insert("blankLumaIre", t.blankLumaIre);
+    thresholds.insert("blankLevelDevIre", t.blankLevelDevIre);
+    thresholds.insert("blankBelowBlackIre", t.blankBelowBlackIre);
     thresholds.insert("minClipFields", t.minClipFields);
     thresholds.insert("minNonClipRunFields", t.minNonClipRunFields);
     thresholds.insert("nonClipCoverage", t.nonClipCoverage);
@@ -722,6 +737,16 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
             const qint32 field = section.startField + i;
             nonClip[i] = noiseLike[field] || blankLike[field];
         }
+        // Snow dips under the noise threshold on a field or two; a gap in the
+        // run shorter than a clip could ever be is part of the run
+        qint32 lastNonClip = -1;
+        for (qint32 i = 0; i < length; i++) {
+            if (!nonClip[i]) continue;
+            if (lastNonClip >= 0 && i - lastNonClip - 1 > 0 && i - lastNonClip - 1 < t.minClipFields) {
+                for (qint32 j = lastNonClip + 1; j < i; j++) nonClip[j] = true;
+            }
+            lastNonClip = i;
+        }
         qint32 cursor = section.startField;
         for (const auto &run : runsOf(nonClip)) {
             if (run.second - run.first < t.minNonClipRunFields) continue;
@@ -733,7 +758,58 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
         }
         emitSegment(cursor, section.endFieldExclusive);
     }
-    return out;
+
+    // Snow does not stay above the noise threshold on every field, and the
+    // decoder resyncs inside it, so one unrecorded stretch arrives as many
+    // pieces. Adjacent non-clip pieces are one stretch: merge them, as noise
+    // or blank by whichever covers more of it.
+    const auto isClip = [](const TbcMetaData::Segment &segment) { return segment.kind == QLatin1String("clip"); };
+    QVector<TbcMetaData::Segment> merged;
+    QVector<qint32> pieces;
+    merged.reserve(out.size());
+    for (const TbcMetaData::Segment &segment : out) {
+        if (!merged.isEmpty() && !isClip(segment) && !isClip(merged.last())
+            && merged.last().endFieldExclusive == segment.startField) {
+            merged.last().endFieldExclusive = segment.endFieldExclusive;
+            pieces.last()++;
+            continue;
+        }
+        merged.append(segment);
+        pieces.append(1);
+    }
+    for (qint32 i = 0; i < merged.size(); i++) {
+        if (pieces.at(i) < 2) continue;    // a piece on its own keeps its classification
+        TbcMetaData::Segment &segment = merged[i];
+        qint32 noise = 0, blank = 0;
+        for (qint32 field = segment.startField; field < segment.endFieldExclusive; field++) {
+            if (noiseLike[field]) noise++;
+            if (blankLike[field]) blank++;
+        }
+        segment.kind = (noise == 0 && blank == 0) ? QStringLiteral("unknown")
+                       : noise >= blank             ? QStringLiteral("noise")
+                                                    : QStringLiteral("blank");
+        segment.enabled = false;
+    }
+
+    // A sliver between two clips (a one-field section the decoder left at a
+    // resync, say) is not a stretch of its own: it joins the following clip,
+    // so the boundary stays where the sliver started.
+    QVector<TbcMetaData::Segment> result;
+    result.reserve(merged.size());
+    for (qint32 i = 0; i < merged.size(); i++) {
+        const TbcMetaData::Segment &segment = merged.at(i);
+        const qint32 length = segment.endFieldExclusive - segment.startField;
+        if (!isClip(segment) && length < t.minClipFields && i > 0 && i + 1 < merged.size()
+            && isClip(merged.at(i - 1)) && isClip(merged.at(i + 1))
+            && merged.at(i - 1).endFieldExclusive == segment.startField
+            && segment.endFieldExclusive == merged.at(i + 1).startField) {
+            merged[i + 1].startField = segment.startField;
+            continue;
+        }
+        result.append(segment);
+    }
+    for (qint32 i = 0; i < result.size(); i++) result[i].id = i + 1;
+    return result;
 }
 
 namespace {
@@ -836,6 +912,8 @@ QJsonObject buildReport(const TbcMetaData &metaData,
         ft.insert("sceneThresholdIre", t.sceneThresholdIre);
         ft.insert("noiseThresholdIre", t.noiseThresholdIre);
         ft.insert("blankLumaIre", t.blankLumaIre);
+        ft.insert("blankLevelDevIre", t.blankLevelDevIre);
+        ft.insert("blankBelowBlackIre", t.blankBelowBlackIre);
         ft.insert("sceneThresholdIreEffective", a.effectiveSceneThresholdIre);
         ft.insert("noiseThresholdIreEffective", a.effectiveNoiseThresholdIre);
         ft.insert("medianFieldDiffIre", std::isfinite(a.medianFieldDiffIre) ? QJsonValue(a.medianFieldDiffIre) : QJsonValue(QJsonValue::Null));
