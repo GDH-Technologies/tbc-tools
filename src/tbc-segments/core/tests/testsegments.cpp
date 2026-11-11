@@ -23,6 +23,8 @@
 ************************************************************************/
 
 #include <QCoreApplication>
+#include <QFile>
+#include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRandomGenerator>
@@ -33,6 +35,8 @@
 #include <cstdlib>
 #include <iostream>
 
+#include "markstore.h"
+#include "restartmarks.h"
 #include "segments.h"
 #include "tbcmetadata.h"
 
@@ -614,6 +618,144 @@ void testSliverBetweenClipsKeepsBoundary()
     CHECK(segments[1].id == 2 && segments[1].enabled);
 }
 
+// --- restart marks ---------------------------------------------------------------------
+
+// Restarts, flashes and screen cuts hand-checked on a Video8 camcorder tape:
+// every restart is marked within the fixture's tolerance, nothing else is
+void testRestartFixture()
+{
+    QFile file(QStringLiteral(TBC_TEST_DATA_DIR "/segments/video8-restart-labels.json"));
+    CHECK(file.open(QIODevice::ReadOnly));
+    const QJsonObject fixture = QJsonDocument::fromJson(file.readAll()).object();
+    const qint32 tolerance = fixture.value("toleranceFields").toInt();
+    const QJsonArray windows = fixture.value("windows").toArray();
+    CHECK(windows.size() >= 30);
+    qint32 restarts = 0, others = 0;
+    for (const QJsonValue &value : windows) {
+        const QJsonObject window = value.toObject();
+        const qint32 fields = window.value("fields").toInt();
+        const qint32 point = window.value("field").toInt();
+        const QJsonObject metrics = window.value("metrics").toObject();
+        TbcMetaData m;
+        buildMetadata(m, fields);
+        const auto at = [&](const char *key, qint32 i) {
+            const QJsonValue v = metrics.value(QLatin1String(key)).toArray().at(i);
+            return v.isNull() ? std::numeric_limits<double>::quiet_NaN() : v.toDouble();
+        };
+        for (qint32 i = 0; i < fields; i++) {
+            TbcMetaData::PictureMetrics p;
+            p.lumaMeanIre = at("lumaMeanIre", i);
+            p.fieldDiffIre = at("fieldDiffIre", i);
+            p.noiseIre = at("noiseIre", i);
+            p.blankingDevIre = at("blankingDevIre", i);
+            p.syncTipDevIre = at("syncTipDevIre", i);
+            m.updateFieldPictureMetrics(p, i + 1);
+        }
+        const FieldMetrics stored = FieldMetrics::fromMetadata(m);
+        const SegmentsThresholds t;
+        const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
+        const QVector<TbcMetaData::Segment> base = deriveSegments(m, a, t, QStringLiteral("testsegments"));
+        const QVector<SegmentMark> marks = detectRestartMarks(a, stored, t, base, QStringLiteral("testsegments"));
+        const SegmentMark *hit = nullptr;
+        for (const SegmentMark &mark : marks) {
+            if (std::abs(mark.field - point) <= tolerance) hit = &mark;
+        }
+        const QString label = window.value("label").toString();
+        if (label == QLatin1String("restart")) {
+            restarts++;
+            if (!hit) std::cerr << "restart window " << restarts + others << " not marked\n";
+            CHECK(hit != nullptr);
+            CHECK(hit->confidence >= 0.5 && hit->confidence <= 1.0);
+            CHECK(!hit->reason.isEmpty() && hit->enabled && !hit->split && hit->source == QLatin1String("derived"));
+        } else {
+            others++;
+            if (hit) std::cerr << label.toStdString() << " window " << restarts + others << " marked\n";
+            CHECK(hit == nullptr);
+        }
+    }
+    CHECK(restarts == 30 && others == 10);
+}
+
+SegmentMark mark(qint32 id, qint32 field, const QString &source = QStringLiteral("derived"), bool enabled = true, bool split = false)
+{
+    SegmentMark m;
+    m.id = id;
+    m.field = field;
+    m.source = source;
+    m.enabled = enabled;
+    m.split = split;
+    return m;
+}
+
+// User and dismissed marks survive a fresh detection; derived ones are
+// replaced, keeping their ids where the detection finds them again
+void testMergeMarks()
+{
+    const QVector<SegmentMark> stored = {mark(1, 100), mark(2, 200, QStringLiteral("user"), true, true),
+                                         mark(3, 300, QStringLiteral("derived"), false), mark(4, 400)};
+    const QVector<SegmentMark> detected = {mark(1, 101), mark(2, 199), mark(3, 301), mark(4, 500)};
+    const QVector<SegmentMark> merged = mergeMarks(stored, detected);
+    CHECK(merged.size() == 4);
+    CHECK(merged[0].field == 101 && merged[0].id == 1);                     // found again: id kept
+    CHECK(merged[1].field == 200 && merged[1].source == QLatin1String("user") && merged[1].split);
+    CHECK(merged[2].field == 300 && !merged[2].enabled);                     // dismissed stays dismissed
+    CHECK(merged[3].field == 500 && merged[3].id == 5);                      // new: next free id
+    // The derived mark at 400 that the detection no longer finds is gone
+    for (const SegmentMark &m : merged) CHECK(m.field != 400);
+}
+
+// Only enabled marks that split cut a clip; noise, and marks on a start, cut nothing
+void testSplitSegmentsAtMarks()
+{
+    TbcMetaData::Segment clip;
+    clip.id = 1; clip.startField = 0; clip.endFieldExclusive = 300; clip.kind = QStringLiteral("clip"); clip.title = QStringLiteral("Party");
+    TbcMetaData::Segment noise;
+    noise.id = 2; noise.startField = 300; noise.endFieldExclusive = 400; noise.kind = QStringLiteral("noise"); noise.enabled = false;
+    const QVector<TbcMetaData::Segment> segments = {clip, noise};
+    CHECK(splitSegmentsAtMarks(segments, {mark(1, 100)}).size() == 2);                                     // not split
+    CHECK(splitSegmentsAtMarks(segments, {mark(1, 100, QStringLiteral("derived"), false, true)}).size() == 2); // dismissed
+    const QVector<TbcMetaData::Segment> split = splitSegmentsAtMarks(
+        segments, {mark(1, 100, QStringLiteral("derived"), true, true), mark(2, 200, QStringLiteral("user"), true, true),
+                   mark(3, 0, QStringLiteral("derived"), true, true), mark(4, 350, QStringLiteral("derived"), true, true)});
+    CHECK(split.size() == 4);
+    CHECK(split[0].id == 1 && split[0].endFieldExclusive == 100 && split[0].title == QLatin1String("Party"));
+    CHECK(split[1].startField == 100 && split[1].endFieldExclusive == 200 && split[1].title.isEmpty() && split[1].id == 3);
+    CHECK(split[2].startField == 200 && split[2].endFieldExclusive == 300 && split[2].kind == QLatin1String("clip") && split[2].id == 4);
+    CHECK(split[3].id == 2 && split[3].startField == 300 && split[3].endFieldExclusive == 400);
+}
+
+// Marks round-trip through the .tbc.db in the module's own table; writing
+// what is already stored writes nothing; the library's tables are untouched
+void testMarkStoreRoundTrip()
+{
+    QTemporaryDir dir;
+    CHECK(dir.isValid());
+    const QString db = dir.filePath(QStringLiteral("marks.tbc.db"));
+    TbcMetaData m;
+    buildMetadata(m, 100);
+    CHECK(m.write(db));
+    QVector<SegmentMark> read;
+    bool hasTable = true;
+    CHECK(MarkStore::read(db, &read, &hasTable) && read.isEmpty() && !hasTable);
+    CHECK(MarkStore::databasePathFor(dir.filePath(QStringLiteral("marks.tbc.json"))) == db);
+
+    SegmentMark a = mark(1, 40, QStringLiteral("derived"), true, false);
+    a.confidence = 0.875; a.reason = QStringLiteral("matched field pair"); a.detailJson = QStringLiteral("{\"contrast\":3.2}");
+    a.createdBy = QStringLiteral("testsegments"); a.updatedAt = QStringLiteral("2026-11-11T00:00:00Z");
+    SegmentMark b = mark(2, 70, QStringLiteral("user"), false, true);
+    b.comment = QStringLiteral("not a restart");
+    bool changed = false;
+    CHECK(MarkStore::write(db, {a, b}, &changed) && changed);
+    CHECK(MarkStore::read(db, &read, &hasTable) && hasTable);
+    CHECK(read.size() == 2 && read[0] == a && read[1] == b);
+    CHECK(MarkStore::write(db, {a, b}, &changed) && !changed);
+    CHECK(MarkStore::write(db, {a}, &changed) && changed);
+    CHECK(MarkStore::read(db, &read) && read.size() == 1 && read[0] == a);
+
+    TbcMetaData again;
+    CHECK(again.read(db) && again.getNumberOfFields() == 100);
+}
+
 void testPresets()
 {
     const SegmentsThresholds low = SegmentsThresholds::preset(SegmentSensitivity::Low);
@@ -740,6 +882,10 @@ int main(int argc, char *argv[])
     testDarkSceneIsNotBlank();
     testNoiseFragmentsMerge();
     testSliverBetweenClipsKeepsBoundary();
+    testRestartFixture();
+    testMergeMarks();
+    testSplitSegmentsAtMarks();
+    testMarkStoreRoundTrip();
     testPresets();
     testFrameRanges();
     testReportShape();

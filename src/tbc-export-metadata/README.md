@@ -23,6 +23,7 @@ tbc-export-metadata exports and converts metadata from TBC files into various hu
 - `--ffmetadata-no-vitc-timecode`: Disable writing FFmpeg-style VITC `timecode` in FFMETADATA output
 - `--ffmetadata-all-segments`: Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)
 - `--ffmetadata-no-segments`: Ignore stored recording segments; write LaserDisc navigation chapters only
+- `--ffmetadata-restart-chapters`: Cut each segment's chapter at its camcorder restart marks (one chapter per take; off by default)
 - `--start <frame>` / `--length <frames>`: 1-based frame window for `--ffmetadata` and `--segments-json` (chapter times are rebased to the window)
 - `--segments-json <file>`: Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; `-` for stdout
 - `--closed-captions <file>`: Write closed captions as Scenarist SCC V1.0 format
@@ -72,6 +73,7 @@ tbc-export-metadata [options] <input>
 - `--ffmetadata-no-vitc-timecode`: Disable writing FFmpeg-style VITC `timecode` in FFMETADATA output
 - `--ffmetadata-all-segments`: Write a chapter for every stored recording segment, disabled ones included (default: enabled segments only)
 - `--ffmetadata-no-segments`: Ignore stored recording segments; write LaserDisc navigation chapters only
+- `--ffmetadata-restart-chapters`: Cut each segment's chapter at its camcorder restart marks (one chapter per take; off by default)
 - `--start <frame>` / `--length <frames>`: 1-based frame window for `--ffmetadata` and `--segments-json` (chapter times are rebased to the window)
 - `--segments-json <file>`: Write the recording-segment report (stored or derived segments, events, frame ranges) as JSON; `-` for stdout
 - `--closed-captions <file>`: Write closed captions as Scenarist SCC V1.0 format

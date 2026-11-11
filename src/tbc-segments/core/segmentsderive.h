@@ -28,6 +28,7 @@
 #include <QString>
 #include <QVector>
 
+#include "restartmarks.h"
 #include "segments.h"
 #include "tbcmetadata.h"
 
@@ -35,11 +36,27 @@
 // stored picture metrics.
 bool hasSegmentEvidence(const TbcMetaData &metaData);
 
-// Analyse the whole file (stored picture metrics when there are any) and
-// derive its segments. Empty when the metadata has no fields.
+// The derived layer of a whole file: its segments and its restart marks.
+struct SegmentLayer {
+    QVector<TbcMetaData::Segment> segments;   // split at every enabled mark whose split flag is set
+    QVector<SegmentMark> marks;               // storedMarks merged with a fresh detection
+};
+
+// Analyse the whole file (stored picture metrics when there are any), derive
+// its segments, detect restart marks inside the clips and merge them with
+// storedMarks (user and dismissed marks kept, derived ones replaced: see
+// mergeMarks), then cut the clips at the marks that split. Empty when the
+// metadata has no fields.
+SegmentLayer deriveLayerForFile(const TbcMetaData &metaData,
+                                const SegmentsThresholds &thresholds,
+                                const QString &createdBy,
+                                const QVector<SegmentMark> &storedMarks = QVector<SegmentMark>());
+
+// The segments of deriveLayerForFile.
 QVector<TbcMetaData::Segment> deriveSegmentsForFile(const TbcMetaData &metaData,
                                                     const SegmentsThresholds &thresholds,
-                                                    const QString &createdBy);
+                                                    const QString &createdBy,
+                                                    const QVector<SegmentMark> &storedMarks = QVector<SegmentMark>());
 
 // Derive and store segments in the metadata when none are stored but the
 // decoder left evidence. Returns the number derived (0 when nothing was

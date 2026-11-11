@@ -32,7 +32,9 @@
 #include <QVector>
 #include <functional>
 
+#include "restartmarks.h"
 #include "segments.h"
+#include "segmentsderive.h"
 #include "tbcmetadata.h"
 
 class QAction;
@@ -65,7 +67,6 @@ public:
         std::function<qint32()> numberOfFields;
         std::function<const QVector<TbcMetaData::Segment> &()> segments;
         std::function<void(const QVector<TbcMetaData::Segment> &)> setSegments;
-        std::function<QVector<TbcMetaData::Segment>(const SegmentsThresholds &)> deriveSegments;
         std::function<bool()> derivedAtLoad;
         std::function<bool()> evidenceAvailable;
         std::function<bool(const TbcMetaData::Segment &, qint32 *, qint32 *)> segmentFrameRange;
@@ -86,6 +87,10 @@ public:
         std::function<void(qint32)> setOutPoint;
         // After the segment layer changed: mark modified, refresh panels
         std::function<void()> segmentsEdited;
+        // The metadata file the source was opened from (marks live in its .tbc.db)
+        std::function<QString()> metadataPath;
+        // The whole-file derived layer (segments and merged restart marks)
+        std::function<SegmentLayer(const SegmentsThresholds &, const QVector<SegmentMark> &)> deriveLayer;
     };
 
     SegmentsController(QWidget *parentWindow, Hooks hooks);
@@ -103,6 +108,18 @@ public:
     void setInOutFromSegmentAtCurrentFrame(bool setIn, bool setOut);
     bool splitSegmentAtField(qint32 field, QString *statusText);
     void rederiveSegments(const SegmentsThresholds &thresholds);
+
+    // Restart marks: read from the .tbc.db when a source loads (detected when
+    // none are stored), edited in the viewer, written back after every save
+    // (tbc-analyse's save writes a new database, which would drop them)
+    void sourceLoaded();
+    void sourceUnloaded();
+    bool persistMarks(QString *error = nullptr);
+    const QVector<SegmentMark> &marks() const { return marks_; }
+    void applyMarks(const QVector<SegmentMark> &marks);
+    void setSplitAtRestarts(bool enabled);
+    // Timeline: a tick per enabled mark, with its confidence and reason
+    void restartTicks(QVector<qint32> *positions, QStringList *tooltips) const;
 
     // Viewer
     void refreshViewer();
@@ -128,6 +145,9 @@ private:
     QWidget *parentWindow_ = nullptr;
     Hooks hooks_;
     SegmentsViewerDialog *viewer_ = nullptr;
+    QVector<SegmentMark> marks_;
+    SegmentsThresholds lastThresholds_;
+    qint32 markNearField(qint32 field) const;
 };
 
 #endif // SEGMENTSCONTROLLER_H

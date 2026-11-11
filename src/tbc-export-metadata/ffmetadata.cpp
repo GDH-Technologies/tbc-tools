@@ -178,7 +178,8 @@ bool writeFfmetadata(TbcMetaData &metaData,
                      qint32 startFrameOneBased,
                      qint32 lengthFrames,
                      bool includeVitcTimecode,
-                     FfmetadataSegmentMode segmentMode)
+                     FfmetadataSegmentMode segmentMode,
+                     const QVector<SegmentMark> &restartChapterMarks)
 {
     const auto videoParameters = metaData.getVideoParameters();
 
@@ -204,7 +205,8 @@ bool writeFfmetadata(TbcMetaData &metaData,
 
     // Recording segments stored in the metadata take the place of the
     // LaserDisc navigation chapters (a tape has none; a disc has no segments)
-    const QVector<SegmentChapter> segmentList = segmentChapters(metaData, segmentMode);
+    const QVector<SegmentChapter> segmentList = cutChaptersAtRestarts(segmentChapters(metaData, segmentMode),
+                                                                      restartChapterMarks);
     if (!segmentList.isEmpty()) {
         chapters.reserve(static_cast<size_t>(segmentList.size()) + 1);
         for (const SegmentChapter &segment : segmentList) {

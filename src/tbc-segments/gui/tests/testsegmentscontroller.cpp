@@ -16,8 +16,10 @@
 #include <QAction>
 #include <QApplication>
 #include <QMenu>
+#include <QStandardPaths>
 #include <QWidget>
 
+#include "segmentpreferences.h"
 #include "segmentscontroller.h"
 #endif
 
@@ -52,6 +54,7 @@ TbcMetaData::Segment segment(qint32 id, qint32 startField, qint32 endFieldExclus
 struct FakeHost {
     QVector<TbcMetaData::Segment> segments;
     QVector<TbcMetaData::Segment> derived;
+    QVector<SegmentMark> detected;      // what a fresh detection finds
     qint32 currentFrame = 1;
     qint32 edits = 0;
     qint32 inPoint = -1;
@@ -68,7 +71,17 @@ struct FakeHost {
         h.numberOfFields = []() { return 200; };
         h.segments = [this]() -> const QVector<TbcMetaData::Segment> & { return segments; };
         h.setSegments = [this](const QVector<TbcMetaData::Segment> &s) { segments = s; };
-        h.deriveSegments = [this](const SegmentsThresholds &) { return derived; };
+        // The real layer rule on fake data: merge the detection with the
+        // marks in hand, then cut the derived clips at the marks that split
+        h.deriveLayer = [this](const SegmentsThresholds &t, const QVector<SegmentMark> &stored) {
+            QVector<SegmentMark> fresh = detected;
+            for (SegmentMark &mark : fresh) mark.split = t.splitAtRestarts;
+            SegmentLayer layer;
+            layer.marks = mergeMarks(stored, fresh);
+            layer.segments = splitSegmentsAtMarks(derived, layer.marks);
+            return layer;
+        };
+        h.metadataPath = []() { return QString(); };
         h.derivedAtLoad = []() { return false; };
         h.evidenceAvailable = []() { return true; };
         h.segmentFrameRange = [](const TbcMetaData::Segment &s, qint32 *start, qint32 *length) {
@@ -214,11 +227,103 @@ void testTimelineMenu()
     CHECK(handle(split));
     CHECK(host.segments.size() == 4 && host.segments.at(3).startField == 98);
 
-    // Without segments only the viewer item is offered
+    // Without segments: no segment items, only adding a restart mark and the viewer
     host.segments.clear();
     QMenu empty;
     controller.addTimelineMenuActions(&empty, 1, QStringLiteral("1"), 0);
-    CHECK(empty.actions().size() == 1 && empty.actions().at(0)->text() == QStringLiteral("Open Segments Viewer..."));
+    CHECK(empty.actions().size() == 2);
+    CHECK(empty.actions().at(0)->text().startsWith(QStringLiteral("Add Restart Mark Here")));
+    CHECK(empty.actions().at(1)->text() == QStringLiteral("Open Segments Viewer..."));
+}
+
+SegmentMark restartAt(qint32 id, qint32 field)
+{
+    SegmentMark mark;
+    mark.id = id;
+    mark.field = field;
+    mark.confidence = 0.9;
+    mark.reason = QStringLiteral("matched field pair");
+    return mark;
+}
+
+// Marks: detected at load when none are stored; ticks and chapter-skip stops
+// for the enabled ones; nothing split by default
+void testMarksAtLoad()
+{
+    SegmentPreferences::setSplitAtRestarts(false);
+    QWidget window;
+    FakeHost host;
+    host.segments = threeSegments();
+    host.derived = threeSegments();
+    host.detected = {restartAt(1, 20), restartAt(2, 120)};
+    SegmentsController controller(&window, host.hooks());
+    controller.sourceLoaded();
+    CHECK(controller.marks().size() == 2 && !controller.marks().at(0).split);
+    CHECK(host.edits == 0 && host.segments.size() == 3);    // marked, not split
+    QVector<qint32> positions;
+    QStringList tooltips;
+    controller.restartTicks(&positions, &tooltips);
+    CHECK(positions == QVector<qint32>({11, 61}));
+    CHECK(tooltips.at(0).contains(QStringLiteral("matched field pair")));
+    // Chapter skip stops at the marks as well as the segment starts
+    CHECK(controller.nextSegmentStartFrame(1, 100) == 11);
+    CHECK(controller.nextSegmentStartFrame(41, 100) == 61);
+    CHECK(controller.previousSegmentStartFrame(61) == 41);
+    controller.sourceUnloaded();
+    CHECK(controller.marks().isEmpty());
+}
+
+// A mark the user splits cuts its clip and becomes a user mark; the global
+// switch splits every derived mark, and leaves user marks alone
+void testSplitMarks()
+{
+    SegmentPreferences::setSplitAtRestarts(false);
+    QWidget window;
+    FakeHost host;
+    host.segments = threeSegments();
+    host.derived = threeSegments();
+    host.detected = {restartAt(1, 20), restartAt(2, 120)};
+    SegmentsController controller(&window, host.hooks());
+    controller.sourceLoaded();
+
+    // Through the timeline menu at the first mark's frame
+    QMenu menu;
+    const auto handle = controller.addTimelineMenuActions(&menu, 11, QStringLiteral("11"), 20);
+    QAction *split = nullptr;
+    for (QAction *action : menu.actions()) {
+        if (action->text().startsWith(QStringLiteral("Split At Restart Here"))) split = action;
+    }
+    CHECK(split != nullptr);
+    CHECK(handle(split));
+    CHECK(controller.marks().at(0).split && controller.marks().at(0).source == QLatin1String("user"));
+    CHECK(host.segments.size() == 4 && host.segments.at(1).startField == 20 && host.segments.at(1).kind == QLatin1String("clip"));
+
+    // The global switch: the derived mark at 120 splits too; the user's stays as it is
+    controller.setSplitAtRestarts(true);
+    CHECK(SegmentPreferences::splitAtRestarts());
+    CHECK(host.segments.size() == 5);
+    controller.setSplitAtRestarts(false);
+    CHECK(host.segments.size() == 4);            // the user's split stands
+    CHECK(controller.marks().at(0).split && !controller.marks().at(1).split);
+
+    // Dismissing a mark (from the viewer) undoes its split and drops its tick
+    QVector<SegmentMark> edited = controller.marks();
+    edited[0].enabled = false;
+    controller.applyMarks(edited);
+    CHECK(host.segments.size() == 3);
+    QVector<qint32> positions;
+    QStringList tooltips;
+    controller.restartTicks(&positions, &tooltips);
+    CHECK(positions == QVector<qint32>({61}));
+
+    // Somewhere without a mark the menu offers to add one
+    QMenu other;
+    controller.addTimelineMenuActions(&other, 90, QStringLiteral("90"), 178);
+    bool offersAdd = false;
+    for (QAction *action : other.actions()) {
+        if (action->text().startsWith(QStringLiteral("Add Restart Mark Here"))) offersAdd = true;
+    }
+    CHECK(offersAdd);
 }
 
 } // namespace
@@ -236,12 +341,18 @@ int main(int argc, char *argv[])
     return 0;
 #else
     QApplication app(argc, argv);
+    // The preferences live in tbc-analyse's ini: keep the test's own
+    QStandardPaths::setTestModeEnabled(true);
     testLookupsAndReadout();
     testChapterSkipTargets();
     testTimelineMarkers();
     testSplitAndSetInOut();
     testRederiveKeepsUserSegments();
     testTimelineMenu();
+    testMarksAtLoad();
+    testSplitMarks();
+    SegmentPreferences::setSplitAtRestarts(false);
+    SegmentPreferences::setRestartChapters(false);
     std::cout << "testsegmentscontroller: all tests passed\n";
     return 0;
 #endif

@@ -1506,7 +1506,10 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     segmentHooks.numberOfFields = [this]() { return tbcSource.getNumberOfFields(); };
     segmentHooks.segments = [this]() -> const QVector<TbcMetaData::Segment> & { return tbcSource.getSegments(); };
     segmentHooks.setSegments = [this](const QVector<TbcMetaData::Segment> &segments) { tbcSource.setSegments(segments); };
-    segmentHooks.deriveSegments = [this](const SegmentsThresholds &thresholds) { return tbcSource.deriveSegments(thresholds); };
+    segmentHooks.deriveLayer = [this](const SegmentsThresholds &thresholds, const QVector<SegmentMark> &marks) {
+        return tbcSource.deriveSegmentLayer(thresholds, marks);
+    };
+    segmentHooks.metadataPath = [this]() { return tbcSource.getCurrentMetadataFilename(); };
     segmentHooks.derivedAtLoad = [this]() { return tbcSource.getSegmentsDerivedAtLoad(); };
     segmentHooks.evidenceAvailable = [this]() { return tbcSource.hasSegmentEvidence(); };
     segmentHooks.segmentFrameRange = [this](const TbcMetaData::Segment &segment, qint32 *start, qint32 *length) {
@@ -2594,6 +2597,10 @@ void MainWindow::updateGuiLoaded()
     }
     updateTimelineMarkers();
     updateNotesViewerState();
+    if (segmentsController) {
+        segmentsController->sourceLoaded();
+        updateTimelineMarkers();
+    }
     if (segmentsController) segmentsController->refreshViewer();
 
     updateMetadataStatusPanel();
@@ -2670,6 +2677,7 @@ void MainWindow::updateGuiUnloaded()
     yuvRangeScopeLastRefreshMs = 0;
     updateTimelineMarkers();
     updateNotesViewerState();
+    if (segmentsController) segmentsController->sourceUnloaded();
     if (segmentsController) segmentsController->refreshViewer();
 
     updateMetadataStatusPanel();
@@ -4271,6 +4279,12 @@ void MainWindow::updateTimelineMarkers()
     for (const SegmentTimelineSpan &segmentSpan : segmentSpans) {
         spans.append({segmentSpan.startPosition, segmentSpan.endPosition, segmentSpan.color});
     }
+    QVector<qint32> restartPositions;
+    QStringList restartTooltips;
+    if (segmentsController) {
+        segmentsController->restartTicks(&restartPositions, &restartTooltips);
+    }
+    ui->posHorizontalSlider->setExtraTicks(restartPositions, restartTooltips, QColor(170, 80, 230));
     ui->posHorizontalSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
 }
 
@@ -9024,6 +9038,13 @@ void MainWindow::onSourceSaved(bool success)
 
     if (success) {
         setWindowModified(false);
+        // The save wrote a new .tbc.db: put the restart marks back in it
+        if (segmentsController) {
+            QString markError;
+            if (!segmentsController->persistMarks(&markError)) {
+                statusBar()->showMessage(tr("Restart marks were not saved: %1").arg(markError), 5000);
+            }
+        }
 
         // A save chosen at maybeSave()'s prompt: carry on with what was asked
         // for (close, open, reprocess) instead of reloading this source.

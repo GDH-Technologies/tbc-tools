@@ -100,6 +100,7 @@ class Opts(argparse.Namespace):
 
     # export-metadata
     export_metadata: bool
+    export_metadata_restart_chapters: bool
     export_metadata_keep_going: bool
 
     # ffmpeg

@@ -159,6 +159,9 @@ void MetadataExportDialog::setInitialOptions(const InitialOptions &options)
     if (ui->ffmetadataSegmentsComboBox) {
         ui->ffmetadataSegmentsComboBox->setCurrentIndex(qBound(0, options.ffmetadataSegmentMode, 2));
     }
+    if (ui->ffmetadataRestartChaptersCheckBox) {
+        ui->ffmetadataRestartChaptersCheckBox->setChecked(options.ffmetadataRestartChapters);
+    }
     if (ui->segmentsJsonCheckBox) {
         ui->segmentsJsonCheckBox->setChecked(options.exportSegmentsJson);
     }
@@ -352,6 +355,10 @@ void MetadataExportDialog::on_exportButton_clicked()
             } else if (ui->ffmetadataSegmentsComboBox->currentIndex() == 2) {
                 arguments << QStringLiteral("--ffmetadata-no-segments");
             }
+        }
+        if (ui->ffmetadataRestartChaptersCheckBox && ui->ffmetadataRestartChaptersCheckBox->isEnabled()
+            && ui->ffmetadataRestartChaptersCheckBox->isChecked()) {
+            arguments << QStringLiteral("--ffmetadata-restart-chapters");
         }
     }
     if (ffmetadataSelected || segmentsJsonSelected) {
@@ -611,6 +618,13 @@ void MetadataExportDialog::applyOptionSupport(OptionSupport support, const QStri
                 ? tr("Recording segments stored in the metadata become chapters in place of LaserDisc navigation chapters.")
                 : unavailableText(QStringLiteral("--ffmetadata-no-segments")));
     }
+    ffmetadataRestartChaptersSupported = supported(QStringLiteral("--ffmetadata-restart-chapters"));
+    if (ui->ffmetadataRestartChaptersCheckBox) {
+        ui->ffmetadataRestartChaptersCheckBox->setToolTip(
+            ffmetadataRestartChaptersSupported
+                ? tr("Cut each segment's chapter at its camcorder restart marks, so every take is a chapter.")
+                : unavailableText(QStringLiteral("--ffmetadata-restart-chapters")));
+    }
     updateFfmetadataControlsEnabled();
 
     const auto applyCompatibility = [&](QCheckBox *checkBox, QLabel *label, const QString &optionName) {
@@ -659,5 +673,8 @@ void MetadataExportDialog::updateFfmetadataControlsEnabled()
     }
     if (ui->ffmetadataSegmentsComboBox) {
         ui->ffmetadataSegmentsComboBox->setEnabled(enabled && ffmetadataSegmentsSupported);
+    }
+    if (ui->ffmetadataRestartChaptersCheckBox) {
+        ui->ffmetadataRestartChaptersCheckBox->setEnabled(enabled && ffmetadataRestartChaptersSupported);
     }
 }

@@ -56,6 +56,18 @@ struct SegmentsThresholds {
     qint32 minNonClipRunFields = 50;     // a noise/blank run at least this long splits a section
     double nonClipCoverage = 0.6;        // fraction of a piece that makes it noise or blank
 
+    // Camcorder restarts (restartmarks.h): a clean edit replaces the picture
+    // between two fields, so the same-parity difference spikes on two
+    // adjacent fields, matched, with quiet fields either side
+    bool restartMarks = true;            // detect restart marks at all
+    double restartPairMatch = 0.90;      // the weaker spike of the pair is at least this fraction of the stronger
+    double restartMinPeakIre = 5.0;      // the pair's peak field difference
+    double restartMinContrast = 1.5;     // peak over the local background
+    double restartMaxNeighbourRatio = 0.6; // fields n-1 and n+2 at most this fraction of the peak (motion keeps them high)
+    qint32 restartFlashWindowFields = 12; // a one-field flash this close before the pair rules it out
+    double restartFlashIre = 10.0;       // how far above its neighbours a flashed field's luma sits
+    bool splitAtRestarts = false;        // newly derived marks split their clip
+
     static SegmentsThresholds preset(SegmentSensitivity sensitivity);
 };
 

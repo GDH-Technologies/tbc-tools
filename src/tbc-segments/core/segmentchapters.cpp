@@ -26,6 +26,9 @@
 
 #include <algorithm>
 
+#include "markstore.h"
+#include "segmentsderive.h"
+
 QVector<SegmentChapter> segmentChapters(const TbcMetaData &metaData, FfmetadataSegmentMode mode)
 {
     QVector<SegmentChapter> chapters;
@@ -52,4 +55,44 @@ QVector<SegmentChapter> segmentChapters(const TbcMetaData &metaData, FfmetadataS
         chapters.append(chapter);
     }
     return chapters;
+}
+
+QVector<SegmentChapter> cutChaptersAtRestarts(const QVector<SegmentChapter> &chapters, const QVector<SegmentMark> &marks)
+{
+    QVector<qint32> cuts;
+    for (const SegmentMark &mark : marks) {
+        if (mark.enabled && !mark.split) cuts.append(mark.field);
+    }
+    if (cuts.isEmpty()) return chapters;
+    std::sort(cuts.begin(), cuts.end());
+    QVector<SegmentChapter> result;
+    for (const SegmentChapter &chapter : chapters) {
+        QVector<qint32> inside;
+        for (qint32 cut : cuts) {
+            if (cut > chapter.startField && cut < chapter.endFieldExclusive) inside.append(cut);
+        }
+        if (inside.isEmpty()) {
+            result.append(chapter);
+            continue;
+        }
+        qint32 start = chapter.startField;
+        inside.append(chapter.endFieldExclusive);
+        for (qint32 take = 0; take < inside.size(); take++) {
+            SegmentChapter piece = chapter;
+            piece.startField = start;
+            piece.endFieldExclusive = inside.at(take);
+            piece.title = QStringLiteral("%1 · take %2").arg(chapter.title).arg(take + 1);
+            result.append(piece);
+            start = inside.at(take);
+        }
+    }
+    return result;
+}
+
+QVector<SegmentMark> restartMarksForExport(const TbcMetaData &metaData, const QString &metadataPath)
+{
+    QVector<SegmentMark> marks;
+    MarkStore::read(MarkStore::databasePathFor(metadataPath), &marks);
+    if (!marks.isEmpty()) return marks;
+    return deriveLayerForFile(metaData, SegmentsThresholds(), QStringLiteral("tbc-export-metadata")).marks;
 }

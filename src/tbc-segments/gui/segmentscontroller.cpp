@@ -25,6 +25,8 @@
 #include "segmentscontroller.h"
 
 #include "segmentsviewerdialog.h"
+#include "markstore.h"
+#include "segmentpreferences.h"
 
 #include <QAction>
 #include <QDateTime>
@@ -49,6 +51,102 @@ SegmentsController::SegmentsController(QWidget *parentWindow, Hooks hooks)
                 refreshViewer();
             });
     connect(viewer_, &SegmentsViewerDialog::rederiveRequested, this, &SegmentsController::rederiveSegments);
+    connect(viewer_, &SegmentsViewerDialog::marksUpdated, this, &SegmentsController::applyMarks);
+    connect(viewer_, &SegmentsViewerDialog::splitAtRestartsToggled, this, &SegmentsController::setSplitAtRestarts);
+    connect(viewer_, &SegmentsViewerDialog::restartChaptersToggled, this, [this](bool enabled) {
+        SegmentPreferences::setRestartChapters(enabled);
+        refreshViewer();
+    });
+}
+
+void SegmentsController::sourceLoaded()
+{
+    marks_.clear();
+    if (!hooks_.isLoaded()) {
+        return;
+    }
+    QVector<SegmentMark> stored;
+    QString error;
+    if (!MarkStore::read(MarkStore::databasePathFor(hooks_.metadataPath()), &stored, nullptr, &error)) {
+        hooks_.showStatus(tr("Could not read the restart marks: %1").arg(error));
+    }
+    if (!stored.isEmpty()) {
+        marks_ = stored;
+        return;
+    }
+    // None stored: detect them (they persist with the next save)
+    SegmentsThresholds thresholds = lastThresholds_;
+    thresholds.splitAtRestarts = SegmentPreferences::splitAtRestarts();
+    marks_ = hooks_.deriveLayer(thresholds, {}).marks;
+    if (thresholds.splitAtRestarts && hooks_.derivedAtLoad() && !marks_.isEmpty()) {
+        // Segments derived at load, with splitting asked for: cut them now
+        applySegmentEdit(splitSegmentsAtMarks(hooks_.segments(), marks_),
+                         tr("%1 restart marks split their clips (Split at restarts)").arg(marks_.size()));
+    }
+}
+
+void SegmentsController::sourceUnloaded()
+{
+    marks_.clear();
+}
+
+bool SegmentsController::persistMarks(QString *error)
+{
+    if (!hooks_.isLoaded()) {
+        return true;
+    }
+    const QString database = MarkStore::databasePathFor(hooks_.metadataPath());
+    if (database.isEmpty()) {
+        if (error) *error = tr("the metadata has no .tbc.db to hold restart marks");
+        return marks_.isEmpty();
+    }
+    return MarkStore::write(database, marks_, nullptr, error);
+}
+
+void SegmentsController::applyMarks(const QVector<SegmentMark> &marks)
+{
+    if (!hooks_.isLoaded()) {
+        return;
+    }
+    marks_ = marks;
+    rederiveSegments(lastThresholds_);
+}
+
+void SegmentsController::setSplitAtRestarts(bool enabled)
+{
+    SegmentPreferences::setSplitAtRestarts(enabled);
+    // Derived marks follow the preference; marks the user edited keep theirs
+    for (SegmentMark &mark : marks_) {
+        if (mark.source != QLatin1String("user")) mark.split = enabled;
+    }
+    if (hooks_.isLoaded()) {
+        rederiveSegments(lastThresholds_);
+    } else {
+        refreshViewer();
+    }
+}
+
+qint32 SegmentsController::markNearField(qint32 field) const
+{
+    for (qint32 i = 0; i < marks_.size(); ++i) {
+        if (qAbs(marks_.at(i).field - field) <= 2) return i;
+    }
+    return -1;
+}
+
+void SegmentsController::restartTicks(QVector<qint32> *positions, QStringList *tooltips) const
+{
+    for (const SegmentMark &mark : marks_) {
+        if (!mark.enabled) continue;
+        const qint32 position = hooks_.sliderPositionForField(mark.field);
+        if (position <= 0) continue;
+        positions->append(position);
+        tooltips->append(tr("Restart mark %1 (%2%%3): %4")
+                             .arg(mark.id)
+                             .arg(qRound(mark.confidence * 100.0))
+                             .arg(mark.split ? tr(", splits its clip") : QString())
+                             .arg(mark.reason));
+    }
 }
 
 bool SegmentsController::hasSegments() const
@@ -196,7 +294,12 @@ void SegmentsController::rederiveSegments(const SegmentsThresholds &thresholds)
             kept.append(segment);
         }
     }
-    const QVector<TbcMetaData::Segment> derived = hooks_.deriveSegments(thresholds);
+    lastThresholds_ = thresholds;
+    SegmentsThresholds withMarks = thresholds;
+    withMarks.splitAtRestarts = SegmentPreferences::splitAtRestarts();
+    const SegmentLayer layer = hooks_.deriveLayer(withMarks, marks_);
+    marks_ = layer.marks;
+    const QVector<TbcMetaData::Segment> &derived = layer.segments;
     qint32 nextId = 0;
     for (const TbcMetaData::Segment &segment : kept) {
         nextId = qMax(nextId, segment.id);
@@ -252,7 +355,14 @@ void SegmentsController::refreshViewer()
             row.hasFrames = hooks_.segmentFrameRange(segment, &row.startFrame, &row.lengthFrames);
             state.rows.append(row);
         }
+        state.marks = marks_;
+        state.markFrames.reserve(marks_.size());
+        for (const SegmentMark &mark : marks_) {
+            state.markFrames.append(hooks_.frameContainingField(mark.field));
+        }
     }
+    state.splitAtRestarts = SegmentPreferences::splitAtRestarts();
+    state.restartChapters = SegmentPreferences::restartChapters();
     viewer_->setState(state);
 }
 
@@ -314,6 +424,14 @@ qint32 SegmentsController::nextSegmentStartFrame(qint32 currentFrame, qint32 tot
             targetFrame = startFrame;
         }
     }
+    // Restart marks are takes inside a segment: stops of their own
+    for (const SegmentMark &mark : marks_) {
+        if (!mark.enabled) continue;
+        const qint32 frame = hooks_.frameContainingField(mark.field);
+        if (frame > currentFrame && frame < targetFrame) {
+            targetFrame = frame;
+        }
+    }
     return targetFrame;
 }
 
@@ -324,6 +442,13 @@ qint32 SegmentsController::previousSegmentStartFrame(qint32 currentFrame) const
         const qint32 startFrame = segmentStartFrame(segment);
         if (startFrame < currentFrame && startFrame > targetFrame) {
             targetFrame = startFrame;
+        }
+    }
+    for (const SegmentMark &mark : marks_) {
+        if (!mark.enabled) continue;
+        const qint32 frame = hooks_.frameContainingField(mark.field);
+        if (frame < currentFrame && frame > targetFrame) {
+            targetFrame = frame;
         }
     }
     return targetFrame;
@@ -363,11 +488,52 @@ std::function<bool(QAction *)> SegmentsController::addTimelineMenuActions(QMenu 
         splitSegmentAction->setEnabled(segmentIndexAtFrame >= 0
                                        && clickedFirstField > segments.at(segmentIndexAtFrame).startField);
     }
+    // Restart marks: split or unsplit the one at the clicked frame, or add one
+    QAction *restartAction = nullptr;
+    const qint32 markIndex = clickedFirstField >= 0 ? markNearField(clickedFirstField) : -1;
+    if (hooks_.isLoaded() && clickedFirstField >= 0) {
+        if (markIndex >= 0) {
+            const SegmentMark &mark = marks_.at(markIndex);
+            restartAction = menu->addAction(mark.split ? tr("Unsplit Restart Here (mark %1)").arg(mark.id)
+                                                       : tr("Split At Restart Here (mark %1)").arg(mark.id));
+        } else {
+            restartAction = menu->addAction(tr("Add Restart Mark Here (%1 | %2)").arg(framePoint).arg(framePointTimecode));
+        }
+    }
     QAction *openSegmentsViewerAction = menu->addAction(tr("Open Segments Viewer..."));
     return [this, setInOutFromSegmentAction, splitSegmentAction, openSegmentsViewerAction, segmentIndexAtFrame,
-            clickedFirstField](QAction *selectedAction) {
+            clickedFirstField, restartAction, markIndex](QAction *selectedAction) {
         if (!selectedAction) {
             return false;
+        }
+        if (restartAction && selectedAction == restartAction) {
+            QVector<SegmentMark> marks = marks_;
+            const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+            if (markIndex >= 0 && markIndex < marks.size()) {
+                SegmentMark &mark = marks[markIndex];
+                mark.split = !mark.split;
+                mark.enabled = true;
+                mark.source = QStringLiteral("user");
+                mark.updatedAt = now;
+            } else {
+                SegmentMark mark;
+                qint32 maxId = 0;
+                for (const SegmentMark &existing : marks) maxId = qMax(maxId, existing.id);
+                mark.id = maxId + 1;
+                mark.field = clickedFirstField;
+                mark.source = QStringLiteral("user");
+                mark.confidence = 1.0;
+                mark.reason = tr("added by hand");
+                mark.split = SegmentPreferences::splitAtRestarts();
+                mark.createdBy = QStringLiteral("tbc-analyse");
+                mark.updatedAt = now;
+                marks.append(mark);
+                std::stable_sort(marks.begin(), marks.end(), [](const SegmentMark &a, const SegmentMark &b) {
+                    return a.field < b.field;
+                });
+            }
+            applyMarks(marks);
+            return true;
         }
         if (setInOutFromSegmentAction && selectedAction == setInOutFromSegmentAction) {
             setInOutFromSegment(segmentIndexAtFrame, true, true);

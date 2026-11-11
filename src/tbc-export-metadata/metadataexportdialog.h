@@ -40,6 +40,7 @@ public:
         bool exportClosedCaptions = false;
         bool exportSegmentsJson = false;
         int ffmetadataSegmentMode = 0;   // 0 enabled segments, 1 all segments, 2 no segments
+        bool ffmetadataRestartChapters = false;
         qint32 ffmetadataStart = -1;
         qint32 ffmetadataLength = -1;
         bool debug = false;
@@ -77,6 +78,7 @@ private:
     Ui::MetadataExportDialog *ui;
     QString sourceDirectory;
     QString exportExecutablePath;
+    bool ffmetadataRestartChaptersSupported = true;
     bool ffmetadataSegmentsSupported = true;
     QPointer<QProcess> optionProbe;  // the export tool's --help, while it runs
 };

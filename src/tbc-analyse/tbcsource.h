@@ -215,6 +215,7 @@ public:
     bool hasSegmentEvidence() const;
     bool getSegmentsDerivedAtLoad() const;
     QVector<TbcMetaData::Segment> deriveSegments(const SegmentsThresholds &thresholds) const;
+    SegmentLayer deriveSegmentLayer(const SegmentsThresholds &thresholds, const QVector<SegmentMark> &storedMarks) const;
     // Library rules, single-sourced: the frames an export of a segment covers
     // (mixed-frame rule), the frame holding a 0-based field, the 0-based
     // first field of a 1-based frame.

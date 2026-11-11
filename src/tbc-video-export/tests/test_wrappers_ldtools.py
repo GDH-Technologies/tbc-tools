@@ -912,3 +912,35 @@ class TestWrappersChromaDecoder:
 
             for e in test_case.unexpected_str:
                 assert not any(e in cmd for cmd in cmds)
+
+
+class TestWrappersExportMetadata:
+    """Tests for the tbc-export-metadata wrapper."""
+
+    def _command(self, program_state, opts):
+        from tbc_video_export.process.wrapper.wrapper_config import WrapperConfig
+        from tbc_video_export.process.wrapper.wrapper_ld_export_metadata import (
+            WrapperLDExportMetadata,
+        )
+
+        state = program_state(opts, f"{get_path('pal_svideo')}.tbc")
+        wrapper = WrapperLDExportMetadata(
+            state,
+            WrapperConfig[None, None](state.current_export_mode, TBCType.LUMA, None, None),
+        )
+        return wrapper.command.data
+
+    def test_restart_chapters_off_by_default(  # noqa: D102
+        self, program_state: Callable[[list[str], str], ProgramState]
+    ) -> None:
+        cmds = self._command(program_state, ["--export-metadata"])
+        assert "--ffmetadata" in cmds
+        assert "--ffmetadata-restart-chapters" not in cmds
+
+    def test_restart_chapters_passed_through(  # noqa: D102
+        self, program_state: Callable[[list[str], str], ProgramState]
+    ) -> None:
+        cmds = self._command(
+            program_state, ["--export-metadata", "--export-metadata-restart-chapters"]
+        )
+        assert "--ffmetadata-restart-chapters" in cmds

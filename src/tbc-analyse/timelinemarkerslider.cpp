@@ -42,6 +42,17 @@ void TimelineMarkerSlider::setSegmentMarkers(const QVector<qint32> &boundaryPosi
     update();
 }
 
+void TimelineMarkerSlider::setExtraTicks(const QVector<qint32> &positions, const QStringList &tooltips, const QColor &color)
+{
+    if (extraTicks_ == positions && extraTooltips_ == tooltips && extraColor_ == color) {
+        return;
+    }
+    extraTicks_ = positions;
+    extraTooltips_ = tooltips;
+    extraColor_ = color;
+    update();
+}
+
 int TimelineMarkerSlider::xForPosition(qint32 position, const QRect &grooveRect, bool upsideDown) const
 {
     const int trackLength = grooveRect.width() - 1;
@@ -120,6 +131,9 @@ void TimelineMarkerSlider::paintEvent(QPaintEvent *event)
         painter.drawLine(x, lineTop, x, lineBottom);
     };
 
+    for (qint32 position : extraTicks_) {
+        drawMarkerLine(position, extraColor_);
+    }
     drawMarkerLine(inFrame_, QColor(24, 190, 24));
     drawMarkerLine(outFrame_, QColor(220, 45, 45));
     for (qint32 framePosition : noteFrames_) {
@@ -129,7 +143,7 @@ void TimelineMarkerSlider::paintEvent(QPaintEvent *event)
 
 bool TimelineMarkerSlider::event(QEvent *event)
 {
-    if (event && event->type() == QEvent::ToolTip && !segmentBoundaries_.isEmpty()
+    if (event && event->type() == QEvent::ToolTip && (!segmentBoundaries_.isEmpty() || !extraTicks_.isEmpty())
         && orientation() == Qt::Horizontal && maximum() > minimum()) {
         auto *helpEvent = static_cast<QHelpEvent *>(event);
         QStyleOptionSlider option;
@@ -145,6 +159,19 @@ bool TimelineMarkerSlider::event(QEvent *event)
                     bestDistance = distance;
                     bestIndex = i;
                 }
+            }
+            int bestExtra = -1;
+            for (int i = 0; i < extraTicks_.size(); ++i) {
+                const int x = xForPosition(extraTicks_.at(i), grooveRect, option.upsideDown);
+                const int distance = qAbs(x - helpEvent->pos().x());
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestExtra = i;
+                }
+            }
+            if (bestExtra >= 0 && bestExtra < extraTooltips_.size()) {
+                QToolTip::showText(helpEvent->globalPos(), extraTooltips_.at(bestExtra), this);
+                return true;
             }
             if (bestIndex >= 0 && bestIndex < segmentTooltips_.size()) {
                 QToolTip::showText(helpEvent->globalPos(), segmentTooltips_.at(bestIndex), this);

@@ -54,6 +54,8 @@
     @param includeVitcTimecode When true, include FFmpeg-style VITC timecode
            in the output header when available.
     @param segmentMode Which stored segments become chapters.
+    @param restartChapterMarks Camcorder restarts that cut a segment's chapter
+           into takes (cutChaptersAtRestarts); empty for none.
 
     Returns true on success, false on failure.
 */
@@ -62,6 +64,7 @@ bool writeFfmetadata(TbcMetaData &metaData,
                      qint32 startFrameOneBased = -1,
                      qint32 lengthFrames = -1,
                      bool includeVitcTimecode = true,
-                     FfmetadataSegmentMode segmentMode = FfmetadataSegmentMode::EnabledSegments);
+                     FfmetadataSegmentMode segmentMode = FfmetadataSegmentMode::EnabledSegments,
+                     const QVector<SegmentMark> &restartChapterMarks = QVector<SegmentMark>());
 
 #endif

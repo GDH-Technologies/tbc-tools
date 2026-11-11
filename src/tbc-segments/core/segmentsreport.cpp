@@ -24,6 +24,8 @@
 
 #include "segmentsreport.h"
 
+#include "markstore.h"
+#include "restartmarks.h"
 #include "segments.h"
 #include "tbc/logging.h"
 
@@ -51,10 +53,20 @@ bool writeSegmentsJson(TbcMetaData &metaData,
     const FieldMetrics *metricsPtr = metrics.enabled ? &metrics : nullptr;
     const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0, metricsPtr);
 
+    // Restart marks: the stored ones, else a detection inside the clips
+    const QVector<TbcMetaData::Segment> base = deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-export-metadata"));
+    QVector<SegmentMark> marks;
+    QString marksSource = QStringLiteral("stored");
+    MarkStore::read(MarkStore::databasePathFor(inputPath), &marks);
+    if (marks.isEmpty()) {
+        marks = mergeMarks({}, detectRestartMarks(analysis, metrics, thresholds, base, QStringLiteral("tbc-export-metadata")));
+        marksSource = marks.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
+    }
+
     QVector<TbcMetaData::Segment> segments = metaData.getSegments();
     QString segmentsSource = QStringLiteral("stored");
     if (segments.isEmpty()) {
-        segments = deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-export-metadata"));
+        segments = splitSegmentsAtMarks(base, marks);
         segmentsSource = segments.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
     }
 
@@ -69,6 +81,7 @@ bool writeSegmentsJson(TbcMetaData &metaData,
                                   : QStringLiteral("sqlite");
     QJsonObject report = buildReport(metaData, inputPath, inputKind, startFrameOneBased, lengthFrames, range,
                                      thresholds, analysis, metricsPtr, fieldDataInfo, false, segments, segmentsSource);
+    addMarksToReport(&report, metaData, analysis, marks, marksSource);
     QJsonObject tool = report.value(QStringLiteral("tool")).toObject();
     tool.insert(QStringLiteral("name"), QStringLiteral("tbc-export-metadata"));
     report.insert(QStringLiteral("tool"), tool);
