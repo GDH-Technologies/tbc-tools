@@ -233,7 +233,7 @@ Stored segments replace the navigation chapters: one `[CHAPTER]` per enabled
 segment (`--ffmetadata-all-segments` for disabled ones too,
 `--ffmetadata-no-segments` to ignore them), `START`/`END` rebased to the
 export start field, title from the segment or `Segment N`. The rules live in
-the TBC library (`src/library/tbc/segments.h`); see `docs/Tools/tbc-segments.md`.
+the tbc-segments module (`src/tbc-segments/core`); see `docs/Tools/tbc-segments.md`.
 
 
 

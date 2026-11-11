@@ -12,7 +12,7 @@ target_include_directories(testchromadecodername PRIVATE
 
 target_link_libraries(testchromadecodername PRIVATE
     Qt::Core Qt::Gui Qt::Widgets
-    tbc-library tbc-chroma
+    tbc-library tbc-chroma tbc-segments-core
 )
 
 add_test(NAME testchromadecodername COMMAND testchromadecodername)

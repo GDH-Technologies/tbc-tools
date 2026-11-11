@@ -4,6 +4,7 @@
 #include "ui_exportdialog.h"
 
 #include "tbcsource.h"
+#include "segmentexportplan.h"
 #include "configuration.h"
 #include "gui/processprogressrunner.h"
 
@@ -3752,53 +3753,31 @@ bool ExportDialog::buildSegmentExportJobs(const QString &outputBase, QVector<Exp
         if (errorMessage) *errorMessage = tr("No source loaded.");
         return false;
     }
-    QVector<TbcMetaData::Segment> segments = tbcSource->getSegments();
+    const QVector<TbcMetaData::Segment> &segments = tbcSource->getSegments();
     if (segments.isEmpty()) {
         if (errorMessage) *errorMessage = tr("The metadata holds no recording segments.");
         return false;
     }
-    std::stable_sort(segments.begin(), segments.end(), [](const TbcMetaData::Segment &a, const TbcMetaData::Segment &b) {
-        return a.startField < b.startField;
-    });
     const QString selection = ui && ui->segmentSelectionComboBox
                                   ? ui->segmentSelectionComboBox->currentData().toString()
                                   : QStringLiteral("enabled_clips");
     const bool appendTitle = ui && ui->appendSegmentTitleCheckBox && ui->appendSegmentTitleCheckBox->isChecked();
-    qint32 maxId = 1;
-    for (const TbcMetaData::Segment &segment : segments) {
-        maxId = qMax(maxId, segment.id);
+    const SegmentExportPlan plan = planSegmentExports(
+        segments, selection, outputBase, appendTitle,
+        [this](const TbcMetaData::Segment &segment, qint32 *start, qint32 *length) {
+            return tbcSource->segmentFrameRange(segment, start, length);
+        });
+    if (notes) {
+        for (qint32 id : plan.skippedNoWholeFrame) {
+            notes->append(tr("Segment %1 holds no whole frame; skipped.").arg(id));
+        }
     }
-    const int digits = qMax(2, QString::number(maxId).size());
-    for (const TbcMetaData::Segment &segment : segments) {
-        if (selection != QLatin1String("all") && !segment.enabled) {
-            continue;
-        }
-        if (selection == QLatin1String("enabled_clips") && segment.kind != QLatin1String("clip")) {
-            continue;
-        }
-        qint32 startFrame = 0;
-        qint32 lengthFrames = 0;
-        if (!tbcSource->segmentFrameRange(segment, &startFrame, &lengthFrames)) {
-            if (notes) {
-                notes->append(tr("Segment %1 holds no whole frame; skipped.").arg(segment.id));
-            }
-            continue;
-        }
-        QString base = outputBase + QStringLiteral("_") + QString::number(segment.id).rightJustified(digits, QLatin1Char('0'));
-        if (appendTitle && !segment.title.trimmed().isEmpty()) {
-            QString title = segment.title.trimmed();
-            title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("_"));
-            title = title.left(40);
-            title.remove(QRegularExpression(QStringLiteral("^_+|_+$")));
-            if (!title.isEmpty()) {
-                base += QStringLiteral("_") + title;
-            }
-        }
+    for (const SegmentExportItem &item : plan.items) {
         ExportJob job;
-        job.startFrameOneBased = startFrame;
-        job.lengthFrames = lengthFrames;
-        job.outputBase = base;
-        job.label = segment.title;
+        job.startFrameOneBased = item.startFrameOneBased;
+        job.lengthFrames = item.lengthFrames;
+        job.outputBase = item.outputBase;
+        job.label = item.label;
         jobs->append(job);
     }
     if (jobs->isEmpty()) {

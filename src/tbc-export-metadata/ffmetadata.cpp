@@ -32,7 +32,6 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QTextStream>
-#include <algorithm>
 #include <vector>
 
 #include "tbc/logging.h"
@@ -205,25 +204,15 @@ bool writeFfmetadata(TbcMetaData &metaData,
 
     // Recording segments stored in the metadata take the place of the
     // LaserDisc navigation chapters (a tape has none; a disc has no segments)
-    QVector<TbcMetaData::Segment> segments = metaData.getSegments();
-    const bool useSegments = segmentMode != FfmetadataSegmentMode::NoSegments && !segments.isEmpty();
-    if (useSegments) {
-        std::stable_sort(segments.begin(), segments.end(),
-                         [](const TbcMetaData::Segment &a, const TbcMetaData::Segment &b) {
-                             return a.startField < b.startField;
-                         });
-        chapters.reserve(static_cast<size_t>(segments.size()) + 1);
-        for (const TbcMetaData::Segment &segment : segments) {
-            if (segmentMode == FfmetadataSegmentMode::EnabledSegments && !segment.enabled) {
-                continue;
-            }
+    const QVector<SegmentChapter> segmentList = segmentChapters(metaData, segmentMode);
+    if (!segmentList.isEmpty()) {
+        chapters.reserve(static_cast<size_t>(segmentList.size()) + 1);
+        for (const SegmentChapter &segment : segmentList) {
             FfmetadataChapter candidate;
             candidate.startField = segment.startField;
             candidate.endFieldExclusive = segment.endFieldExclusive;
-            candidate.title = segment.title.trimmed().isEmpty()
-                                  ? QStringLiteral("Segment %1").arg(segment.id)
-                                  : segment.title.trimmed();
-            candidate.comment = segment.comment.trimmed();
+            candidate.title = segment.title;
+            candidate.comment = segment.comment;
             FfmetadataChapter clipped;
             if (clipChapterToRange(candidate, exportStartField, exportEndFieldExclusive, &clipped)) {
                 chapters.push_back(clipped);

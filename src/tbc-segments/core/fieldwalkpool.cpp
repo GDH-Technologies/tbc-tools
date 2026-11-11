@@ -1,6 +1,6 @@
 /************************************************************************
 
-    processingpool.cpp
+    fieldwalkpool.cpp
 
     tbc-segments - Threaded walk over the raw TBC fields
     Copyright (C) 2026 GDH-Technologies LLC
@@ -22,7 +22,7 @@
 
 ************************************************************************/
 
-#include "processingpool.h"
+#include "fieldwalkpool.h"
 
 #include <QDebug>
 #include <QMutexLocker>

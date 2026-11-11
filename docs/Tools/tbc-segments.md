@@ -4,9 +4,9 @@ tbc-segments finds recording boundaries: where a recording was started,
 stopped, or interrupted on a captured tape or disc. It reads the decode metadata
 (`.tbc.db`, or the legacy `.tbc.json`; a `.tbc.json` with a `.tbc.db` sibling
 opens the database) and emits a JSON report of gapless sections, boundary
-events and the recording segments derived from them. The rules live in the TBC
-library (`src/library/tbc/segments.h`), so tbc-analyse and tbc-export-metadata
-derive exactly the same segments.
+events and the recording segments derived from them. The rules live in the
+tbc-segments module (`src/tbc-segments/core`), which tbc-analyse and
+tbc-export-metadata link, so every tool derives exactly the same segments.
 
 ## What it detects
 
