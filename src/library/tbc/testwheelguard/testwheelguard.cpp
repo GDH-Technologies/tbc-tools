@@ -327,7 +327,7 @@ int main(int argc, char *argv[])
     QApplication application(argc, argv);
     // The style every tool runs with: it sets a slider's and a button's focus
     // policy, which the platform style would otherwise decide
-    tbc::ui::applyFusionTheme(Qt::ColorScheme::Dark);
+    tbc::ui::applyFusionStyleIfAvailable(application);
     testQtDefaultChangesAHoveredField();
     testInstallIsIdempotent();
     testHoveredFieldsScrollThePage();

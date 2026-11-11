@@ -144,6 +144,10 @@ void sanitizeGuiStartupEnvironment()
 {
     ensureUtf8ProcessLocale();
     sanitizeGtkModulesEnvironment();
+    // prepareStockThemeEnvironment() calls setDesktopSettingsAware(false) and
+    // normalizes QT_STYLE_OVERRIDE to Fusion. The stock palette itself is
+    // applied via ThemedApplication after CLI parse (dark default, light opt-in).
+    tbc::ui::prepareStockThemeEnvironment();
 }
 QString normalizePathForCurrentPlatform(const QString &path)
 {
@@ -422,7 +426,7 @@ int main(int argc, char *argv[])
 
     if (wantsGui(argc, argv)) {
         sanitizeGuiStartupEnvironment();
-        QApplication a(argc, argv);
+        tbc::ui::ThemedApplication a(argc, argv);
 
         QCoreApplication::setApplicationName("ld-lds-converter");
         QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
@@ -443,8 +447,11 @@ int main(int argc, char *argv[])
                                      QCoreApplication::translate("main", "Launch the GUI (default when no explicit CLI mode is provided)."));
         parser.addOption(guiOption);
         QCommandLineOption lightThemeOption("light-theme",
-                                            QCoreApplication::translate("main", "Use the light theme"));
+                                            QCoreApplication::translate("main", "Pin the light Fusion theme instead of following the system light/dark setting"));
         parser.addOption(lightThemeOption);
+        QCommandLineOption forceDarkThemeOption("force-dark-theme",
+                                                QCoreApplication::translate("main", "Pin the dark Fusion theme instead of following the system light/dark setting"));
+        parser.addOption(forceDarkThemeOption);
 
         QCommandLineOption sourceVideoFileOption(QStringList() << "i" << "input",
                     QCoreApplication::translate("main", "Specify input laserdisc sample file"), QCoreApplication::translate("main", "file"));
@@ -462,9 +469,15 @@ int main(int argc, char *argv[])
         parser.process(a);
         processStandardDebugOptions(parser);
 
-        // Qt's own Fusion theme, dark by default
-        tbc::ui::applyFusionTheme(parser.isSet(lightThemeOption) ? Qt::ColorScheme::Light
-                                                                 : Qt::ColorScheme::Dark);
+        // Apply the stock theme: follow the OS light/dark colour scheme by
+        // default (dark when unknown), or pin light/dark via the explicit flags.
+        if (parser.isSet(lightThemeOption)) {
+            a.applyStockLightTheme();
+        } else if (parser.isSet(forceDarkThemeOption)) {
+            a.applyStockDarkTheme();
+        } else {
+            a.applyStockThemeFollowingSystem();
+        }
         // The wheel changes a field only once it is clicked or tabbed into
         tbc::ui::installWheelGuard();
 

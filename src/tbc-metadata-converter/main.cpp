@@ -47,7 +47,8 @@ int main(int argc, char *argv[])
     setDebug(true);
     qInstallMessageHandler(debugOutputHandler);
     if (wantsGui(argc, argv)) {
-        QApplication a(argc, argv);
+        tbc::ui::prepareStockThemeEnvironment();
+        tbc::ui::ThemedApplication a(argc, argv);
 
         QCoreApplication::setApplicationName("tbc-metadata-converter");
         QCoreApplication::setApplicationVersion(TbcBuildInfo::versionLine());
@@ -68,8 +69,11 @@ int main(int argc, char *argv[])
                                      QCoreApplication::translate("main", "Launch the GUI (default when no arguments are provided)."));
         parser.addOption(guiOption);
         QCommandLineOption lightThemeOption("light-theme",
-                                            QCoreApplication::translate("main", "Use the light theme"));
+                                            QCoreApplication::translate("main", "Pin the light Fusion theme instead of following the system light/dark setting"));
         parser.addOption(lightThemeOption);
+        QCommandLineOption forceDarkThemeOption("force-dark-theme",
+                                                QCoreApplication::translate("main", "Pin the dark Fusion theme instead of following the system light/dark setting"));
+        parser.addOption(forceDarkThemeOption);
 
         QCommandLineOption inputJsonOption(QStringList() << "input-json",
                                            QCoreApplication::translate("main", "Specify the input JSON file"),
@@ -94,9 +98,15 @@ int main(int argc, char *argv[])
         parser.process(a);
         processStandardDebugOptions(parser);
 
-        // Qt's own Fusion theme, dark by default
-        tbc::ui::applyFusionTheme(parser.isSet(lightThemeOption) ? Qt::ColorScheme::Light
-                                                                 : Qt::ColorScheme::Dark);
+        // Apply the stock theme: follow the OS light/dark colour scheme by
+        // default (dark when unknown), or pin light/dark via the explicit flags.
+        if (parser.isSet(lightThemeOption)) {
+            a.applyStockLightTheme();
+        } else if (parser.isSet(forceDarkThemeOption)) {
+            a.applyStockDarkTheme();
+        } else {
+            a.applyStockThemeFollowingSystem();
+        }
         // The wheel changes a field only once it is clicked or tabbed into
         tbc::ui::installWheelGuard();
 

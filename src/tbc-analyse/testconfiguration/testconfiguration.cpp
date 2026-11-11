@@ -125,35 +125,6 @@ void testFrameSnapshotStillModeMigration(const QString &configFile)
     CHECK(written.value("frameSnapshot/stillMode").toString() == QLatin1String("cleanest"));
 }
 
-// The Themes-menu choice: dark by default, a saved choice round-trips, and any
-// other value falls back to dark. Adding the key must not have wiped the rest
-// of an existing file (it is additive; SETTINGSVERSION is unchanged).
-void testThemeChoice(const QString &configFile)
-{
-    std::cerr << "Testing the saved theme choice\n";
-
-    {
-        Configuration fresh;
-        CHECK(fresh.getTheme() == QLatin1String("dark"));
-        fresh.setTheme(QStringLiteral("light"));
-        fresh.writeConfiguration();
-    }
-    {
-        Configuration reader;
-        CHECK(reader.getTheme() == QLatin1String("light"));
-        CHECK(reader.getSourceDirectory() == QDir::tempPath());
-    }
-    for (const QString &other : {QStringLiteral("system"), QStringLiteral("purple")}) {
-        {
-            QSettings corrupt(configFile, QSettings::IniFormat);
-            corrupt.setValue("viewOptions/theme", other);
-            corrupt.sync();
-        }
-        Configuration reader;
-        CHECK(reader.getTheme() == QLatin1String("dark"));
-    }
-}
-
 // The field timing scope geometry and the waveform phosphor mode moved from a
 // stray QSettings into Configuration: empty and off by default, round-tripped,
 // and (being additive keys) no wipe of an existing file.
@@ -195,7 +166,6 @@ int main(int argc, char *argv[])
     testInstallSurvivesLongLivedWriter();
     testRemovalSurvivesLongLivedWriter();
     testFrameSnapshotStillModeMigration(configFile);
-    testThemeChoice(configFile);
     testScopeSettings();
 
     QFile::remove(configFile);

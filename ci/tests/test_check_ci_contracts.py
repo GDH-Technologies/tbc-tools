@@ -117,6 +117,32 @@ class ContractCoverageTests(unittest.TestCase):
         }
         self.assertTrue(expected.issubset(set(check_ci_contracts.LINUX_REQUIRED_SNIPPETS)))
 
+    def test_pyinstaller_freeze_bakes_vendor_version(self) -> None:
+        # The frozen tbc-video-export must bake the real tbc-tools vendor version
+        # into the artifact (runtime hook + workflow env exports) and the bundle
+        # verifier must assert it, or releases keep shipping a 0.0.0 exporter.
+        expected = {"write_runtime_hook", "--runtime-hook"}
+        self.assertTrue(
+            expected.issubset(
+                set(check_ci_contracts.PYINSTALLER_BUILD_SCRIPT_REQUIRED_SNIPPETS)
+            )
+        )
+        env_expected = {
+            "TBC_VIDEO_EXPORT_VENDOR_VERSION",
+            "TBC_VIDEO_EXPORT_VENDOR_COMMIT",
+        }
+        self.assertTrue(
+            env_expected.issubset(
+                set(check_ci_contracts.VENDOR_VERSION_ENV_REQUIRED_SNIPPETS)
+            )
+        )
+        verifier_expected = {"check_frozen_exporter_version", "EXPECT_VERSION"}
+        self.assertTrue(
+            verifier_expected.issubset(
+                set(check_ci_contracts.BUNDLE_VERIFY_VERSION_REQUIRED_SNIPPETS)
+            )
+        )
+
     def test_macos_contract_forbids_host_dependency_capture(self) -> None:
         expected_forbidden = {
             "/usr/local/*|/opt/homebrew/*",
@@ -1048,17 +1074,6 @@ class ContractCoverageTests(unittest.TestCase):
         flake = check_ci_contracts.FLAKE_NIX.read_text(encoding="utf-8")
         for snippet in check_ci_contracts.FLAKE_SRC_FILTER_REQUIRED_SNIPPETS:
             self.assertIn(snippet, flake)
-
-    def test_guis_use_qts_own_fusion_theme(self) -> None:
-        # Qt's own palette, unmodified: no hand-built palette, no contrast-guard
-        # stylesheet, no palette re-assert, and desktop-settings awareness left
-        # on (without it Qt ignores the colour-scheme request).
-        for path in check_ci_contracts.THEME_SOURCES:
-            content = path.read_text(encoding="utf-8")
-            for snippet in check_ci_contracts.THEME_FORBIDDEN_SNIPPETS:
-                self.assertNotIn(snippet, content, f"{path}: {snippet}")
-        uistyle = check_ci_contracts.THEME_SOURCES[0].read_text(encoding="utf-8")
-        self.assertIn("inline void applyFusionTheme(Qt::ColorScheme scheme)", uistyle)
 
     def test_flake_builds_every_platform_on_unstable_qt(self) -> None:
         # Upstream builds Linux from nixos-24.11 (Qt 6.8.3). The fork builds

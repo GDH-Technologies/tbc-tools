@@ -17,6 +17,7 @@
 #include "gui/processprogressrunner.h"
 #include "tbc/logging.h"
 
+#include <QStyleFactory>
 #include <QAbstractButton>
 #include <QActionGroup>
 #include <QApplication>
@@ -1175,10 +1176,9 @@ void showOrRaise(QWidget *window)
 }
 } // namespace
 
-MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QString themeChoiceParam, QWidget *parent) :
+MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidget *parent) :
     QMainWindow(parent),
-    ui(new Ui::MainWindow),
-    themeChoice(themeChoiceParam)
+    ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
 
@@ -1369,6 +1369,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     closedCaptionDialog = new ClosedCaptionsDialog(this);
     videoParametersDialog = new VideoParametersDialog(this);
     chromaDecoderConfigDialog = new ChromaDecoderConfigDialog(this);
+    chromaDecoderConfigDialog->setTbcSource(&tbcSource);
     metadataConversionDialog = new MetadataConversionDialog(this);
     metadataConversionDialog->setConfiguration(&configuration);
     metadataStatusDialog = new MetadataStatusDialog(this);
@@ -1466,6 +1467,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
     exportDialog->setGenerateProxyEnabledPreference(configuration.getGenerateProxyEnabled());
     exportDialog->setExportProfileConfigPreference(configuration.getExportProfileConfigEnabled(),
                                                    configuration.getExportProfileConfigPath());
+    exportDialog->setExportAdvancedOptions(configuration.getExportAdvancedOptions());
     connect(exportDialog, &ExportDialog::userEditRangeSelectionChanged,
             this, &MainWindow::exportRangeSelectionChangedSignalHandler);
     connect(exportDialog, &ExportDialog::proxyGenerationPreferenceChanged, this, [this](bool enabled) {
@@ -1476,6 +1478,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QStri
             [this](bool enabled, const QString &configPath) {
                 configuration.setExportProfileConfigEnabled(enabled);
                 configuration.setExportProfileConfigPath(configPath);
+                configuration.writeConfiguration();
+            });
+    connect(exportDialog, &ExportDialog::advancedOptionsChanged, this,
+            [this](const ExportAdvancedOptions &options) {
+                configuration.setExportAdvancedOptions(options);
                 configuration.writeConfiguration();
             });
 
@@ -1835,35 +1842,221 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-// Qt's own Fusion palette in the chosen colour scheme. The choice is saved;
-// the --light-theme/--force-dark-theme options only override it for one
-// session. Qt repaints every widget itself on the resulting palette change.
-// There is deliberately no "follow the desktop" choice: with Nix's Qt on GNOME
-// the platform theme reports the GTK theme's scheme rather than GNOME's
-// color-scheme setting, so it would not follow the desktop anyway.
 void MainWindow::populateThemesMenu()
 {
-    themesActionGroup = new QActionGroup(this);
-    themesActionGroup->setExclusive(true);
+    if (!ui || !ui->menuThemes) {
+        return;
+    }
 
-    const QList<QPair<QString, QString>> choices = {
-        {tr("Dark"), QStringLiteral("dark")},
-        {tr("Light"), QStringLiteral("light")},
-    };
-    for (const auto &choice : choices) {
-        QAction *action = ui->menuThemes->addAction(choice.first);
-        action->setCheckable(true);
-        action->setChecked(choice.second == themeChoice);
-        themesActionGroup->addAction(action);
-        const QString value = choice.second;
-        connect(action, &QAction::triggered, this, [this, value]() {
-            themeChoice = value;
-            tbc::ui::applyFusionTheme(value == QLatin1String("light") ? Qt::ColorScheme::Light
-                                                                      : Qt::ColorScheme::Dark);
-            configuration.setTheme(value);
+    if (!themesActionGroup) {
+        themesActionGroup = new QActionGroup(this);
+        themesActionGroup->setExclusive(true);
+    }
+
+    const QList<QAction *> existingActions = themesActionGroup->actions();
+    for (QAction *action : existingActions) {
+        themesActionGroup->removeAction(action);
+    }
+    ui->menuThemes->clear();
+
+    QStringList availableThemes = QStyleFactory::keys();
+    availableThemes.removeDuplicates();
+    availableThemes.sort(Qt::CaseInsensitive);
+
+    // Dedicated stock theme presets at the top of the dropdown. System is the
+    // standard default: it follows the OS-level light/dark colour scheme (dark
+    // when unknown) and keeps following OS changes. Dark and Light pin the
+    // absolute Fusion palettes via ThemedApplication (re-asserted across macOS
+    // appearance switches). Exclusive with the Qt-style actions below.
+    QAction *systemAction = ui->menuThemes->addAction(tr("System"));
+    systemAction->setCheckable(true);
+    systemAction->setData(QStringLiteral("stock-system"));
+    themesActionGroup->addAction(systemAction);
+    connect(systemAction, &QAction::triggered, this, [this, systemAction](bool checked) {
+        if (!checked) {
+            return;
+        }
+        tbc::ui::applyStockThemeFollowingSystemToApp();
+        refreshThemeDependentUi();
+        if (configuration.getKeepThemeChoice()) {
+            configuration.setThemeMode(QStringLiteral("stock-system"));
             configuration.writeConfiguration();
+        }
+        // Mirror the user's successful "second press" behavior: re-apply once
+        // on a short delay so late-resolving widgets (cached scope renders,
+        // scene-backed controls) settle fully in one user click.
+        QTimer::singleShot(24, this, [this, systemAction]() {
+            if (!systemAction->isChecked()) {
+                return;
+            }
+            tbc::ui::applyStockThemeFollowingSystemToApp();
+            refreshThemeDependentUi();
+        });
+    });
+
+    QAction *darkAction = ui->menuThemes->addAction(tr("Dark"));
+    darkAction->setCheckable(true);
+    darkAction->setData(QStringLiteral("stock-dark"));
+    themesActionGroup->addAction(darkAction);
+    connect(darkAction, &QAction::triggered, this, [this, darkAction](bool checked) {
+        if (!checked) {
+            return;
+        }
+        tbc::ui::applyStockDarkThemeToApp();
+        refreshThemeDependentUi();
+        if (configuration.getKeepThemeChoice()) {
+            configuration.setThemeMode(QStringLiteral("stock-dark"));
+            configuration.writeConfiguration();
+        }
+        // Mirror the user's successful "second press" behavior: re-apply once
+        // on a short delay so late-resolving widgets (cached scope renders,
+        // scene-backed controls) settle fully in one user click.
+        QTimer::singleShot(24, this, [this, darkAction]() {
+            if (!darkAction->isChecked()) {
+                return;
+            }
+            tbc::ui::applyStockDarkThemeToApp();
+            refreshThemeDependentUi();
+        });
+    });
+
+    QAction *lightAction = ui->menuThemes->addAction(tr("Light"));
+    lightAction->setCheckable(true);
+    lightAction->setData(QStringLiteral("stock-light"));
+    themesActionGroup->addAction(lightAction);
+    connect(lightAction, &QAction::triggered, this, [this, lightAction](bool checked) {
+        if (!checked) {
+            return;
+        }
+        tbc::ui::applyStockLightThemeToApp();
+        refreshThemeDependentUi();
+        if (configuration.getKeepThemeChoice()) {
+            configuration.setThemeMode(QStringLiteral("stock-light"));
+            configuration.writeConfiguration();
+        }
+        QTimer::singleShot(24, this, [this, lightAction]() {
+            if (!lightAction->isChecked()) {
+                return;
+            }
+            tbc::ui::applyStockLightThemeToApp();
+            refreshThemeDependentUi();
+        });
+    });
+
+    // Keep-theme-choice toggle: when enabled, the selected preset
+    // (System/Dark/Light) is persisted and restored on the next launch; when
+    // disabled the app always starts following the OS light/dark scheme.
+    // Independent of the exclusive preset group.
+    QAction *keepThemeAction = ui->menuThemes->addAction(tr("Keep theme choice"));
+    keepThemeAction->setCheckable(true);
+    keepThemeAction->setData(QStringLiteral("keep-theme-choice"));
+    keepThemeAction->setChecked(configuration.getKeepThemeChoice());
+    keepThemeAction->setToolTip(tr(
+        "Remember the selected theme (System, Dark or Light) between sessions. "
+        "When unchecked, tbc-analyse always starts following the OS light/dark "
+        "setting."));
+    connect(keepThemeAction, &QAction::toggled, this, [this](bool checked) {
+        configuration.setKeepThemeChoice(checked);
+        if (checked) {
+            // Persist the currently active preset (style overrides are not
+            // persisted; only the stock presets carry a stored mode).
+            if (themesActionGroup && themesActionGroup->checkedAction()) {
+                const QString checkedData = themesActionGroup->checkedAction()->data().toString();
+                if (checkedData.startsWith(QStringLiteral("stock-"))) {
+                    configuration.setThemeMode(checkedData);
+                }
+            }
+        } else {
+            // Clear the stored override so the next launch follows the OS.
+            configuration.setThemeMode(QStringLiteral("stock-system"));
+        }
+        configuration.writeConfiguration();
+    });
+
+    // Determine the stock preset matching the ACTIVE theme (applied in main
+    // per the CLI > persisted-choice > follow-system precedence), so the menu
+    // reflects what is actually running rather than always defaulting to
+    // System.
+    QString activeThemeData = QStringLiteral("stock-system");
+    if (auto *themedApp = tbc::ui::themedApplicationInstance()) {
+        if (!themedApp->isFollowingSystemTheme()) {
+            activeThemeData = qApp->property("isDarkTheme").toBool()
+                                  ? QStringLiteral("stock-dark")
+                                  : QStringLiteral("stock-light");
+        }
+    }
+
+    ui->menuThemes->addSeparator();
+
+    if (availableThemes.isEmpty()) {
+        QAction *placeholderAction = ui->menuThemes->addAction(tr("No Qt themes available"));
+        placeholderAction->setEnabled(false);
+        for (QAction *action : {systemAction, darkAction, lightAction}) {
+            if (action->data().toString() == activeThemeData) {
+                action->setChecked(true);
+            }
+        }
+        return;
+    }
+
+    const QString currentStyleName = QApplication::style() ? QApplication::style()->objectName() : QString();
+
+    for (const QString &styleName : availableThemes) {
+        QAction *themeAction = ui->menuThemes->addAction(styleName);
+        themeAction->setCheckable(true);
+        themeAction->setData(styleName);
+        themesActionGroup->addAction(themeAction);
+
+        if (!currentStyleName.isEmpty() &&
+            styleName.compare(currentStyleName, Qt::CaseInsensitive) == 0) {
+            themeAction->setChecked(true);
+        }
+
+        connect(themeAction, &QAction::triggered, this, [this, themeAction](bool checked) {
+            if (!checked) {
+                return;
+            }
+            applyThemeStyle(themeAction->data().toString());
         });
     }
+
+    // Ensure the stock preset matching the active theme is checked. This
+    // unchecks any Qt style action the loop above may have auto-checked (the
+    // stock preset owns the active palette; style actions below are advanced
+    // overrides).
+    for (QAction *action : {systemAction, darkAction, lightAction}) {
+        if (action->data().toString() == activeThemeData) {
+            action->setChecked(true);
+        }
+    }
+}
+
+void MainWindow::applyThemeStyle(const QString &styleName)
+{
+    if (styleName.isEmpty()) {
+        return;
+    }
+
+    const QString currentStyleName = QApplication::style() ? QApplication::style()->objectName() : QString();
+    if (!currentStyleName.isEmpty() &&
+        styleName.compare(currentStyleName, Qt::CaseInsensitive) == 0) {
+        return;
+    }
+
+    QStyle *style = QStyleFactory::create(styleName);
+    if (!style) {
+        return;
+    }
+
+    QApplication::setStyle(style);
+
+    const QString activeStyleName = QApplication::style() ? QApplication::style()->objectName() : styleName;
+    if (themesActionGroup) {
+        for (QAction *action : themesActionGroup->actions()) {
+            action->setChecked(action->data().toString().compare(activeStyleName, Qt::CaseInsensitive) == 0);
+        }
+    }
+    refreshThemeDependentUi();
 }
 
 // Highlight the dropouts button while the frame has dropouts. Only Button and

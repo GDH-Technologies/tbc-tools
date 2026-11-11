@@ -27,6 +27,8 @@
 
 #include <functional>
 
+class QJsonArray;
+class QJsonObject;
 class QNetworkReply;
 
 class CudaPluginManager : public QObject
@@ -50,6 +52,15 @@ public:
     // Current platform string ("linux" or "windows") and arch ("x86_64").
     static QString currentPlatform();
     static QString currentArch();
+
+    // Select the newest CUDA runtime plugin release (tag prefix cuda-plugin-v)
+    // from a GitHub /releases listing. The cache repo also hosts other plugin
+    // releases (e.g. cuda-lite-plugin-v*), which can be newer and would hijack
+    // the repo-wide /releases/latest endpoint - so the cuda-runtime release is
+    // resolved by tag prefix instead. Skips drafts and prereleases. Returns an
+    // empty object when no cuda-plugin release exists. Public + static so the
+    // selection logic is unit-testable.
+    static QJsonObject selectLatestCudaPluginRelease(const QJsonArray &releases);
 
     // True if the plugin appears installed (manifest + at least one file present
     // at the configured install path). Does not verify SHA-256.
@@ -127,8 +138,8 @@ private:
     QNetworkReply *m_inFlightReply = nullptr;
 
     // Helper: find the manifest + package asset URLs for the current platform
-    // from a GitHub release JSON payload. Returns true if both found.
-    bool resolveAssetsFromReleaseJson(const QByteArray &payload, QString &error);
+    // from a GitHub release object. Returns true if both found.
+    bool resolveAssetsFromRelease(const QJsonObject &release, QString &error);
 
     // The install's file work, run on a worker thread: returns an error
     // message or an empty string

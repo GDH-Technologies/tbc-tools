@@ -44,6 +44,7 @@ set(tbc-analyse_SOURCES
     tbcsource.cpp
     vbidialog.cpp vbidialog.ui
     vbiprocessingdialog.cpp vbiprocessingdialog.h
+    advancedexportoptionsdialog.cpp advancedexportoptionsdialog.h
     configuration.cpp
     framesnapshot.cpp framesnapshot.h
     savepngdialog.cpp savepngdialog.h

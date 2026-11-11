@@ -45,8 +45,13 @@ int main(int argc, char *argv[])
         informationOnly = informationOnly || argument == "-h" || argument == "-?" || argument == "--help"
                           || argument == "--help-all" || argument == "-v" || argument == "--version";
     }
+    // The GUI gets the stock-theme application; its environment must be set
+    // before construction.
+    if (!informationOnly) {
+        tbc::ui::prepareStockThemeEnvironment();
+    }
     std::unique_ptr<QCoreApplication> app(informationOnly ? new QCoreApplication(argc, argv)
-                                                          : new QApplication(argc, argv));
+                                                          : new tbc::ui::ThemedApplication(argc, argv));
 
     // Set application name and version
     QCoreApplication::setApplicationName("tbc-audio-align");
@@ -98,16 +103,24 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption("headless",
                                         QCoreApplication::translate("main", "Align without the dialog (see --headless --help)")));
     parser.addOption(QCommandLineOption("force-dark-theme",
-                                        QCoreApplication::translate("main", "Use the dark theme (default)")));
+                                        QCoreApplication::translate("main", "Pin the dark Fusion theme instead of following the system light/dark setting")));
     parser.addOption(QCommandLineOption("light-theme",
-                                        QCoreApplication::translate("main", "Use the light theme")));
+                                        QCoreApplication::translate("main", "Pin the light Fusion theme instead of following the system light/dark setting")));
 
     parser.process(*app);
     processStandardDebugOptions(parser);
 
-    // Qt's own Fusion theme, dark by default
-    tbc::ui::applyFusionTheme(parser.isSet(QStringLiteral("light-theme")) ? Qt::ColorScheme::Light
-                                                                         : Qt::ColorScheme::Dark);
+    // Apply the stock theme: follow the OS light/dark colour scheme by
+    // default (dark when unknown), or pin light/dark via the explicit flags.
+    // The --help/--version QCoreApplication is not a ThemedApplication, and the
+    // *ToApp helpers leave it alone.
+    if (parser.isSet(QStringLiteral("light-theme"))) {
+        tbc::ui::applyStockLightThemeToApp();
+    } else if (parser.isSet(QStringLiteral("force-dark-theme"))) {
+        tbc::ui::applyStockDarkThemeToApp();
+    } else {
+        tbc::ui::applyStockThemeFollowingSystemToApp();
+    }
     // The wheel changes a field only once it is clicked or tabbed into
     tbc::ui::installWheelGuard();
 

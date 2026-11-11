@@ -71,17 +71,17 @@ void testIsDarkPalette()
     CHECK(!theme_tokens::isDarkPalette(fusionPalette(false)));
 }
 
-// applyFusionTheme() is Qt's own theme: the Fusion style and a colour-scheme
-// request, never an explicit palette. An explicitly set palette would stop
-// later scheme changes from reaching the widgets.
-void testApplyFusionThemeSetsNoPalette()
+// The stock palettes the GUIs apply (tbc::ui::stockDarkPalette and
+// stockLightPalette): grid lines stand out from their Base too, and each is
+// detected as the scheme it is.
+void testStockPalettes()
 {
-    std::cerr << "Testing that applyFusionTheme sets Fusion and no palette\n";
+    std::cerr << "Testing grid lines and scheme detection on the stock palettes\n";
 
-    for (const Qt::ColorScheme scheme : {Qt::ColorScheme::Dark, Qt::ColorScheme::Light, Qt::ColorScheme::Unknown}) {
-        tbc::ui::applyFusionTheme(scheme);
-        CHECK(QApplication::style()->name().compare(QLatin1String("fusion"), Qt::CaseInsensitive) == 0);
-        CHECK(QApplication::palette().resolveMask() == 0);
+    for (const bool dark : {true, false}) {
+        const QPalette palette = dark ? tbc::ui::stockDarkPalette() : tbc::ui::stockLightPalette();
+        CHECK(lightnessGap(theme_tokens::gridLine(palette), palette.color(QPalette::Base)) >= 0.1);
+        CHECK(theme_tokens::isDarkPalette(palette) == dark);
     }
 }
 
@@ -93,13 +93,14 @@ int main(int argc, char *argv[])
     testGridLineVisibleOnBase();
     testIsDarkPalette();
 
-    // applyFusionTheme needs a QApplication, which needs a platform plugin:
+    // The stock palettes start from the application palette, so they need a
+    // QApplication, which needs a platform plugin:
     // offscreen, set by CMake. Not on Windows: there the self-hosted runner's
     // ctest (a service session, before windeployqt stages the plugins) hung in
     // the QApplication constructor.
 #if !defined(Q_OS_WIN)
     QApplication application(argc, argv);
-    testApplyFusionThemeSetsNoPalette();
+    testStockPalettes();
 #else
     Q_UNUSED(argc);
     Q_UNUSED(argv);
