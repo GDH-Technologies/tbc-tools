@@ -30,7 +30,8 @@ int main(int argc, char *argv[])
     setDebug(true);
     qInstallMessageHandler(debugOutputHandler);
 
-    QApplication app(argc, argv);
+    tbc::ui::prepareStockThemeEnvironment();
+    tbc::ui::ThemedApplication app(argc, argv);
 
     QCoreApplication::setApplicationName("tbc-efm-handler");
     QCoreApplication::setApplicationVersion(
@@ -71,9 +72,9 @@ int main(int argc, char *argv[])
                                         QCoreApplication::translate("main", "path"));
     parser.addOption(outputBaseOption);
     parser.addOption(QCommandLineOption("force-dark-theme",
-                                        QCoreApplication::translate("main", "Use the dark theme (default)")));
+                                        QCoreApplication::translate("main", "Pin the dark Fusion theme instead of following the system light/dark setting")));
     parser.addOption(QCommandLineOption("light-theme",
-                                        QCoreApplication::translate("main", "Use the light theme")));
+                                        QCoreApplication::translate("main", "Pin the light Fusion theme instead of following the system light/dark setting")));
 
     parser.addPositionalArgument(
         "input",
@@ -84,9 +85,15 @@ int main(int argc, char *argv[])
     parser.process(app);
     processStandardDebugOptions(parser);
 
-    // Qt's own Fusion theme, dark by default
-    tbc::ui::applyFusionTheme(parser.isSet(QStringLiteral("light-theme")) ? Qt::ColorScheme::Light
-                                                                         : Qt::ColorScheme::Dark);
+    // Apply the stock theme: follow the OS light/dark colour scheme by
+    // default (dark when unknown), or pin light/dark via the explicit flags.
+    if (parser.isSet(QStringLiteral("light-theme"))) {
+        app.applyStockLightTheme();
+    } else if (parser.isSet(QStringLiteral("force-dark-theme"))) {
+        app.applyStockDarkTheme();
+    } else {
+        app.applyStockThemeFollowingSystem();
+    }
     // The wheel changes a field only once it is clicked or tabbed into
     tbc::ui::installWheelGuard();
 

@@ -511,16 +511,13 @@ int main(int argc, char *argv[])
     // Apply the saved UI scale. Qt has no runtime API for a manual global scale
     // factor, so this has to be in the environment before the application is
     // constructed. 0 means "follow the OS scale", and an operator who has set
-    // QT_SCALE_FACTOR themselves keeps control of it. The saved theme is read
-    // here too and applied once the command line is parsed.
-    QString themeChoice;
+    // QT_SCALE_FACTOR themselves keeps control of it.
     {
         Configuration startupConfiguration;
         const double uiScaleFactor = startupConfiguration.getUiScaleFactor();
         if (uiScaleFactor != 0.0 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR")) {
             qputenv("QT_SCALE_FACTOR", QByteArray::number(uiScaleFactor));
         }
-        themeChoice = startupConfiguration.getTheme();
     }
 
     // Qt 6 already defaults to PassThrough; stating it pins fractional desktop
@@ -537,7 +534,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    QApplication a(argc, argv);
+    tbc::ui::prepareStockThemeEnvironment();
+
+    tbc::ui::ThemedApplication a(argc, argv);
 
     // Set desktop file name for proper GNOME integration
     // This must match the installed .desktop file name (without .desktop extension)
@@ -567,10 +566,12 @@ int main(int argc, char *argv[])
     // Add the standard debug options --debug and --quiet
     addStandardDebugOptions(parser);
 
-    // Theme options. They override the Themes-menu choice for this session
-    // only and are never saved.
-    parser.addOption(QCommandLineOption("force-dark-theme", "Use the dark theme for this session"));
-    parser.addOption(QCommandLineOption("light-theme", "Use the light theme for this session"));
+    // Theme options. Stock default is Fusion following the OS-level light/dark
+    // colour scheme (dark when the OS reports dark or unknown); ThemedApplication
+    // re-resolves on OS scheme/palette changes. --light-theme and
+    // --force-dark-theme pin the light/dark stock palettes instead.
+    parser.addOption(QCommandLineOption("force-dark-theme", "Pin the dark Fusion theme instead of following the system light/dark setting"));
+    parser.addOption(QCommandLineOption("light-theme", "Pin the light Fusion theme instead of following the system light/dark setting"));
     parser.addOption(QCommandLineOption("metadata-only", "Load metadata (.db or .json) without TBC data"));
 
     // Headless "Save frame as PNG"
@@ -604,15 +605,34 @@ int main(int argc, char *argv[])
     // Standard logging options
     processStandardDebugOptions(parser);
 
-    // Qt's own Fusion theme. The saved Themes-menu choice (dark by default)
-    // unless a command-line option overrides it for this session.
+    // Apply the stock theme. Precedence: explicit CLI flags, then the
+    // persisted user choice (Themes menu -> Keep theme choice), then follow
+    // the OS light/dark colour scheme (dark when unknown). This sets the
+    // Fusion palette, the isDarkTheme app property, and the input-widget
+    // contrast guard. ThemedApplication re-resolves the system scheme on OS
+    // changes while following (and re-asserts a pinned palette on any
+    // ApplicationPaletteChange, e.g. macOS switchover).
     if (parser.isSet("light-theme")) {
-        themeChoice = QStringLiteral("light");
+        a.applyStockLightTheme();
     } else if (parser.isSet("force-dark-theme")) {
-        themeChoice = QStringLiteral("dark");
+        a.applyStockDarkTheme();
+    } else {
+        // Read-only configuration access for the persisted theme keys (the
+        // MainWindow's own Configuration instance only reads at construction,
+        // so nothing here can be clobbered later).
+        Configuration startupThemeConfiguration;
+        const QString persistedThemeMode = startupThemeConfiguration.getThemeMode();
+        if (startupThemeConfiguration.getKeepThemeChoice()
+            && persistedThemeMode == QLatin1String("stock-dark")) {
+            a.applyStockDarkTheme();
+        } else if (startupThemeConfiguration.getKeepThemeChoice()
+                   && persistedThemeMode == QLatin1String("stock-light")) {
+            a.applyStockLightTheme();
+        } else {
+            // stock-system (or persistence disabled): follow the OS scheme.
+            a.applyStockThemeFollowingSystem();
+        }
     }
-    tbc::ui::applyFusionTheme(themeChoice == QLatin1String("light") ? Qt::ColorScheme::Light
-                                                                    : Qt::ColorScheme::Dark);
     // The wheel changes a field only once it is clicked or tabbed into
     tbc::ui::installWheelGuard();
 
@@ -634,7 +654,7 @@ int main(int argc, char *argv[])
     const bool metadataOnly = parser.isSet("metadata-only");
 
     // Start the GUI application
-    MainWindow w(inputFileName, metadataOnly, themeChoice);
+    MainWindow w(inputFileName, metadataOnly);
     w.show();
 
     return a.exec();

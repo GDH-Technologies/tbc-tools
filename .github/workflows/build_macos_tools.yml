@@ -24,13 +24,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Pin arm64 to macos-15: the macos-latest label migrated to macos-26
+          # Pin arm64 to macOS 15: the macos-latest label migrated to macos-26
           # (Tahoe) on 2026-07-15, and the flake.lock-pinned nixpkgs Qt uic
           # crashes with SIGTRAP on macOS 26 (CMake AUTOUIC test fails ->
-          # "CMake Generate step failed"). macos-15 is the same macOS major
-          # version the x86_64 job (macos-15-intel) builds on successfully.
-          # Re-evaluate this pin when flake.lock bumps nixpkgs to a Qt that
-          # supports macOS 26.
+          # "CMake Generate step failed"). macOS 15 is the same major version
+          # the x86_64 job (macos-15-intel) builds on successfully. Re-evaluate
+          # this pin when flake.lock bumps nixpkgs to a Qt that supports macOS 26.
+          #
+          # 2026-11-01: the standard macos-15 arm64 pool had a capacity outage
+          # ("The job was not acquired by Runner of type hosted even after
+          # multiple attempts" - jobs cancelled after ~15 min with no runner).
+          # A macos-15-xlarge fallback was tried and refused with "recent
+          # account payments have failed or your spending limit needs to be
+          # increased", so the larger pool is not available on this account.
+          # Stay on plain macos-15 and re-run the failed job when the hosted
+          # arm64 pool recovers.
           - runner: macos-15
             arch: arm64
           - runner: macos-15-intel
@@ -241,6 +249,9 @@ jobs:
           fi
           "$PYTHON_BIN" -m pip install --upgrade pip
           "$PYTHON_BIN" -m pip install pyinstaller dunamai
+          export TBC_VIDEO_EXPORT_VENDOR_VERSION="$("$PYTHON_BIN" -c 'import json; print(json.load(open("vcpkg.json"))["version"])')"
+          export TBC_VIDEO_EXPORT_VENDOR_COMMIT="$(git rev-parse --short HEAD)"
+          export TBC_VIDEO_EXPORT_VENDOR_BRANCH="${GITHUB_REF_NAME}"
           export PYTHONPATH="$EXPORTER_ROOT/src"
           cd "$EXPORTER_ROOT"
           mkdir -p build
@@ -659,6 +670,25 @@ jobs:
             sed -n '1,80p' /tmp/tbc-video-export-version.log || true
             exit 1
           fi
+          # The launch smoke test only checks the exit code; also assert the
+          # frozen version is the real release version (baked in via the vendor
+          # version runtime hook), not the 0.0.0 placeholder every release
+          # shipped before the injection existed.
+          EXPECT_EXPORTER_VERSION="$(python -c 'import json; print(json.load(open("vcpkg.json"))["version"])')"
+          EXPORTER_VERSION_LINE="$(sed -n '1p' /tmp/tbc-video-export-version.log)"
+          if [ -z "$EXPECT_EXPORTER_VERSION" ]; then
+            echo "Could not read the expected exporter version from vcpkg.json"
+            exit 1
+          fi
+          case "$EXPORTER_VERSION_LINE" in
+            "$EXPECT_EXPORTER_VERSION"*)
+              echo "Vendored exporter version OK: $EXPORTER_VERSION_LINE"
+              ;;
+            *)
+              echo "Vendored exporter version mismatch: expected $EXPECT_EXPORTER_VERSION, got: $EXPORTER_VERSION_LINE"
+              exit 1
+              ;;
+          esac
           if find dist/tbc-tools.app/Contents -type d -name "__pycache__" -not -path "*/Resources/python/*" | grep -q .; then
             echo "Bytecode caches were generated inside signed app payload."
             find dist/tbc-tools.app/Contents -type d -name "__pycache__" -not -path "*/Resources/python/*"
@@ -730,7 +760,18 @@ jobs:
           if-no-files-found: error
   build-universal-macos:
     name: Build universal macOS app/dmg
-    runs-on: macos-latest
+    # Run on the macos-15-intel (x86_64) pool: this job is architecture-
+    # agnostic (it only downloads the two prebuilt arch artifacts, merges
+    # them with lipo and creates the DMG), and the macOS 15 arm64 pool had
+    # an extended capacity outage on 2026-11-05 - the job was cancelled at
+    # the ~14-minute runner-acquisition timeout three consecutive times
+    # ("The job was not acquired by Runner of type hosted even after
+    # multiple attempts") while the Intel pool served its build jobs
+    # normally all day. macos-15-intel is the same macOS 15 version and is
+    # scheduled to remain available until August 2027. If the arm64 pool
+    # recovers, this can move back to plain macos-15 for consistency with
+    # the arch matrix jobs.
+    runs-on: macos-15-intel
     needs: build-tbc-tools
     steps:
       - name: Download arm64 app artifact

@@ -1,4 +1,5 @@
 #include "exportdialog.h"
+#include "advancedexportoptionsdialog.h"
 #include "exportarguments.h"
 #include "ui_exportdialog.h"
 
@@ -1395,18 +1396,7 @@ ExportDialog::ExportDialog(QWidget *parent) :
                 [updateDropoutFieldModeControls](int) { updateDropoutFieldModeControls(); });
     }
     updateDropoutFieldModeControls();
-    if (ui->letterboxCropCheckBox) {
-        ui->letterboxCropCheckBox->setChecked(false);
-        connect(ui->letterboxCropCheckBox, &QCheckBox::toggled, this, [this](bool) {
-            updateProfileDependentControls();
-        });
-    }
-    if (ui->forceAnamorphicCheckBox) {
-        ui->forceAnamorphicCheckBox->setChecked(false);
-        connect(ui->forceAnamorphicCheckBox, &QCheckBox::toggled, this, [this](bool) {
-            updateProfileDependentControls();
-        });
-    }
+    updateAdvancedOptionsSummary();
     if (ui->resolutionModeComboBox) {
         connect(ui->resolutionModeComboBox,
                 static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
@@ -1484,16 +1474,6 @@ ExportDialog::ExportDialog(QWidget *parent) :
     if (ui->appendSegmentTitleCheckBox) {
         ui->appendSegmentTitleCheckBox->setChecked(true);
         connect(ui->appendSegmentTitleCheckBox, &QCheckBox::toggled, this, [this](bool) { updateSegmentExportControls(); });
-    }
-    if (ui->exportMetadataCheckBox) {
-        ui->exportMetadataCheckBox->setChecked(true);
-        ui->exportMetadataCheckBox->setToolTip(
-            tr("Include FFmpeg-compatible metadata and closed captions from tbc-export-metadata."));
-    }
-    if (ui->disableMetadataEmbeddingCheckBox) {
-        ui->disableMetadataEmbeddingCheckBox->setChecked(false);
-        ui->disableMetadataEmbeddingCheckBox->setToolTip(
-            tr("Disable embedding the decode .tbc.json file as an attachment in supported containers."));
     }
     const auto configureRangeTimecodeLineEdit = [this](QLineEdit *lineEdit) {
         if (!lineEdit) {
@@ -2774,32 +2754,102 @@ void ExportDialog::updateProfileDependentControls()
         ui->exportProfileConfigEjectButton->setVisible(showExternalProfileControls);
         ui->exportProfileConfigEjectButton->setEnabled(canEdit && showExternalProfileControls);
     }
-    const QString resolutionMode = effectiveResolutionMode(tbcSource, ui ? ui->resolutionModeComboBox : nullptr);
-    const bool letterboxCropAllowed = resolutionMode == QStringLiteral("active_area");
-    if (ui->letterboxCropCheckBox && !letterboxCropAllowed && ui->letterboxCropCheckBox->isChecked()) {
-        const QSignalBlocker blocker(ui->letterboxCropCheckBox);
-        ui->letterboxCropCheckBox->setChecked(false);
+    // The letterbox/anamorphic options live in the Advanced Options dialog now;
+    // keep the Export page controls consistent with the advanced state.
+    if (ui->advancedOptionsButton) {
+        ui->advancedOptionsButton->setEnabled(canEdit);
     }
-    const bool letterboxRequested = ui
-                                    && ui->letterboxCropCheckBox
-                                    && ui->letterboxCropCheckBox->isChecked();
-    if (ui->forceAnamorphicCheckBox
-        && letterboxRequested
-        && ui->forceAnamorphicCheckBox->isChecked()) {
-        const QSignalBlocker blocker(ui->forceAnamorphicCheckBox);
-        ui->forceAnamorphicCheckBox->setChecked(false);
+    const bool reverseFieldOrderActive = advancedOptions.reverseFieldOrder;
+    const bool dropoutCorrectionEnabled = !ui->dropoutModeComboBox
+                                          || ui->dropoutModeComboBox->currentData().toString() != QStringLiteral("disabled");
+    if (ui->dropoutModeLabel) {
+        ui->dropoutModeLabel->setEnabled(canEdit && !reverseFieldOrderActive);
     }
-    const bool anamorphicRequested = ui
-                                     && ui->forceAnamorphicCheckBox
-                                     && ui->forceAnamorphicCheckBox->isChecked();
-    if (ui->letterboxCropCheckBox) {
-        ui->letterboxCropCheckBox->setEnabled(canEdit && letterboxCropAllowed && !anamorphicRequested);
+    if (ui->dropoutModeComboBox) {
+        ui->dropoutModeComboBox->setEnabled(canEdit && !reverseFieldOrderActive);
     }
-    if (ui->forceAnamorphicCheckBox) {
-        ui->forceAnamorphicCheckBox->setEnabled(canEdit && !letterboxRequested);
+    if (ui->dropoutFieldModeLabel) {
+        ui->dropoutFieldModeLabel->setEnabled(canEdit && !reverseFieldOrderActive && dropoutCorrectionEnabled);
+    }
+    if (ui->dropoutFieldModeComboBox) {
+        ui->dropoutFieldModeComboBox->setEnabled(canEdit && !reverseFieldOrderActive && dropoutCorrectionEnabled);
     }
 }
 
+
+void ExportDialog::on_advancedOptionsButton_clicked()
+{
+    if ((exportProcess && exportProcess->state() != QProcess::NotRunning)
+        || (parallelProxyProcess && parallelProxyProcess->state() != QProcess::NotRunning)) {
+        return;
+    }
+
+    // Letterbox crop is only offered with default Active Area framing (the
+    // same gate buildArguments enforces).
+    const QString resolutionMode = effectiveResolutionMode(tbcSource, ui ? ui->resolutionModeComboBox : nullptr);
+    const bool hasAnyVerticalLineAdjustment = tbcSource
+                                              ? hasAnyNonDefaultVerticalFraming(tbcSource->getVideoParameters())
+                                              : false;
+    const bool letterboxCropAllowed =
+        ExportArguments::isDefaultActiveAreaFraming(resolutionMode, hasAnyVerticalLineAdjustment);
+
+    AdvancedExportOptionsDialog dialog(advancedOptions, letterboxCropAllowed, tbc::ui::dialogParentWidget(this));
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    advancedOptions = dialog.selectedOptions();
+    updateAdvancedOptionsSummary();
+    updateProfileDependentControls();
+    emit advancedOptionsChanged(advancedOptions);
+}
+
+void ExportDialog::setExportAdvancedOptions(const ExportAdvancedOptions &options)
+{
+    advancedOptions = options;
+    updateAdvancedOptionsSummary();
+    updateProfileDependentControls();
+}
+
+void ExportDialog::updateAdvancedOptionsSummary()
+{
+    if (!ui || !ui->advancedOptionsSummaryLabel) {
+        return;
+    }
+
+    QStringList active;
+    if (!advancedOptions.exportMetadata) {
+        active << tr("no metadata");
+    }
+    if (advancedOptions.disableMetadataEmbedding) {
+        active << tr("no JSON attachment");
+    }
+    if (advancedOptions.letterboxCrop) {
+        active << tr("letterbox");
+    }
+    if (advancedOptions.forceAnamorphic) {
+        active << tr("anamorphic");
+    }
+    if (advancedOptions.reverseFieldOrder) {
+        active << tr("reverse field order");
+    }
+    if (advancedOptions.twoStep) {
+        active << tr("two-step");
+    }
+    if (advancedOptions.outputPadding > 0) {
+        active << tr("padding %1").arg(advancedOptions.outputPadding);
+    }
+    if (advancedOptions.threads > 0) {
+        active << tr("%1 threads").arg(advancedOptions.threads);
+    }
+    const QString joined = active.join(QStringLiteral(", "));
+    ui->advancedOptionsSummaryLabel->setText(active.isEmpty()
+                                                  ? tr("Advanced: defaults")
+                                                  : tr("Advanced: %1").arg(joined));
+    ui->advancedOptionsSummaryLabel->setToolTip(
+        active.isEmpty()
+            ? tr("All advanced export options are at their defaults.")
+            : tr("Non-default advanced export options: %1").arg(joined));
+}
 
 void ExportDialog::on_outputBrowseButton_clicked()
 {
@@ -4431,11 +4481,8 @@ void ExportDialog::setBusy(bool busy)
     if (ui->dropoutFieldModeComboBox) {
         ui->dropoutFieldModeComboBox->setEnabled(enabled && dropoutCorrectionEnabled);
     }
-    if (ui->disableMetadataEmbeddingCheckBox) {
-        ui->disableMetadataEmbeddingCheckBox->setEnabled(enabled);
-    }
-    if (ui->exportMetadataCheckBox) {
-        ui->exportMetadataCheckBox->setEnabled(enabled);
+    if (ui->advancedOptionsButton) {
+        ui->advancedOptionsButton->setEnabled(enabled);
     }
     if (ui->ffv1SlicesLabel) {
         ui->ffv1SlicesLabel->setEnabled(enabled);
@@ -5088,9 +5135,7 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
     const QString profile = usingProfileOverride
                                 ? profileOverride.trimmed()
                                 : selectedExportProfileName();
-    const bool exportMetadataRequested = !ui
-                                         || !ui->exportMetadataCheckBox
-                                         || ui->exportMetadataCheckBox->isChecked();
+    const bool exportMetadataRequested = advancedOptions.exportMetadata;
     const bool includeExportMetadata = exportMetadataRequested && !isWebProfileName(profile);
     if (includeExportMetadata) {
         args << QStringLiteral("--export-metadata");
@@ -5124,8 +5169,12 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
     const bool supportsDropoutInterfieldCorrection = executableSupportsOption(
         exportPath, QStringLiteral("--dropout-interfield-correction"));
     const QString outputResolutionMode = effectiveOutputResolutionMode(ui ? ui->outputResolutionModeComboBox : nullptr);
-    if (ExportArguments::shouldDisableDropoutCorrection(dropoutMode, startFrameOneBased)) {
+    const bool reverseFieldOrderRequested = advancedOptions.reverseFieldOrder;
+    if (ExportArguments::shouldDisableDropoutCorrection(dropoutMode, startFrameOneBased, reverseFieldOrderRequested)) {
         args << QStringLiteral("--no-dropout-correct");
+        if (reverseFieldOrderRequested) {
+            args << QStringLiteral("--reverse");
+        }
     } else {
         if (dropoutMode == QStringLiteral("heavy")
             && executableSupportsOption(exportPath, QStringLiteral("--overcorrect"))) {
@@ -5149,7 +5198,7 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
             }
         }
     }
-    if (ui->disableMetadataEmbeddingCheckBox && ui->disableMetadataEmbeddingCheckBox->isChecked()) {
+    if (advancedOptions.disableMetadataEmbedding) {
         args << QStringLiteral("--no-attach-json");
     }
 
@@ -5282,10 +5331,14 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
     const bool hasAnyVerticalLineAdjustment = hasAnyNonDefaultVerticalFraming(videoParameters);
     const bool isDefaultActiveAreaFraming =
         ExportArguments::isDefaultActiveAreaFraming(resolutionMode, hasAnyVerticalLineAdjustment);
-    const bool letterboxCropRequested = ui->letterboxCropCheckBox
-                                        && ui->letterboxCropCheckBox->isChecked();
-    const bool forceAnamorphicRequested = ui->forceAnamorphicCheckBox
-                                          && ui->forceAnamorphicCheckBox->isChecked();
+    const bool letterboxCropRequested = advancedOptions.letterboxCrop;
+    const bool forceAnamorphicRequested = advancedOptions.forceAnamorphic;
+    if (reverseFieldOrderRequested && !executableSupportsOption(exportPath, QStringLiteral("--reverse"))) {
+        if (errorMessage) {
+            *errorMessage = unsupportedOptionError(tr("Reverse field order"), QStringLiteral("--reverse"));
+        }
+        return QStringList();
+    }
     if (letterboxCropRequested && forceAnamorphicRequested) {
         if (errorMessage) {
             *errorMessage = tr("Force anamorphic cannot be used with letterbox crop.");
@@ -5385,6 +5438,16 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
         }
     }
 
+    if (advancedOptions.twoStep && executableSupportsOption(exportPath, QStringLiteral("--two-step"))) {
+        args << QStringLiteral("--two-step");
+    }
+    if (advancedOptions.outputPadding > 0
+        && executableSupportsOption(exportPath, QStringLiteral("--output-padding"))) {
+        args << QStringLiteral("--output-padding") << QString::number(advancedOptions.outputPadding);
+    }
+    if (advancedOptions.threads > 0 && executableSupportsOption(exportPath, QStringLiteral("--threads"))) {
+        args << QStringLiteral("--threads") << QString::number(advancedOptions.threads);
+    }
     if (!inputTbcJsonOverride.isEmpty()) {
         args << QStringLiteral("--input-tbc-json") << inputTbcJsonOverride;
     }

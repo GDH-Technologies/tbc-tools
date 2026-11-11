@@ -53,6 +53,20 @@ struct SlideshowExtractOptions {
     QByteArray dialogRows;
 };
 
+// Advanced export options (Export page -> Advanced options dialog). Defaults
+// mirror the tbc-video-export CLI defaults; the persisted state applies to
+// both the main and the proxy exports.
+struct ExportAdvancedOptions {
+    bool exportMetadata = true;             // --export-metadata
+    bool disableMetadataEmbedding = false;  // --no-attach-json
+    bool letterboxCrop = false;             // --letterbox (default active-area framing only)
+    bool forceAnamorphic = false;           // --force-anamorphic (not with letterbox crop)
+    bool reverseFieldOrder = false;         // --reverse (forces --no-dropout-correct)
+    bool twoStep = false;                   // --two-step
+    int outputPadding = 0;                  // --output-padding (0 = off)
+    int threads = 0;                        // --threads (0 = process defaults)
+};
+
 class Configuration : public QObject
 {
     Q_OBJECT
@@ -113,9 +127,6 @@ public:
     bool getSkipBySegments(void);
     void setWaveformPhosphorMode(bool waveformPhosphorMode);
     bool getWaveformPhosphorMode(void);
-    // Colour scheme: "dark" (default) or "light"
-    void setTheme(QString theme);
-    QString getTheme(void);
     void setGenerateProxyEnabled(bool generateProxyEnabled);
     bool getGenerateProxyEnabled(void);
     void setExportProfileConfigEnabled(bool exportProfileConfigEnabled);
@@ -151,6 +162,15 @@ public:
     void setSkippedUpdateVersion(QString skippedUpdateVersion);
     QString getSkippedUpdateVersion(void);
 
+    // Get and set methods - theme (Themes menu persistence). Mode strings
+    // match the Themes menu action data: stock-system, stock-dark,
+    // stock-light. When keepChoice is false the stored mode is ignored at
+    // startup (the app follows the OS light/dark scheme).
+    void setKeepThemeChoice(bool keepThemeChoice);
+    bool getKeepThemeChoice(void);
+    void setThemeMode(QString themeMode);
+    QString getThemeMode(void);
+
     // Get and set methods - CUDA plugin registry
     void setCudaPluginInstalledVersion(QString version);
     QString getCudaPluginInstalledVersion(void);
@@ -176,6 +196,9 @@ public:
     // Get and set methods - "Extract slideshow stills" options
     void setSlideshowExtractOptions(const SlideshowExtractOptions &options);
     SlideshowExtractOptions getSlideshowExtractOptions(void);
+    // Get and set methods - advanced export options
+    void setExportAdvancedOptions(const ExportAdvancedOptions &options);
+    ExportAdvancedOptions getExportAdvancedOptions(void);
 
 signals:
 
@@ -214,7 +237,6 @@ private:
         bool toggleChromaDuringSeek;
         bool skipBySegments;
         bool waveformPhosphorMode;
-        QString theme;
         bool generateProxyEnabled;
         bool exportProfileConfigEnabled;
         QString exportProfileConfigPath;
@@ -251,6 +273,13 @@ private:
         bool saveAllAlsoExportRf; // "Also export source RF segment" checkbox in save-all-PNGs
     };
 
+    // Theme options (Themes menu persistence; additive keys - older config
+    // files fall back to defaults)
+    struct Theme {
+        bool keepChoice;          // Keep the user's theme choice between sessions
+        QString mode;             // stock-system, stock-dark or stock-light
+    };
+
     // Overall settings structure
     struct Settings {
         qint32 version;
@@ -260,9 +289,11 @@ private:
         UpdateCheck updateCheck;
         CudaPlugin cudaPlugin;
         RfExport rfExport;
+        Theme theme;
         VbiProcessingOptions vbiProcessing;
         FrameSnapshot::Options frameSnapshot;
         SlideshowExtractOptions slideshowExtract;
+        ExportAdvancedOptions exportAdvancedOptions;
     } settings;
 
     void setDefault(void);

@@ -142,7 +142,6 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("toggleChromaDuringSeek", settings.viewOptions.toggleChromaDuringSeek);
     configuration->setValue("skipBySegments", settings.viewOptions.skipBySegments);
     configuration->setValue("waveformPhosphorMode", settings.viewOptions.waveformPhosphorMode);
-    configuration->setValue("theme", settings.viewOptions.theme);
     configuration->setValue("generateProxyEnabled", settings.viewOptions.generateProxyEnabled);
     configuration->setValue("exportProfileConfigEnabled", settings.viewOptions.exportProfileConfigEnabled);
     configuration->setValue("exportProfileConfigPath", settings.viewOptions.exportProfileConfigPath);
@@ -195,6 +194,18 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("dialogRows", settings.slideshowExtract.dialogRows);
     configuration->endGroup();
 
+    // Advanced export options
+    configuration->beginGroup("exportAdvancedOptions");
+    configuration->setValue("exportMetadata", settings.exportAdvancedOptions.exportMetadata);
+    configuration->setValue("disableMetadataEmbedding", settings.exportAdvancedOptions.disableMetadataEmbedding);
+    configuration->setValue("letterboxCrop", settings.exportAdvancedOptions.letterboxCrop);
+    configuration->setValue("forceAnamorphic", settings.exportAdvancedOptions.forceAnamorphic);
+    configuration->setValue("reverseFieldOrder", settings.exportAdvancedOptions.reverseFieldOrder);
+    configuration->setValue("twoStep", settings.exportAdvancedOptions.twoStep);
+    configuration->setValue("outputPadding", settings.exportAdvancedOptions.outputPadding);
+    configuration->setValue("threads", settings.exportAdvancedOptions.threads);
+    configuration->endGroup();
+
     // RF segment export (FLAC-Chop)
     configuration->beginGroup("rfExport");
     configuration->setValue("flacChopPath", settings.rfExport.flacChopPath);
@@ -202,6 +213,12 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("padBeforeMs", settings.rfExport.padBeforeMs);
     configuration->setValue("padAfterMs", settings.rfExport.padAfterMs);
     configuration->setValue("saveAllAlsoExportRf", settings.rfExport.saveAllAlsoExportRf);
+    configuration->endGroup();
+
+    // Theme options (Themes menu persistence)
+    configuration->beginGroup("theme");
+    configuration->setValue("keepChoice", settings.theme.keepChoice);
+    configuration->setValue("mode", settings.theme.mode);
     configuration->endGroup();
 
     // Sync the settings with disk
@@ -251,10 +268,6 @@ void Configuration::readConfiguration(void)
     settings.viewOptions.toggleChromaDuringSeek = configuration->value("toggleChromaDuringSeek", false).toBool();
     settings.viewOptions.skipBySegments = configuration->value("skipBySegments", true).toBool();
     settings.viewOptions.waveformPhosphorMode = configuration->value("waveformPhosphorMode", false).toBool();
-    settings.viewOptions.theme = configuration->value("theme", QStringLiteral("dark")).toString();
-    if (settings.viewOptions.theme != QLatin1String("light")) {
-        settings.viewOptions.theme = QStringLiteral("dark");
-    }
     settings.viewOptions.generateProxyEnabled = configuration->value("generateProxyEnabled", false).toBool();
     settings.viewOptions.exportProfileConfigEnabled = configuration->value("exportProfileConfigEnabled", false).toBool();
     settings.viewOptions.exportProfileConfigPath = configuration->value("exportProfileConfigPath", QString()).toString();
@@ -333,6 +346,20 @@ void Configuration::readConfiguration(void)
     settings.slideshowExtract.dialogRows = configuration->value("dialogRows").toByteArray();
     configuration->endGroup();
 
+    // Advanced export options (additive keys - older config files fall back to defaults)
+    configuration->beginGroup("exportAdvancedOptions");
+    settings.exportAdvancedOptions.exportMetadata = configuration->value("exportMetadata", true).toBool();
+    settings.exportAdvancedOptions.disableMetadataEmbedding = configuration->value("disableMetadataEmbedding", false).toBool();
+    settings.exportAdvancedOptions.letterboxCrop = configuration->value("letterboxCrop", false).toBool();
+    settings.exportAdvancedOptions.forceAnamorphic = configuration->value("forceAnamorphic", false).toBool();
+    settings.exportAdvancedOptions.reverseFieldOrder = configuration->value("reverseFieldOrder", false).toBool();
+    settings.exportAdvancedOptions.twoStep = configuration->value("twoStep", false).toBool();
+    settings.exportAdvancedOptions.outputPadding = configuration->value("outputPadding", 0).toInt();
+    settings.exportAdvancedOptions.threads = configuration->value("threads", 0).toInt();
+    if (settings.exportAdvancedOptions.outputPadding < 0) settings.exportAdvancedOptions.outputPadding = 0;
+    if (settings.exportAdvancedOptions.threads < 0) settings.exportAdvancedOptions.threads = 0;
+    configuration->endGroup();
+
     // RF segment export (additive keys - older config files fall back to defaults)
     configuration->beginGroup("rfExport");
     settings.rfExport.flacChopPath = configuration->value("flacChopPath", QString()).toString();
@@ -342,6 +369,17 @@ void Configuration::readConfiguration(void)
     settings.rfExport.saveAllAlsoExportRf = configuration->value("saveAllAlsoExportRf", false).toBool();
     if (settings.rfExport.padBeforeMs < 0) settings.rfExport.padBeforeMs = 0;
     if (settings.rfExport.padAfterMs < 0) settings.rfExport.padAfterMs = 0;
+    configuration->endGroup();
+
+    // Theme options (additive keys - older config files fall back to defaults)
+    configuration->beginGroup("theme");
+    settings.theme.keepChoice = configuration->value("keepChoice", false).toBool();
+    settings.theme.mode = configuration->value("mode", QStringLiteral("stock-system")).toString();
+    if (settings.theme.mode != QStringLiteral("stock-dark")
+        && settings.theme.mode != QStringLiteral("stock-light")) {
+        // Anything else (including stock-system and garbage) follows the OS.
+        settings.theme.mode = QStringLiteral("stock-system");
+    }
     configuration->endGroup();
 }
 
@@ -375,7 +413,6 @@ void Configuration::setDefault(void)
     settings.viewOptions.toggleChromaDuringSeek = false;
     settings.viewOptions.skipBySegments = true;
     settings.viewOptions.waveformPhosphorMode = false;
-    settings.viewOptions.theme = QStringLiteral("dark");
     settings.viewOptions.generateProxyEnabled = false;
     settings.viewOptions.exportProfileConfigEnabled = false;
     settings.viewOptions.exportProfileConfigPath = QString();
@@ -410,12 +447,19 @@ void Configuration::setDefault(void)
     settings.frameSnapshot = FrameSnapshot::Options();
     settings.slideshowExtract = SlideshowExtractOptions();
 
+    // Advanced export options (defaults match tbc-video-export CLI defaults)
+    settings.exportAdvancedOptions = ExportAdvancedOptions();
+
     // RF segment export (FLAC-Chop)
     settings.rfExport.flacChopPath = QString();
     settings.rfExport.sourcePath = QString();
     settings.rfExport.padBeforeMs = 500;
     settings.rfExport.padAfterMs = 500;
     settings.rfExport.saveAllAlsoExportRf = false;
+
+    // Theme options (Themes menu persistence defaults: do not keep, follow OS)
+    settings.theme.keepChoice = false;
+    settings.theme.mode = QStringLiteral("stock-system");
 
     // Write the configuration
     writeConfiguration();
@@ -638,16 +682,6 @@ void Configuration::setWaveformPhosphorMode(bool waveformPhosphorMode)
 bool Configuration::getWaveformPhosphorMode(void)
 {
     return settings.viewOptions.waveformPhosphorMode;
-}
-
-void Configuration::setTheme(QString theme)
-{
-    settings.viewOptions.theme = theme;
-}
-
-QString Configuration::getTheme(void)
-{
-    return settings.viewOptions.theme;
 }
 
 void Configuration::setGenerateProxyEnabled(bool generateProxyEnabled)
@@ -913,4 +947,36 @@ void Configuration::setSlideshowExtractOptions(const SlideshowExtractOptions &op
 SlideshowExtractOptions Configuration::getSlideshowExtractOptions(void)
 {
     return settings.slideshowExtract;
+}
+
+// Advanced export options
+void Configuration::setExportAdvancedOptions(const ExportAdvancedOptions &options)
+{
+    settings.exportAdvancedOptions = options;
+}
+
+ExportAdvancedOptions Configuration::getExportAdvancedOptions(void)
+{
+    return settings.exportAdvancedOptions;
+}
+
+// Theme options (Themes menu persistence)
+void Configuration::setKeepThemeChoice(bool keepThemeChoice)
+{
+    settings.theme.keepChoice = keepThemeChoice;
+}
+
+bool Configuration::getKeepThemeChoice(void)
+{
+    return settings.theme.keepChoice;
+}
+
+void Configuration::setThemeMode(QString themeMode)
+{
+    settings.theme.mode = themeMode;
+}
+
+QString Configuration::getThemeMode(void)
+{
+    return settings.theme.mode;
 }
