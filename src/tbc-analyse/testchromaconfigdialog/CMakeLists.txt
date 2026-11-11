@@ -9,6 +9,9 @@ add_executable(testchromaconfigdialog
 
 target_include_directories(testchromaconfigdialog PRIVATE
     ..
+    # tbc-chroma keeps FFTW's include path private, and its headers include
+    # fftw3.h; tbc-analyse adds the path the same way
+    ${FFTW_INCLUDE_DIR}
 )
 
 target_link_libraries(testchromaconfigdialog PRIVATE
@@ -18,4 +21,6 @@ target_link_libraries(testchromaconfigdialog PRIVATE
 
 add_test(NAME testchromaconfigdialog COMMAND testchromaconfigdialog)
 # Headless: no display required (CI runners, Nix sandbox builds).
-set_tests_properties(testchromaconfigdialog PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(testchromaconfigdialog PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60)

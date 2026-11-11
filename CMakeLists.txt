@@ -664,6 +664,7 @@ if(BUILD_TESTING)
     add_subdirectory(src/tbc-process-vbi/testclosedcaption)
     add_subdirectory(src/tbc-export-metadata/testffmetadata)
     add_subdirectory(src/tbc-export-metadata/testclosedcaptions)
+    add_subdirectory(src/tbc-analyse/testchromaconfigdialog)
     add_subdirectory(src/tbc-analyse/testthemeconfiguration)
     add_subdirectory(src/tbc-analyse/testcudapluginmanager)
 
