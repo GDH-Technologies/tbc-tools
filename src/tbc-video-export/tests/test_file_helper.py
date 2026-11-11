@@ -513,23 +513,21 @@ class TestTBCJson:
             {TBCType.LUMA: "X.ytbc", TBCType.CHROMA: "X.ctbc"},
             id="decode_orc_pair_chroma_input",
         ),
+        # A .tbcy/.ytbc is always luma, even without a chroma partner
+        # (upstream v3.3.1, prompt_readme_issue30-orc-yc-export_2026-11-02.md)
         pytest.param(
             ["X.tbcy"],
             "X.tbcy",
-            {TBCType.COMBINED: "X.tbcy"},
+            {TBCType.LUMA: "X.tbcy"},
             id="orc_lone_luma",
         ),
-        pytest.param(
-            ["X.tbc", "X_chroma.tbc"],
-            "X_chroma.tbc",
-            {TBCType.LUMA: "X.tbc", TBCType.CHROMA: "X_chroma.tbc"},
-            id="legacy_pair_chroma_input",
-        ),
+        # The input's suffix does not pick the scheme: the legacy pair wins
+        # whenever it exists, as for a bare name
         pytest.param(
             ["X.tbc", "X_chroma.tbc", "X.tbcy", "X.tbcc"],
             "X.tbcy",
-            {TBCType.LUMA: "X.tbcy", TBCType.CHROMA: "X.tbcc"},
-            id="suffix_picks_scheme",
+            {TBCType.LUMA: "X.tbc", TBCType.CHROMA: "X_chroma.tbc"},
+            id="legacy_pair_wins_over_suffix",
         ),
         pytest.param(
             ["X.tbc", "X_chroma.tbc", "X.tbcy", "X.tbcc"],
