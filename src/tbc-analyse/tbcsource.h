@@ -24,6 +24,7 @@
 #include "sourcevideo.h"
 #include "tbcmetadata.h"
 #include "segments.h"
+#include "segmentsderive.h"
 #include "linenumber.h"
 #include "vbidecoder.h"
 #include "videoiddecoder.h"

@@ -36,9 +36,23 @@ from field 0 of the file (`range.startField` lets a consumer rebase a
 `--start/--length` window). It needs no GPU and no ffmpeg; the field walk is
 I/O-bound (about 478 KB per NTSC field), which is why the results are stored.
 
-The analysis itself lives in the tbc library (`src/library/tbc/segments.h`);
-this command is a thin front end so tbc-analyse and tbc-export-metadata derive
-exactly the same segments.
+The analysis itself lives in this module's `tbc-segments-core` library
+(`core/segments.h`); this command (`cli/`) is a thin front end over it, so
+tbc-analyse and tbc-export-metadata derive exactly the same segments.
+
+### Module layout
+
+Every piece of tbc-tools' segment handling lives under `src/tbc-segments`, so
+the feature stays apart from the shared tool sources and can move as one:
+
+| Directory | Target | What |
+| --- | --- | --- |
+| `core/` | `tbc-segments-core` (static, Qt Core) | the rules (`segments.h`), the report (`segmentsreport.h`, used by `tbc-export-metadata --segments-json`), whole-file derivation for a loaded file (`segmentsderive.h`), segments as export chapters (`segmentchapters.h`, used by `--ffmetadata`), the per-segment export plan (`segmentexportplan.h`, used by tbc-analyse's Export tab), the field walk (`fieldmetrics.h`, `fieldwalkpool.h`) |
+| `gui/` | `tbc-segments-gui` (static, Qt Widgets) | the Segments viewer (`segmentsviewerdialog.h`) and `SegmentsController`, which carries tbc-analyse's segment behaviour (viewer, edits, re-derive, set In/Out, timeline ticks and tints, chapter skip, readout, timeline menu); the main window reaches it through `SegmentsController::Hooks` |
+| `cli/` | `tbc-segments` | this command and its script tests |
+
+The data model (`TbcMetaData::Segment`, `DecoderEvent`, `PictureMetrics` and
+their tables) stays in the tbc library with the rest of the metadata.
 
 ## Usage
 
@@ -223,7 +237,7 @@ and a segment holding only a second field (no frame of its own) reports 0 / 0.
 
 ## Tests
 
-`testsegments` under `src/library/tbc/testsegments` (ctest) synthesises
+`testsegments` (`core/tests`, ctest) synthesises
 metadata in memory: gaps, parity and skipped fields, sync-loss runs, dropout
 storms, a 32-bit rollover round-tripped through JSON, `--start/--length`
 clipping, the RF rate taken from the metadata, decoder-event merging, stored
@@ -232,8 +246,13 @@ classification, the presets, frame containment and segment tiling under the
 mixed-frame rule, and an exact equivalence of the sections with
 tbc-audio-align's `ExtractGapLessSection` + `TbcJsonFixup` over jittered,
 gapped, backward-stepping and 32-bit-wrapped `fileLoc` series in PAL and NTSC.
-`testsegmentswalk` here covers the field walk over a small synthetic luma +
+`testsegmentswalk` (`core/tests/walk`) covers the field walk over a small synthetic luma +
 chroma TBC (scene change, snow, blank picture, missing burst, single- vs
 multi-threaded equality, a short TBC refused, a TBC with a trailing surplus
 walked to the metadata's count). `tbc-segments-smoke` runs the shipped
-`test-data/ntsc/ve-snw-cut` fixture through both tiers.
+`test-data/ntsc/ve-snw-cut` fixture through both tiers, and the scripts in
+`cli/tests` check that `--write` is idempotent and that `--no-burst` keeps a
+stored burst amplitude. `testsegmentsviewer` and `testsegmentscontroller`
+(`gui/tests`, offscreen) cover the viewer's buttons and the controller's
+lookups, readout, chapter-skip targets, timeline ticks and tints, split,
+re-derive (user segments kept) and timeline menu.

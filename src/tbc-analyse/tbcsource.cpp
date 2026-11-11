@@ -1828,7 +1828,7 @@ bool TbcSource::hasPictureMetrics() const
 
 bool TbcSource::hasSegmentEvidence() const
 {
-    return !metaData.getDecoderEvents().isEmpty() || metaData.hasPictureMetrics();
+    return ::hasSegmentEvidence(metaData);
 }
 
 bool TbcSource::getSegmentsDerivedAtLoad() const
@@ -1838,34 +1838,18 @@ bool TbcSource::getSegmentsDerivedAtLoad() const
 
 QVector<TbcMetaData::Segment> TbcSource::deriveSegments(const SegmentsThresholds &thresholds) const
 {
-    FieldRange range;
-    range.startField = 0;
-    range.endFieldExclusive = metaData.getNumberOfFields();
-    if (range.endFieldExclusive <= 0) {
-        return QVector<TbcMetaData::Segment>();
-    }
-    const FieldMetrics metrics = FieldMetrics::fromMetadata(metaData);
-    const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, 0.0,
-                                                      metrics.enabled ? &metrics : nullptr);
-    return ::deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-analyse"));
+    return deriveSegmentsForFile(metaData, thresholds, QStringLiteral("tbc-analyse"));
 }
 
-// Derive segments when none are stored but the decoder left evidence (events
-// or picture metrics). Derived-at-load segments do not mark the metadata
+// Derived-at-load segments (tbc-segments' rule) do not mark the metadata
 // dirty; they persist when the user saves for any reason.
 void TbcSource::deriveSegmentsAtLoad()
 {
-    segmentsDerivedAtLoad = false;
-    if (!metaData.getSegments().isEmpty() || !hasSegmentEvidence()) {
-        return;
+    const qint32 derived = ::deriveSegmentsAtLoad(metaData, QStringLiteral("tbc-analyse"));
+    segmentsDerivedAtLoad = derived > 0;
+    if (segmentsDerivedAtLoad) {
+        tbcDebugStream() << "TbcSource::deriveSegmentsAtLoad(): derived" << derived << "segments";
     }
-    const QVector<TbcMetaData::Segment> derived = deriveSegments(SegmentsThresholds());
-    if (derived.isEmpty()) {
-        return;
-    }
-    metaData.setSegments(derived);
-    segmentsDerivedAtLoad = true;
-    tbcDebugStream() << "TbcSource::deriveSegmentsAtLoad(): derived" << derived.size() << "segments";
 }
 
 bool TbcSource::segmentFrameRange(const TbcMetaData::Segment &segment, qint32 *startFrameOneBased, qint32 *lengthFrames) const

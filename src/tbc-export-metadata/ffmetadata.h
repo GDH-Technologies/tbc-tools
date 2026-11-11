@@ -28,16 +28,8 @@
 #include <QString>
 #include <QtGlobal>
 
+#include "segmentchapters.h"
 #include "tbcmetadata.h"
-
-/*!
-    Which stored recording segments become chapters.
-*/
-enum class FfmetadataSegmentMode {
-    EnabledSegments,   // one chapter per enabled stored segment (the default)
-    AllSegments,       // every stored segment, disabled ones included
-    NoSegments         // ignore stored segments: LaserDisc navigation chapters only
-};
 
 /*!
     Write an FFMETADATA1 file containing navigation information.

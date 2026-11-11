@@ -12,7 +12,6 @@ set(tbc-analyse_SOURCES
     metadataconversiondialog.cpp metadataconversiondialog.ui
     metadatastatusdialog.cpp metadatastatusdialog.ui
     notesviewerdialog.cpp notesviewerdialog.h
-    segmentsviewerdialog.cpp segmentsviewerdialog.h
     teletextviewerdialog.cpp teletextviewerdialog.h
     teletextnativeviewwidget.cpp teletextnativeviewwidget.h
     main.cpp
@@ -86,7 +85,7 @@ target_include_directories(tbc-analyse PRIVATE
 
 target_link_libraries(tbc-analyse PRIVATE
     Qt::Core Qt::Gui Qt::Widgets Qt::Svg Qt::Network
-    tbc-library tbc-chroma
+    tbc-library tbc-chroma tbc-segments-gui
 )
 
 # OpenCV is optional. It gives "Save frame as PNG" Lanczos/bicubic/area

@@ -1,6 +1,6 @@
 /************************************************************************
 
-    testsegments.cpp (field-walk tests; the metadata-tier tests live in src/library/tbc/testsegments)
+    testsegmentswalk.cpp (field-walk tests; the metadata-tier tests live in ../testsegments.cpp)
 
     Unit tests for tbc-segments (metadata tier and field-data tier)
     Copyright (C) 2026 GDH-Technologies LLC
@@ -34,7 +34,7 @@
 #include <iostream>
 
 #include "fieldmetrics.h"
-#include "processingpool.h"
+#include "fieldwalkpool.h"
 #include "segments.h"
 #include "tbcmetadata.h"
 

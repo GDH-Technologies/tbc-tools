@@ -1,6 +1,6 @@
 /************************************************************************
 
-    processingpool.h
+    fieldwalkpool.h
 
     tbc-segments - Threaded walk over the raw TBC fields
     Copyright (C) 2026 GDH-Technologies LLC
@@ -22,8 +22,8 @@
 
 ************************************************************************/
 
-#ifndef PROCESSINGPOOL_H
-#define PROCESSINGPOOL_H
+#ifndef FIELDWALKPOOL_H
+#define FIELDWALKPOOL_H
 
 #include <QAtomicInt>
 #include <QElapsedTimer>
@@ -94,4 +94,4 @@ private:
     FieldGeometry geometry;
 };
 
-#endif // PROCESSINGPOOL_H
+#endif // FIELDWALKPOOL_H

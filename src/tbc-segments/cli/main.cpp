@@ -35,7 +35,7 @@
 #include <iostream>
 
 #include "fieldmetrics.h"
-#include "processingpool.h"
+#include "fieldwalkpool.h"
 #include "segments.h"
 #include "tbc/logging.h"
 #include "tbcmetadata.h"

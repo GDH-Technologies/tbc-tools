@@ -16,7 +16,7 @@ target_include_directories(testchromaconfigdialog PRIVATE
 
 target_link_libraries(testchromaconfigdialog PRIVATE
     Qt::Core Qt::Gui Qt::Widgets
-    tbc-library tbc-chroma
+    tbc-library tbc-chroma tbc-segments-core
 )
 
 add_test(NAME testchromaconfigdialog COMMAND testchromaconfigdialog)
