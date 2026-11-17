@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # gdh_version.py
 #
-# Resolve, propose, bump, tag and check the GDH fork version for tbc-tools.
+# Resolve the GDH fork version of tbc-tools, and cut releases on main.
 #
 # This fork carries GDH-only work on top of harrypm/tbc-tools, and needs to say
 # so without colonising upstream's version namespace. The scheme is:
@@ -11,39 +11,31 @@
 #     tag       v<UPSTREAM>-gdh-<MAJOR>.<MINOR>          e.g. v3.2.9-gdh-2.1
 #
 # <UPSTREAM> is upstream's OWN declared version -- the "version" field of
-# vcpkg.json. That field stays correct on its own: harrypm's release workflow
-# bumps it and we merge that in, while the GDH path never writes it (GDH tags
-# are excluded from release.yml's trigger, so its version stamper never runs).
+# vcpkg.json, which upstream syncs keep current. The GDH path never writes it.
 #
-# A release is a committed .gdh-version. It rides inside a normal PR: `bump`
-# writes and commits it on the branch, and the PR's own builds already carry the
-# new version. A committed .gdh-version that names a NEWER version than the
-# nearest gdh tag is the version: exact on the commit that introduced it on the
-# first-parent line (on main, the PR's merge commit), with +N.g<sha> after it.
-# The tag is then a record, not an input: gdh-version-tag.yml runs `tag` on every
-# push to main and puts v<version> on that same commit. It has to be that way
-# round, because the merge button creates the commit that lands on main, so no
-# tag can name it before the merge. Once the tag exists it and the file agree,
-# and `git describe` gives the same answer as the file did.
-#
-# The file also serves consumers that cannot see git at all: a Nix build gets
-# only the tracked tree (.git is filtered out of the flake source), and reads it
-# directly.
+# Releases happen on main, never in a PR (.github/workflows/gdh-release.yml has
+# the whole process). After a merge that changed shipped code (SHIPPED_PATHS),
+# `release` writes .gdh-version, commits `chore(release): <version>`, and tags
+# that commit v<version>. The committed file is what a Nix build reads (it sees
+# no .git); CMake and `show` read the tag, and agree with it.
 #
 # Usage:
-#   scripts/gdh_version.py show                    # resolved version string
-#   scripts/gdh_version.py show --json             # the full resolution, as JSON
-#   scripts/gdh_version.py propose                 # scan commits, print next bump
-#   scripts/gdh_version.py propose --level minor
-#   scripts/gdh_version.py bump --level minor      # commit .gdh-version on this branch
-#   scripts/gdh_version.py tag --push              # tag the release commit (CI, on main)
-#   scripts/gdh_version.py check-pr --base origin/main   # the PR guardrail
+#   scripts/gdh_version.py show [--json]           # the resolved version
+#   scripts/gdh_version.py next [--json]           # what the next release would be
+#   scripts/gdh_version.py release [--push]        # cut it (gdh-release.yml, on main)
+#   scripts/gdh_version.py check-pr --base B       # PRs must not touch .gdh-version
 #
-# Exit codes: 0 on success; 2 when `propose --level auto` finds nothing that
-# warrants a release; 1 on an error or a failed check.
+# `next` and `release` take --level auto|minor|major. auto releases only when
+# shipped code changed since the last release, as minor, or major when a commit
+# is marked breaking (`type!:` or a `BREAKING CHANGE:` trailer). When upstream's
+# version moved, the series restarts at <upstream>-gdh-1.0. minor/major force a
+# release even with nothing shipped (a rebuild).
+#
+# Exit codes: 0 on success; 2 when auto finds nothing to release; 1 on an error
+# or a failed check.
 #
 # NOTE for CMake consumers: CMakeLists.txt derives APP_VERSION with the same
-# rule at configure time, and ci/tests/test_gdh_version.py holds the two in
+# rule at configure time, and ci/gdh/test_gdh_version.py holds the two in
 # agreement. Change one, change both.
 
 from __future__ import annotations
@@ -69,10 +61,23 @@ DESCRIBE_RE = re.compile(
 # The content of .gdh-version: 3.2.9-gdh-2.1
 VERSION_RE = re.compile(r"^(?P<upstream>\d+(?:\.\d+)*)-gdh-(?P<major>\d+)\.(?P<minor>\d+)$")
 
-# Conventional Commits. A `!` before the colon, or a BREAKING CHANGE trailer,
-# means major; a plain `feat` means minor; everything else means no release.
+# What ships: a change under any of these is what makes a release. Kept equal
+# to the `paths` of gdh-release.yml and the platform workflows by
+# ci/gdh/check_ci.py. .gdh-version itself is not here: a release commit changes
+# only that, and must not need another release.
+SHIPPED_PATHS = (
+    "src/",
+    "scripts/",
+    "CMakeLists.txt",
+    "CMakePresets.json",
+    "vcpkg.json",
+    "flake.nix",
+    "flake.lock",
+)
+
+# Conventional Commits: a `!` before the colon, or a BREAKING CHANGE trailer,
+# makes the release a major one.
 BREAKING_SUBJECT_RE = re.compile(r"^[a-zA-Z]+(?:\([^)]*\))?!:")
-FEAT_SUBJECT_RE = re.compile(r"^feat(?:\([^)]*\))?:")
 BREAKING_BODY_RE = re.compile(r"^BREAKING[ -]CHANGE:", re.MULTILINE)
 
 # `git describe` grows its default abbreviation as a repo gets bigger, so pin it
@@ -100,14 +105,6 @@ def git(*args: str, check: bool = True, raw: bool = False) -> str | None:
     if raw:
         return result.stdout.decode("utf-8", "replace") if result.returncode == 0 else None
     return result.stdout.decode("utf-8", "replace").strip() if result.returncode == 0 else ""
-
-
-def is_ancestor(commit: str, of: str) -> bool:
-    """Whether `commit` is reachable from `of`."""
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", commit, of],
-        capture_output=True,
-    ).returncode == 0
 
 
 def upstream_version(rev: str | None = None) -> str:
@@ -250,46 +247,58 @@ def resolve(rev: str = "HEAD") -> dict:
     }
 
 
-def scan_range(state: dict) -> str:
-    """The `git log` range whose commits decide the next bump."""
-    if state["source"] == "file":
-        return f"{state['anchor']}..HEAD"
-    if state["source"] == "tag":
-        return f"{state['tag']}..HEAD"
-    anchor = f"v{state['upstream']}"
-    if git("rev-parse", "--verify", "--quiet", f"refs/tags/{anchor}", check=False):
-        return f"{anchor}..HEAD"
-    return "HEAD"
+def last_release(rev: str = "HEAD") -> str | None:
+    """The nearest v*-gdh-* tag reachable from `rev`, or None before the first."""
+    return git("describe", "--tags", "--abbrev=0", "--match", "v*-gdh-*", rev, check=False) or None
 
 
-def classify(commit_range: str) -> tuple[str, list[str]]:
-    """Scan Conventional Commits in the range; return (level, reasons).
+def shipped_changes(since: str | None, rev: str = "HEAD") -> list[dict]:
+    """The non-merge commits after `since` that changed shipped code, oldest first.
 
-    Merge commits are skipped: their subjects are "Merge pull request #N from
-    ..." and carry no type, while the commits they bring in do.
+    Merge commits are skipped: a PR's merge commit adds nothing its own commits
+    did not, and its subject carries no Conventional Commit type.
     """
-    raw = git("log", "--no-merges", "--format=%H%x00%s%x00%b%x1e", commit_range)
-    level, reasons = "none", []
-
+    commit_range = f"{since}..{rev}" if since else rev
+    raw = git(
+        "log", "--no-merges", "--reverse", "--format=%H%x00%s%x00%b%x1e", commit_range,
+        "--", *SHIPPED_PATHS,
+    )
+    commits = []
     for record in raw.split("\x1e"):
         record = record.strip("\n")
         if not record:
             continue
         sha, subject, body = (record.split("\x00", 2) + ["", ""])[:3]
-        short = sha[:8]
+        breaking = bool(BREAKING_SUBJECT_RE.match(subject) or BREAKING_BODY_RE.search(body))
+        commits.append({"sha": sha, "subject": subject, "breaking": breaking})
+    return commits
 
-        if BREAKING_SUBJECT_RE.match(subject):
-            level = "major"
-            reasons.append(f"{short} MAJOR (breaking `!:`)  {subject}")
-        elif BREAKING_BODY_RE.search(body):
-            level = "major"
-            reasons.append(f"{short} MAJOR (BREAKING CHANGE trailer)  {subject}")
-        elif FEAT_SUBJECT_RE.match(subject):
-            if level != "major":
-                level = "minor"
-            reasons.append(f"{short} minor (feat)  {subject}")
 
-    return level, reasons
+def plan_release(level: str = "auto", rev: str = "HEAD") -> dict:
+    """What a release at `level` would be: the new version and the commits it ships.
+
+    auto: no shipped change since the last release means no release; any
+    breaking one means major; otherwise minor.
+    """
+    state = resolve(rev)
+    since = last_release(rev)
+    commits = shipped_changes(since, rev)
+    if level == "auto":
+        if not commits:
+            level = "none"
+        elif any(commit["breaking"] for commit in commits):
+            level = "major"
+        else:
+            level = "minor"
+    version = next_tag(state, level).lstrip("v") if level != "none" else None
+    return {
+        "current": state["version"],
+        "since": since,
+        "level": level,
+        "version": version,
+        "upstream_moved": state["upstream_moved"],
+        "commits": commits,
+    }
 
 
 def next_tag(state: dict, level: str) -> str:
@@ -308,183 +317,76 @@ def do_show(args: argparse.Namespace) -> int:
     return 0
 
 
-def do_propose(args: argparse.Namespace) -> int:
-    state = resolve()
-    commit_range = scan_range(state)
-    scanned, reasons = classify(commit_range)
-    level = scanned if args.level == "auto" else args.level
-
-    print(f"upstream base    {state['upstream']}  (vcpkg.json)")
-    print(f"current version  {state['version']}")
-    print(f"scanned range    {commit_range}")
-    if state["source"] == "none" and state["upstream_moved"]:
-        print(
-            f"note             upstream moved to {state['upstream']} since the last gdh "
-            "tag; the GDH counters reset to 1.0"
-        )
-    print()
-
-    if reasons:
-        print("commits driving the level:")
-        for reason in reasons:
-            print(f"  {reason}")
+def do_next(args: argparse.Namespace) -> int:
+    plan = plan_release(args.level)
+    if args.json:
+        print(json.dumps(plan, indent=2))
     else:
-        print("no feat/breaking commits in range")
-    print()
+        print(f"current version  {plan['current']}")
+        print(f"last release     {plan['since'] or '(none)'}")
+        if plan["upstream_moved"]:
+            print("note             upstream moved since the last release; the series restarts at 1.0")
+        if plan["commits"]:
+            print("shipped changes:")
+            for commit in plan["commits"]:
+                mark = "  BREAKING" if commit["breaking"] else ""
+                print(f"  {commit['sha'][:8]}  {commit['subject']}{mark}")
+        else:
+            print("shipped changes  none")
+        if plan["version"]:
+            print(f"next release     {plan['version']}  ({plan['level']})")
+        else:
+            print("next release     none -- nothing shipped changed since the last release")
+    return 2 if plan["level"] == "none" else 0
 
-    if level == "none":
-        print("proposed         no bump -- nothing in range warrants a release")
-        print("                 (override with --level minor or --level major)")
+
+def do_release(args: argparse.Namespace) -> int:
+    if is_dirty():
+        raise VersionError("refusing to release from a dirty working tree")
+    plan = plan_release(args.level)
+    if plan["level"] == "none":
+        print("nothing to release: no shipped change since the last release")
         return 2
 
-    proposed = next_tag(state, level)
-    source = "scanned" if args.level == "auto" else "forced"
-    print(f"proposed level   {level}  ({source})")
-    print(f"proposed tag     {proposed}")
-    print(f"proposed version {proposed.lstrip('v')}")
-    return 0
-
-
-def do_bump(args: argparse.Namespace) -> int:
-    state = resolve()
-    if state["dirty"]:
-        raise VersionError("refusing to bump a dirty working tree; commit or clean it first")
-
-    commit_range = scan_range(state)
-    scanned, _ = classify(commit_range)
-    level = scanned if args.level == "auto" else args.level
-    if level == "none":
-        raise VersionError(
-            f"nothing in {commit_range} warrants a release; "
-            "pass --level minor or --level major to force one"
-        )
-
-    tag = next_tag(state, level)
+    version = plan["version"]
+    tag = f"v{version}"
     if git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}", check=False):
         raise VersionError(f"tag {tag} already exists")
 
-    version = tag.lstrip("v")
     VERSION_FILE.write_text(version + "\n", encoding="utf-8")
-    git("add", "--", str(VERSION_FILE))
-    git("commit", "-q", "-m", f"chore(version): {version}")
-    print(f"committed {VERSION_FILE_NAME} = {version}")
-    print(f"the PR's builds report {version}; after the merge, gdh-version-tag.yml "
-          f"tags the merge commit {tag}")
-    return 0
-
-
-def push_tag(tag: str, anchor: str) -> None:
-    """Push one tag, and only the tag. Another run winning the race is fine if
-    it put the same tag on the same commit."""
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "push", "origin", f"refs/tags/{tag}"],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        print(f"pushed {tag} to origin")
-        return
-    git("fetch", "--quiet", "origin", f"+refs/tags/{tag}:refs/tags/{tag}", check=False)
-    if git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}", check=False) == anchor:
-        print(f"{tag} is already on origin, on {anchor[:8]}")
-        return
-    raise VersionError(f"could not push {tag}: {result.stderr.strip()}")
-
-
-def do_tag(args: argparse.Namespace) -> int:
-    if git("rev-parse", "--is-shallow-repository") == "true":
-        raise VersionError(
-            "refusing to tag from a shallow clone: its grafted root can look like "
-            "the commit that introduced .gdh-version"
-        )
-    state = resolve()
-    anchor = state["anchor"]
-    if not anchor:
-        print(f"nothing to tag: no {VERSION_FILE_NAME} naming upstream {state['upstream']} at HEAD")
-        return 0
-
-    version = state["file"]
-    tag = f"v{version}"
-    existing = git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}", check=False)
-    if existing == anchor:
-        print(f"{tag} already names {anchor[:8]}, the commit that introduced {version}")
-    elif existing:
-        raise VersionError(
-            f"{tag} already exists on {existing[:8]}, but {version} was introduced by "
-            f"{anchor[:8]}; fix the tag by hand"
-        )
-    elif state["source"] != "file":
-        raise VersionError(
-            f"{VERSION_FILE_NAME} = {version} is not ahead of the nearest gdh tag "
-            f"({state['tag']}), and {tag} does not exist; not tagging"
-        )
-    else:
-        git("tag", "-a", tag, "-m", f"GDH release {version}", anchor)
-        print(f"created {tag} on {anchor[:8]}")
+    git("add", "--", VERSION_FILE_NAME)
+    body = "\n".join(f"- {c['sha'][:8]} {c['subject']}" for c in plan["commits"])
+    message = f"chore(release): {version}"
+    if body:
+        message += f"\n\nShips:\n{body}"
+    git("commit", "-q", "-m", message)
+    git("tag", "-a", tag, "-m", f"GDH release {version}")
+    print(f"released {version} ({plan['level']}): commit {git('rev-parse', '--short=8', 'HEAD')}, tag {tag}")
 
     if args.push:
-        push_tag(tag, anchor)
+        # Both or neither: a release commit without its tag, or a tag without
+        # its commit on main, is the one state this must never leave behind.
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "push", "--atomic", "origin",
+             f"HEAD:refs/heads/{args.branch}", f"refs/tags/{tag}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise VersionError(f"could not push {tag} to {args.branch}: {result.stderr.strip()}")
+        print(f"pushed the release commit to {args.branch} and {tag} to origin")
     return 0
 
 
 def do_check_pr(args: argparse.Namespace) -> int:
-    rev = args.rev
-    base = git("merge-base", args.base, rev)
+    base = git("merge-base", args.base, args.rev)
     before = git("show", f"{base}:{VERSION_FILE_NAME}", check=False, raw=True)
-    after = git("show", f"{rev}:{VERSION_FILE_NAME}", check=False, raw=True)
-    own = git(
-        "rev-list", "--full-history", "--no-merges", f"{base}..{rev}", "--", VERSION_FILE_NAME,
-    )
-
-    if before == after:
-        if own:
-            # Two PRs bumped to the same number. Identical edits merge cleanly,
-            # so the merge shows no change -- but this branch did set it.
-            raise VersionError(
-                f"this branch sets {VERSION_FILE_NAME} to {(after or '').strip()}, but "
-                f"{args.base} already has that value: another PR took the number, or it "
-                "merged earlier. Rebump: python3 scripts/gdh_version.py bump --level minor "
-                "(or major)"
-            )
-        print(f"{VERSION_FILE_NAME} unchanged ({(after or 'absent').strip()}); nothing to check")
-        return 0
-
-    if after is None:
-        raise VersionError(f"this branch deletes {VERSION_FILE_NAME}; releases need it")
-    value = after.strip()
-    match = VERSION_RE.match(value)
-    if not match or after != value + "\n":
+    after = git("show", f"{args.rev}:{VERSION_FILE_NAME}", check=False, raw=True)
+    if before != after:
         raise VersionError(
-            f"{VERSION_FILE_NAME} must be exactly one line, <upstream>-gdh-<major>.<minor>, "
-            f"ending in LF; got {after!r}"
+            f"this PR changes {VERSION_FILE_NAME}; only the release workflow writes it "
+            "(gdh-release.yml cuts a release after the merge). Drop the change."
         )
-
-    upstream = upstream_version(rev)
-    if match.group("upstream") != upstream:
-        raise VersionError(
-            f"{VERSION_FILE_NAME} names upstream {match.group('upstream')}, "
-            f"but vcpkg.json says {upstream}"
-        )
-
-    tag = f"v{value}"
-    tagged = git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}", check=False)
-    if tagged and not (is_ancestor(tagged, rev) and not is_ancestor(tagged, base)):
-        raise VersionError(f"{tag} already exists (on {tagged[:8]}): {value} was already released")
-
-    base_state = resolve(base)
-    if base_state["upstream"] != upstream:
-        allowed = {f"{upstream}-gdh-1.0": f"the first release on upstream {upstream}"}
-    else:
-        allowed = {
-            next_tag(base_state, "major").lstrip("v"): "next major",
-            next_tag(base_state, "minor").lstrip("v"): "next minor",
-        }
-    if value not in allowed:
-        raise VersionError(
-            f"{args.base} resolves {base_state['version']}; {VERSION_FILE_NAME} = {value} "
-            f"is not a valid next step. expected one of: {', '.join(sorted(allowed))}"
-        )
-    print(f"{VERSION_FILE_NAME} {(before or 'absent').strip()} -> {value}: "
-          f"{allowed[value]} of {base_state['version']}")
+    print(f"{VERSION_FILE_NAME} untouched; the release happens on main after the merge")
     return 0
 
 
@@ -496,20 +398,20 @@ def main(argv: list[str] | None = None) -> int:
     show.add_argument("--json", action="store_true", help="print the full resolution")
     show.set_defaults(func=do_show)
 
-    propose = sub.add_parser("propose", help="scan commits and print the next bump")
-    propose.add_argument("--level", choices=("auto", "major", "minor"), default="auto")
-    propose.set_defaults(func=do_propose)
+    nxt = sub.add_parser("next", help="print what the next release would be")
+    nxt.add_argument("--level", choices=("auto", "major", "minor"), default="auto")
+    nxt.add_argument("--json", action="store_true", help="print the plan as JSON")
+    nxt.set_defaults(func=do_next)
 
-    bump = sub.add_parser("bump", help="commit the next version to .gdh-version on this branch")
-    bump.add_argument("--level", choices=("auto", "major", "minor"), default="auto")
-    bump.set_defaults(func=do_bump)
+    release = sub.add_parser("release", help="commit .gdh-version and tag the release")
+    release.add_argument("--level", choices=("auto", "major", "minor"), default="auto")
+    release.add_argument("--push", action="store_true",
+                         help="push the commit and the tag to origin, atomically")
+    release.add_argument("--branch", default="main", help="the branch to push to (default main)")
+    release.set_defaults(func=do_release)
 
-    tag = sub.add_parser("tag", help="tag the commit that introduced .gdh-version")
-    tag.add_argument("--push", action="store_true", help="push the tag (only the tag) to origin")
-    tag.set_defaults(func=do_tag)
-
-    check_pr = sub.add_parser("check-pr", help="check a branch's .gdh-version change")
-    check_pr.add_argument("--base", required=True, help="the branch the change merges into")
+    check_pr = sub.add_parser("check-pr", help="fail if a PR changes .gdh-version")
+    check_pr.add_argument("--base", required=True, help="the branch the PR merges into")
     check_pr.add_argument("--rev", default="HEAD", help="the revision to check (default HEAD)")
     check_pr.set_defaults(func=do_check_pr)
 

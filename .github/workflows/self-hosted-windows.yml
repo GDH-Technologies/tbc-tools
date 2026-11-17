@@ -25,10 +25,9 @@ name: "Self-hosted Windows build (win0-test)"
 # location, which is where an official Qt keeps its plugins.
 #
 # It runs on win0-test, win0's dedicated test runner, so the main win0 runner
-# stays free for the deploy's install and for other repositories. Unlike Linux
-# and macOS it is one job, not a test/package split: its ctest takes seconds,
-# and a deploy-driven build must package anyway, because the deploy installs
-# the artifact this job uploads.
+# stays free for the deploy's install and for other repositories. Two uses, one
+# job: a PR builds and tests; a release (self-hosted-deploy.yml, `package:
+# true`) also packages and uploads the zip that win0 then installs.
 #
 # The rest is dictated by what win0 actually is:
 #
@@ -50,51 +49,28 @@ name: "Self-hosted Windows build (win0-test)"
 #     are excluded and the test binaries are filtered out of the release copy.
 
 on:
-  # Path-gated so a docs-only or tooling-only change does not occupy the single
-  # windows box for a full build. These mirror self-hosted-deploy.yml's
-  # per-platform filters, so what triggers a PR build is exactly what triggers
-  # a redeploy on merge. Note the consequence: a PR touching none of these
-  # produces no run at all, so none of these may be marked a required check.
+  # Path-gated: a PR touching none of these produces no run. The list is
+  # gdh_version.py's SHIPPED_PATHS plus this file (ci/gdh/check_ci.py keeps
+  # them equal), so what is tested here is exactly what releases on merge.
   pull_request:
     paths:
       - "src/**"
-      - "ci/**"
-      # ...but not the guardrail-only files in it. These cannot change an
-      # artifact, and a contract edit should not cost a fleet rebuild. Order
-      # matters: a later pattern overrides an earlier one.
-      - "!ci/tests/**"
-      - "!ci/check_ci_contracts.py"
       - "scripts/**"
       - "CMakeLists.txt"
-      - ".gdh-version"
       - "CMakePresets.json"
       - "vcpkg.json"
-      - ".github/workflows/self-hosted-windows.yml"
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "ci/**"
-      # ...but not the guardrail-only files in it. These cannot change an
-      # artifact, and a contract edit should not cost a fleet rebuild. Order
-      # matters: a later pattern overrides an earlier one.
-      - "!ci/tests/**"
-      - "!ci/check_ci_contracts.py"
-      - "scripts/**"
-      - "CMakeLists.txt"
-      - ".gdh-version"
-      - "CMakePresets.json"
-      - "vcpkg.json"
+      - "flake.nix"
+      - "flake.lock"
       - ".github/workflows/self-hosted-windows.yml"
   workflow_dispatch:
   workflow_call:
     inputs:
-      checkout_ref:
-        description: "Git ref to checkout when invoked as a reusable workflow"
-        required: false
+      ref:
+        description: "The commit to build (the release commit)"
+        required: true
         type: string
-      from_deploy:
-        description: "Set by self-hosted-deploy.yml so the standalone push run stands down"
+      package:
+        description: "Also package and upload the zip win0 installs"
         required: false
         default: false
         type: boolean
@@ -103,12 +79,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Not machine-scoped by itself: the key includes the workflow and the ref.
   # What serialises tbc-tools' Windows builds is that only the win0-test
-  # runner takes them.
-  # github.workflow resolves to the CALLER's name under workflow_call, so a
-  # deploy-driven build lands in its own group and can never be cancelled by
-  # a PR run.
+  # runner takes them. github.workflow resolves to the CALLER's name under
+  # workflow_call, so a release build lands in its own group and is never
+  # cancelled by a PR run; only PR runs cancel their superseded build.
   group: tbc-tools-win0-windows-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -145,17 +119,17 @@ jobs:
     # only labels are self-hosted and win0-test. Same box and account as win0,
     # so C:\ci-tools and its caches are shared.
     runs-on: [self-hosted, win0-test]
-    timeout-minutes: 240
+    # An incremental build is 2-8 minutes; a cold vcpkg rebuild of fftw3,
+    # libflac, ffmpeg and sqlite3 fits well inside this.
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
-    # A merge to main is owned by self-hosted-deploy.yml (from_deploy), and a
-    # forked PR must never execute on a workstation -- this repository is
+    # A forked PR must never execute on a workstation: this repository is
     # public.
     if: >-
-      ${{ (github.event_name != 'push' || inputs.from_deploy)
-          && (github.event_name != 'pull_request'
-              || github.event.pull_request.head.repo.full_name == github.repository) }}
+      ${{ github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
 
     steps:
       - name: Prepare persistent tool root
@@ -261,8 +235,8 @@ jobs:
         # vcpkg is the dominant cost of a cold Windows build -- it pulls in icu,
         # harfbuzz, freetype, libpng, brotli, pcre2, zstd, double-conversion and
         # openssl behind it. The Qt project ships binaries for exactly this
-        # toolchain; take those instead, pinned to the version vcpkg's baseline
-        # was building so this is not also a Qt upgrade.
+        # toolchain; take those instead, pinned (QT_VERSION) to the Qt the
+        # flake gives the Linux and macOS builds.
         #
         # qtbase covers Core, Gui, Widgets, Sql and Network; qtsvg is the one
         # extra module CMakeLists.txt asks for.
@@ -331,34 +305,21 @@ jobs:
         # Full history and tags -- git describe and gdh_version.py need them --
         # but a partial clone: file contents only for what is checked out. A
         # fresh runner's full clone is 6.8 GB of mostly old blobs (40 minutes
-        # on air0's link). The ref every platform builds, so a moving merge ref
-        # cannot change the tree mid-run.
+        # on air0's link). A release build checks out the release commit.
         with:
           fetch-depth: 0
           fetch-tags: true
           filter: blob:none
           submodules: true
-          ref: ${{ inputs.checkout_ref || github.sha }}
-
-      - name: Record the source tree
-        # Artifacts and the release stamp are named for the tree they were built
-        # from, not the commit. self-hosted-deploy.yml's plan job reuses a
-        # same-repo run's build when the tree being deployed is identical. For a
-        # pull_request run this is the tree of refs/pull/N/merge, which is what
-        # was built and tested.
-        run: |
-          $tree = git rev-parse 'HEAD^{tree}'
-          if ($LASTEXITCODE -ne 0 -or -not $tree) { throw "Could not read HEAD's tree" }
-          "SOURCE_TREE=$tree" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Refresh tags
         # If the workspace persisted, a tag deleted or moved on the remote can
         # linger locally and poison `git describe`. That matters more here than
         # anywhere else: this is the platform whose SHIPPED build sees .git, so
-        # CMakeLists.txt resolves APP_VERSION from git -- the nearest gdh tag,
-        # or a committed .gdh-version newer than it (a release carried in this
-        # PR). The Nix-built Linux and macOS artifacts read .gdh-version
-        # directly, so all three agree.
+        # CMakeLists.txt resolves APP_VERSION from git -- the release tag on a
+        # release commit. The Nix-built Linux and macOS installs read the same
+        # version from the committed .gdh-version.
         run: git fetch --tags --prune --prune-tags --force origin
 
       - name: Report toolchain and version
@@ -578,7 +539,11 @@ jobs:
           ctest --test-dir "$env:BUILD_DIR" -C Release --output-on-failure -E "^(chroma-|decode-pretbc-)"
           if ($LASTEXITCODE -ne 0) { throw "ctest failed" }
 
+      # Everything below packages the zip win0 installs, and runs only for a
+      # release (self-hosted-deploy.yml calls this workflow with package: true).
+      # A PR stops after ctest.
       - name: Stage binaries into the release directory
+        if: ${{ inputs.package }}
         # Top level of $BUILD_DIR\bin only. The hosted job copies *.exe/*.dll
         # recursively, which flattens the staged Qt plugin subdirectories into
         # the release root and then has to undo that; here windeployqt lays the
@@ -596,6 +561,7 @@ jobs:
           }
 
       - name: Deploy Qt runtime with windeployqt
+        if: ${{ inputs.package }}
         # Replaces the hosted job's manual Qt plugin copy and qt.conf writer.
         # windeployqt reads a binary's imports and brings exactly the Qt DLLs
         # and plugins it needs, in the layout Qt expects relative to the exe.
@@ -620,6 +586,7 @@ jobs:
           Add-Content -Path release\qt.conf -Encoding ASCII -Value "Plugins = ."
 
       - name: Copy AAA (Auto Audio Align) vendor payload to release directory
+        if: ${{ inputs.package }}
         # audioalignmentutil.cpp resolves AAA at
         # <appDir>\vendor\vhs_decode_auto_audio_align\ for tbc-analyse and
         # tbc-audio-align, so the tree has to keep that shape.
@@ -635,6 +602,7 @@ jobs:
           Write-Host "Bundled AAA vendor payload to $vendorDst"
 
       - name: Copy vhs-teletext vendor payload to release directory
+        if: ${{ inputs.package }}
         # teletextintegration.cpp's resolveTeletextVendorDirectory() looks for
         # <appDir>\vendor\vhs-teletext and validates it by the presence of
         # teletext\__main__.py. Without it, tbc-process-vbi's --teletext-html-dir
@@ -652,6 +620,7 @@ jobs:
           Write-Host "Bundled vhs-teletext vendor payload to $vendorDst"
 
       - name: Copy ONNX Runtime DLLs to release directory
+        if: ${{ inputs.package }}
         run: |
           $ErrorActionPreference = 'Stop'
           $onnxLibDir = "$env:ONNXRUNTIME_ROOT\lib"
@@ -667,6 +636,7 @@ jobs:
             Copy-Item -Destination release\
 
       - name: Copy MSVC runtime DLLs to release directory
+        if: ${{ inputs.package }}
         # The executables import VCRUNTIME140.dll / VCRUNTIME140_1.dll and
         # MSVCP140.dll, but neither vcpkg nor windeployqt redistributes the CRT,
         # so a clean machine without the VC++ redistributable gets
@@ -696,6 +666,7 @@ jobs:
           }
 
       - name: Copy FFmpeg and FLAC to release directory
+        if: ${{ inputs.package }}
         run: |
           $ErrorActionPreference = 'Stop'
           Copy-Item -Path "$env:FFMPEG_DIR\bin\ffmpeg.exe" -Destination release\
@@ -706,25 +677,21 @@ jobs:
           Copy-Item -Path "$env:FLAC_DIR\Win64\*" -Destination release\
 
       - name: Copy sqlite runtime to release directory
+        if: ${{ inputs.package }}
         run: |
           $ErrorActionPreference = 'Stop'
           $sqliteDll = "$env:VCPKG_INSTALLED\bin\sqlite3.dll"
           if (-not (Test-Path $sqliteDll)) { throw "sqlite3.dll not found at $sqliteDll" }
           Copy-Item -Path $sqliteDll -Destination release\
 
-      - name: Copy scripts to release directory (if they exist)
-        run: |
-          if (Test-Path ".\scripts\Windows\*.bat") {
-            Copy-Item .\scripts\Windows\*.bat -Destination release\
-          }
-
       - name: Copy license files to release directory
+        if: ${{ inputs.package }}
         # vcpkg copyrights come from the classic-mode install tree now, and Qt's
         # licence comes from the Qt install rather than a vcpkg port.
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release\LICENSES | Out-Null
-          foreach ($pkg in @("fftw3", "flac", "ffmpeg", "sqlite3", "zlib", "bzip2", "zstd", "openssl")) {
+          foreach ($pkg in @("fftw3", "flac", "ffmpeg", "sqlite3")) {
             $copyright = "$env:VCPKG_INSTALLED\share\$pkg\copyright"
             if (Test-Path $copyright) {
               Copy-Item -Path $copyright -Destination "release\LICENSES\copyright-$pkg"
@@ -746,6 +713,7 @@ jobs:
           Copy-Item -Path .\LICENSE -Destination release\LICENSES\copyright-tbc-tools
 
       - name: Build and copy vendored tbc-video-export to release directory
+        if: ${{ inputs.package }}
         run: |
           $ErrorActionPreference = 'Stop'
           $exporterRoot = "$env:GITHUB_WORKSPACE\src\tbc-video-export"
@@ -765,6 +733,7 @@ jobs:
           Pop-Location
 
       - name: Verify required Windows runtime files are present
+        if: ${{ inputs.package }}
         # The backstop. windeployqt is trusted to find the Qt pieces, but this
         # still fails the build if anything a GUI tool needs to start on a clean
         # machine is absent -- which is also how a windeployqt regression would
@@ -804,24 +773,12 @@ jobs:
           }
           Write-Host "All required Windows runtime files present."
 
-      - name: Stamp the source tree
-        # self-hosted-deploy.yml's win0 job installs the artifact uploaded
-        # below, and this stamp is how it proves that artifact was built from
-        # the tree being deployed. It is the tree, not the commit: a PR run
-        # builds refs/pull/N/merge, whose commit differs from the merge commit
-        # on main while its tree is identical.
-        run: |
-          $env:SOURCE_TREE | Out-File -FilePath release\.build-tree -Encoding ascii -NoNewline
-
       - name: Upload release artifact
+        if: ${{ inputs.package }}
         uses: actions/upload-artifact@v7
         with:
-          # Named for the full tree hash, so the deploy's plan job can find a
-          # build of exactly this source by name.
-          name: selfhosted_tbc-tools_windows_x86_64-${{ env.SOURCE_TREE }}
+          # Downloaded by the same deploy run's win0 job, so one fixed name.
+          name: selfhosted_tbc-tools_windows_x86_64
           path: release
-          # The .build-tree stamp is a dot-file, which upload-artifact drops by
-          # default -- and without it the deploy refuses every install.
-          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

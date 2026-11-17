@@ -120,7 +120,7 @@
       in
       let
         # The GDH fork version. A release IS a committed .gdh-version (written
-        # by `scripts/gdh_version.py bump` on the PR that carries it), and a
+        # on main by .github/workflows/gdh-release.yml), and a
         # Nix build never sees git anyway -- .git is filtered out of src below
         # -- so the file is the only input here. Nix has no history, so later
         # commits get the bare release version rather than the +N.g<sha> a git

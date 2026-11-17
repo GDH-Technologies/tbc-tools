@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # test_gdh_version.py
 #
-# Tests for the GDH fork version scheme (scripts/gdh_version.py) and for the
-# CMake block in CMakeLists.txt that has to agree with it.
+# Tests for the GDH fork version scheme (scripts/gdh_version.py): resolution,
+# the release cut on main (`next`, `release`), the PR guard (`check-pr`), and
+# the CMake block in CMakeLists.txt that has to agree with the resolver.
 #
 # The version rule is expressed twice on purpose: CMake derives APP_VERSION at
 # configure time without needing Python, and scripts/gdh_version.py drives the
 # tooling. test_cmake_block_matches_script is what keeps the two from drifting.
 #
 # Run with:
-#   python3 -m unittest -v ci.tests.test_gdh_version
+#   python3 -m unittest discover -s ci/gdh -t .
 
 from __future__ import annotations
 
@@ -114,9 +115,11 @@ class FakeRepo:
             encoding="utf-8",
         )
 
-    def commit(self, subject: str, body: str = "") -> str:
+    def commit(self, subject: str, body: str = "", path: str = "log.txt") -> str:
+        """Commit a change to `path`: log.txt ships nothing, src/... does."""
         # Touch a file so every commit is non-empty and ordering is stable.
-        marker = self.root / "log.txt"
+        marker = self.root / path
+        marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(marker.read_text() + subject + "\n" if marker.exists() else subject + "\n")
         self.git("add", "-A")
         message = f"{subject}\n\n{body}" if body else subject
@@ -139,9 +142,6 @@ class FakeRepo:
     def read_version_file(self) -> str:
         return (self.root / VERSION_FILE_NAME).read_text(encoding="utf-8").strip()
 
-    def bump(self, *args: str) -> subprocess.CompletedProcess:
-        return run_script("bump", *args, script=self.script)
-
     def show(self, *args: str) -> str:
         result = run_script("show", *args, script=self.script)
         if result.returncode != 0:
@@ -151,11 +151,17 @@ class FakeRepo:
     def resolution(self) -> dict:
         return json.loads(self.show("--json"))
 
-    def propose(self, *args: str) -> subprocess.CompletedProcess:
-        return run_script("propose", *args, script=self.script)
+    def next_release(self, *args: str) -> subprocess.CompletedProcess:
+        return run_script("next", *args, script=self.script)
 
-    def tag_version(self, *args: str) -> subprocess.CompletedProcess:
-        return run_script("tag", *args, script=self.script)
+    def plan(self, *args: str) -> dict:
+        result = self.next_release("--json", *args)
+        if result.returncode not in (0, 2):
+            raise AssertionError(f"next failed: {result.stderr}")
+        return json.loads(result.stdout)
+
+    def release(self, *args: str) -> subprocess.CompletedProcess:
+        return run_script("release", *args, script=self.script)
 
     def check_pr(self, *args: str) -> subprocess.CompletedProcess:
         return run_script("check-pr", *args, script=self.script)
@@ -257,10 +263,9 @@ class TestVersionResolution(unittest.TestCase):
 class TestVersionFileAheadOfTheTags(unittest.TestCase):
     """A committed .gdh-version newer than every gdh tag is the version.
 
-    A bump rides inside a PR, and the merge button creates the commit that ends
-    up on main, so no tag can exist when the PR's builds (or the merge's) run.
-    The file is exact on the first-parent commit that introduced it; the tag
-    that gdh-version-tag.yml adds afterwards is a record, not an input.
+    The file is exact on the first-parent commit that introduced it, so a
+    checkout that has not fetched the release tag still resolves the release
+    (gdh-release.yml commits the file and tags the same commit).
     """
 
     def test_a_newer_version_file_is_exact_on_the_commit_that_introduced_it(self):
@@ -369,95 +374,169 @@ class TestVersionFileAheadOfTheTags(unittest.TestCase):
         self.assertTrue(state["version"].startswith("3.2.8-gdh-2.1+"))
 
 
-class TestBumpClassification(unittest.TestCase):
-    def test_fix_only_proposes_no_bump(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.0")
-        repo.commit("fix: a bug")
-        repo.commit("docs: a note")
-        result = repo.propose()
-        self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertIn("no bump", result.stdout)
+def released_repo(stack: unittest.TestCase) -> FakeRepo:
+    """A repo whose last release is v3.2.8-gdh-1.2, as the release workflow leaves it."""
+    repo = FakeRepo(stack)
+    repo.commit_version("3.2.8-gdh-1.2")
+    repo.tag("v3.2.8-gdh-1.2")
+    return repo
 
-    def test_feat_proposes_minor(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.0")
-        repo.commit("feat: a new thing")
-        result = repo.propose()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("proposed level   minor", result.stdout)
-        self.assertIn("v3.2.8-gdh-1.1", result.stdout)
 
-    def test_bang_proposes_major(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.3")
-        repo.commit("feat!: rename a flag")
-        result = repo.propose()
-        self.assertIn("proposed level   major", result.stdout)
-        self.assertIn("v3.2.8-gdh-2.0", result.stdout)
+class TestNextRelease(unittest.TestCase):
+    """`next`: what changed since the last release decides whether, and how big."""
 
-    def test_breaking_change_trailer_proposes_major(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.0")
-        repo.commit("refactor: rework the export path", body="BREAKING CHANGE: --out is gone")
-        result = repo.propose()
-        self.assertIn("proposed level   major", result.stdout)
+    def test_a_shipped_fix_is_a_minor_release(self):
+        """PR #75's case: a fix to tbc-analyse used to release nothing."""
+        repo = released_repo(self)
+        repo.commit("fix(tbc-analyse): ask before quitting mid-export", path="src/tbc-analyse/x.cpp")
+        plan = repo.plan()
+        self.assertEqual((plan["level"], plan["version"]), ("minor", "3.2.8-gdh-1.3"))
 
-    def test_merge_commits_are_ignored(self):
-        """Merge subjects carry no type; the commits they bring in do."""
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.0")
-        repo.merge_commit("Merge pull request #1 from GDH-Technologies/side")
-        result = repo.propose()
-        # The side branch's own `feat:` commit still counts...
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("proposed level   minor", result.stdout)
-        # ...but the merge subject itself is not among the reasons.
-        self.assertNotIn("Merge pull request", result.stdout)
+    def test_any_commit_type_that_ships_releases(self):
+        for subject in ("refactor: tidy", "perf: faster", "chore: rename", "build: flags"):
+            with self.subTest(subject=subject):
+                repo = released_repo(self)
+                repo.commit(subject, path="src/lib/y.cpp")
+                self.assertEqual(repo.plan()["version"], "3.2.8-gdh-1.3")
 
-    def test_upstream_move_forces_reset_to_one_zero(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-4.2")
+    def test_nothing_shipped_means_no_release(self):
+        repo = released_repo(self)
+        repo.commit("docs: glossary", path="docs/glossary.md")
+        repo.commit("ci: tweak", path=".github/workflows/x.yml")
+        result = repo.next_release()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIsNone(repo.plan()["version"])
+
+    def test_every_shipped_path_counts(self):
+        for path in ("src/a.cpp", "scripts/tool.sh", "CMakeLists.txt", "CMakePresets.json",
+                     "flake.nix", "flake.lock"):
+            with self.subTest(path=path):
+                repo = released_repo(self)
+                repo.commit("fix: change", path=path)
+                self.assertEqual(repo.plan()["level"], "minor")
+
+    def test_a_bang_is_a_major_release(self):
+        repo = released_repo(self)
+        repo.commit("feat(cli)!: drop --old", path="src/cli.cpp")
+        self.assertEqual(repo.plan()["version"], "3.2.8-gdh-2.0")
+
+    def test_a_breaking_change_trailer_is_a_major_release(self):
+        repo = released_repo(self)
+        repo.commit("fix: new format", body="BREAKING CHANGE: old files no longer load",
+                    path="src/io.cpp")
+        self.assertEqual(repo.plan()["level"], "major")
+
+    def test_a_breaking_marker_on_a_docs_commit_does_not_count(self):
+        repo = released_repo(self)
+        repo.commit("fix: small", path="src/a.cpp")
+        repo.commit("docs!: rewrite the guide", path="docs/guide.md")
+        self.assertEqual(repo.plan()["level"], "minor")
+
+    def test_two_merged_prs_make_one_release(self):
+        """Two quick merges: one release ships both."""
+        repo = released_repo(self)
+        repo.pr_merge(lambda r: r.commit("fix: one", path="src/a.cpp"))
+        repo.pr_merge(lambda r: r.commit("fix: two", path="src/b.cpp"),
+                      subject="Merge pull request #2 from GDH-Technologies/side")
+        plan = repo.plan()
+        self.assertEqual(plan["version"], "3.2.8-gdh-1.3")
+        self.assertEqual([c["subject"] for c in plan["commits"]], ["fix: one", "fix: two"])
+
+    def test_an_upstream_sync_restarts_the_series(self):
+        repo = released_repo(self)
         repo.set_upstream("3.2.9")
-        repo.commit("fix: only a fix")
-        # Even a fix-only range resets, because the base changed.
-        result = repo.propose("--level", "minor")
-        self.assertIn("v3.2.9-gdh-1.0", result.stdout)
+        repo.commit("chore: merge upstream v3.2.9", path="src/up.cpp")
+        self.assertEqual(repo.plan()["version"], "3.2.9-gdh-1.0")
 
-    def test_forced_level_overrides_an_empty_scan(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.0")
-        repo.commit("fix: a bug")
-        result = repo.propose("--level", "major")
+    def test_a_forced_level_releases_with_nothing_shipped(self):
+        repo = released_repo(self)
+        self.assertEqual(repo.plan("--level", "minor")["version"], "3.2.8-gdh-1.3")
+        self.assertEqual(repo.plan("--level", "major")["version"], "3.2.8-gdh-2.0")
+
+
+class TestRelease(unittest.TestCase):
+    """`release`: one commit of .gdh-version and its tag, pushed together or not at all."""
+
+    def test_release_commits_the_file_and_tags_that_commit(self):
+        repo = released_repo(self)
+        repo.commit("fix: the fix", path="src/a.cpp")
+        result = repo.release()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("(forced)", result.stdout)
-        self.assertIn("v3.2.8-gdh-2.0", result.stdout)
+        self.assertEqual(repo.read_version_file(), "3.2.8-gdh-1.3")
+        head = repo.git("rev-parse", "HEAD")
+        self.assertEqual(repo.git("rev-parse", "v3.2.8-gdh-1.3^{commit}"), head)
+        self.assertEqual(repo.git("log", "-1", "--format=%s"), "chore(release): 3.2.8-gdh-1.3")
+        self.assertIn("fix: the fix", repo.git("log", "-1", "--format=%b"))
+        self.assertEqual(repo.show(), "3.2.8-gdh-1.3")
 
-    def test_propose_starts_from_a_file_version_ahead_of_the_tags(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        anchor = repo.commit_version("3.2.8-gdh-2.1")
-        repo.commit("feat: after the bump")
-        result = repo.propose()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn(f"scanned range    {anchor}..HEAD", result.stdout)
-        self.assertIn("v3.2.8-gdh-2.2", result.stdout)
+    def test_after_a_release_there_is_nothing_to_release(self):
+        """The release commit only touches .gdh-version, which does not ship."""
+        repo = released_repo(self)
+        repo.commit("fix: the fix", path="src/a.cpp")
+        repo.release()
+        self.assertEqual(repo.release().returncode, 2)
 
-    def test_propose_after_a_merged_bump_proposes_nothing(self):
-        """Without the file tier this re-proposed the version just merged."""
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        repo.pr_merge(lambda r: (r.commit("feat: a thing"), r.commit_version("3.2.8-gdh-2.1")))
-        result = repo.propose()
-        self.assertEqual(result.returncode, 2, result.stdout)
+    def test_release_with_nothing_shipped_changes_nothing(self):
+        repo = released_repo(self)
+        head = repo.git("rev-parse", "HEAD")
+        self.assertEqual(repo.release().returncode, 2)
+        self.assertEqual(repo.git("rev-parse", "HEAD"), head)
 
-    def test_propose_after_a_sync_that_carried_one_zero_proposes_one_one(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-4.2")
-        repo.commit_version("3.2.9-gdh-1.0", upstream="3.2.9")
-        repo.commit("feat: new work")
-        result = repo.propose()
-        self.assertIn("v3.2.9-gdh-1.1", result.stdout)
+    def test_release_refuses_a_dirty_tree(self):
+        repo = released_repo(self)
+        repo.commit("fix: the fix", path="src/a.cpp")
+        (repo.root / "src" / "a.cpp").write_text("uncommitted\n", encoding="utf-8")
+        result = repo.release()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("dirty", result.stderr)
+
+    def test_push_sends_the_commit_and_tag_atomically(self):
+        repo = released_repo(self)
+        remote = repo.add_bare_remote(self)
+        repo.git("push", "-q", "origin", "main", "--tags")
+        repo.commit("fix: the fix", path="src/a.cpp")
+        result = repo.release("--push")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        heads = subprocess.run(["git", "-C", str(remote), "rev-parse", "main", "v3.2.8-gdh-1.3^{commit}"],
+                               capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(heads, [repo.git("rev-parse", "HEAD")] * 2)
+
+    def test_a_rejected_push_leaves_origin_untouched(self):
+        """main moved under the run: neither the commit nor the tag lands."""
+        repo = released_repo(self)
+        remote = repo.add_bare_remote(self)
+        repo.git("push", "-q", "origin", "main", "--tags")
+        other = Path(tempfile.mkdtemp(prefix="gdh-other-"))
+        self.addCleanup(shutil.rmtree, other, ignore_errors=True)
+        subprocess.run(["git", "clone", "-q", "-b", "main", str(remote), str(other)], check=True)
+        for args in (("config", "user.email", "o@example.invalid"), ("config", "user.name", "O"),
+                     ("commit", "-q", "--allow-empty", "-m", "fix: someone else"),
+                     ("push", "-q", "origin", "main")):
+            subprocess.run(["git", "-C", str(other), *args], check=True)
+        repo.commit("fix: the fix", path="src/a.cpp")
+        result = repo.release("--push")
+        self.assertEqual(result.returncode, 1)
+        tags = subprocess.run(["git", "-C", str(remote), "tag", "--list", "v3.2.8-gdh-1.3"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(tags, "")
+
+
+class TestCheckPr(unittest.TestCase):
+    """PRs never touch .gdh-version: the release workflow owns it."""
+
+    def test_a_pr_that_leaves_the_file_alone_passes(self):
+        repo = released_repo(self)
+        repo.git("checkout", "-q", "-b", "pr")
+        repo.commit("fix: work", path="src/a.cpp")
+        self.assertEqual(repo.check_pr("--base", "main").returncode, 0)
+
+    def test_a_pr_that_changes_the_file_fails(self):
+        repo = released_repo(self)
+        repo.git("checkout", "-q", "-b", "pr")
+        repo.commit_version("3.2.8-gdh-1.3")
+        result = repo.check_pr("--base", "main")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("only the release workflow writes it", result.stderr)
 
 
 class TestCMakeParity(unittest.TestCase):
@@ -530,264 +609,6 @@ class TestVersionFileTier(unittest.TestCase):
         self.assertRegex(
             resolve_with_cmake(repo.root), r"^3\.2\.8-gdh-2\.0\+1\.g[0-9a-f]{8}$"
         )
-
-
-class TestBumpWritesTheVersionFile(unittest.TestCase):
-    def test_bump_commits_the_file_and_does_not_tag(self):
-        """The bump rides in a PR; gdh-version-tag.yml tags the merge on main."""
-        repo = FakeRepo(self)
-        repo.commit("feat: something worth releasing")
-        result = repo.bump()
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-        self.assertEqual(repo.read_version_file(), "3.2.8-gdh-1.0")
-        self.assertEqual(repo.show(), "3.2.8-gdh-1.0")
-        self.assertEqual(repo.git("tag", "-l"), "")
-        self.assertEqual(repo.git("log", "-1", "--format=%s"), "chore(version): 3.2.8-gdh-1.0")
-        self.assertEqual(repo.git("status", "--porcelain"), "")
-
-    def test_bump_has_no_push_option(self):
-        repo = FakeRepo(self)
-        repo.commit("feat: something")
-        result = repo.bump("--push")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((repo.root / VERSION_FILE_NAME).exists())
-
-    def test_bump_refuses_a_dirty_tree_before_writing_anything(self):
-        repo = FakeRepo(self)
-        repo.commit("feat: something")
-        (repo.root / "untracked.txt").write_text("scratch\n")
-        result = repo.bump()
-        self.assertEqual(result.returncode, 1)
-        self.assertFalse((repo.root / VERSION_FILE_NAME).exists())
-
-    def test_a_second_bump_updates_the_file(self):
-        repo = FakeRepo(self)
-        repo.commit("feat: first")
-        self.assertEqual(repo.bump().returncode, 0)
-        repo.commit("feat: second")
-        self.assertEqual(repo.bump().returncode, 0)
-        self.assertEqual(repo.read_version_file(), "3.2.8-gdh-1.1")
-        self.assertEqual(repo.show(), "3.2.8-gdh-1.1")
-
-
-class TestTag(unittest.TestCase):
-    """`tag` records a version: it tags the anchor, never HEAD, and only once."""
-
-    def tag_commit(self, repo: FakeRepo, name: str) -> str:
-        return repo.git("rev-parse", f"refs/tags/{name}^{{commit}}")
-
-    def test_tag_lands_on_the_anchor_not_head(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        anchor = repo.commit_version("3.2.8-gdh-2.1")
-        repo.commit("fix: after the bump")
-        result = repo.tag_version()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.tag_commit(repo, "v3.2.8-gdh-2.1"), anchor)
-        self.assertEqual(repo.git("cat-file", "-t", "refs/tags/v3.2.8-gdh-2.1"), "tag")
-        self.assertEqual(
-            repo.git("tag", "-l", "--format=%(contents:subject)", "v3.2.8-gdh-2.1"),
-            "GDH release 3.2.8-gdh-2.1",
-        )
-
-    def test_tag_is_idempotent(self):
-        repo = FakeRepo(self)
-        repo.commit_version("3.2.8-gdh-1.0")
-        self.assertEqual(repo.tag_version().returncode, 0)
-        again = repo.tag_version()
-        self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertIn("already", again.stdout)
-
-    def test_tag_refuses_a_tag_that_exists_elsewhere(self):
-        repo = FakeRepo(self)
-        repo.commit_version("3.2.8-gdh-1.0")
-        repo.commit("fix: later")
-        repo.git("tag", "v3.2.8-gdh-1.0")  # lightweight, on HEAD, not the anchor
-        result = repo.tag_version()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("exists", result.stderr)
-
-    def test_tag_anchors_on_the_merge_commit(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        merge, _ = repo.pr_merge(lambda r: r.commit_version("3.2.8-gdh-2.1"))
-        self.assertEqual(repo.tag_version().returncode, 0)
-        self.assertEqual(self.tag_commit(repo, "v3.2.8-gdh-2.1"), merge)
-
-    def test_tag_push_sends_only_the_tag(self):
-        repo = FakeRepo(self)
-        remote = repo.add_bare_remote(self)
-        repo.git("push", "-q", "origin", "main")
-        remote_main = repo.git("rev-parse", "HEAD")
-        anchor = repo.commit_version("3.2.8-gdh-1.0")  # local main is now ahead
-        result = repo.tag_version("--push")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-        def at_remote(ref: str) -> str:
-            return subprocess.run(
-                ["git", "-C", str(remote), "rev-parse", ref],
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-
-        self.assertEqual(at_remote("refs/tags/v3.2.8-gdh-1.0^{commit}"), anchor)
-        self.assertEqual(at_remote("refs/heads/main"), remote_main)
-
-    def test_tag_is_a_no_op_without_a_usable_file(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-1.0")
-        result = repo.tag_version()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("nothing to tag", result.stdout)
-        self.assertEqual(repo.git("tag", "-l"), "v3.2.8-gdh-1.0")
-
-    def test_tag_refuses_a_shallow_clone(self):
-        repo = FakeRepo(self)
-        repo.commit_version("3.2.8-gdh-1.0")
-        repo.commit("fix: later")
-        result = repo.shallow_clone(self).tag_version()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("shallow", result.stderr)
-
-
-class TestCheckPr(unittest.TestCase):
-    """The guardrail on a PR's .gdh-version: a valid next step, or unchanged."""
-
-    def branch(self, repo: FakeRepo) -> None:
-        repo.git("checkout", "-q", "-b", "side")
-
-    def test_an_unchanged_file_passes(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        self.branch(repo)
-        repo.commit("fix: nothing to do with versions")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("unchanged", result.stdout)
-
-    def test_the_next_minor_passes(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        self.branch(repo)
-        repo.commit_version("3.2.8-gdh-2.1")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("next minor", result.stdout)
-
-    def test_the_next_major_passes(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        self.branch(repo)
-        repo.commit_version("3.2.8-gdh-3.0")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("next major", result.stdout)
-
-    def test_a_skipped_number_fails(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        self.branch(repo)
-        repo.commit_version("3.2.8-gdh-2.2")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("expected one of", result.stderr)
-
-    def test_a_malformed_or_non_canonical_file_fails(self):
-        for content in (b"3.2.8-gdh-2.1\r\n", b"3.2.8-gdh-2.1 \n", b"3.2.8-gdh-2.1", b"2.1\n"):
-            with self.subTest(content=content):
-                repo = FakeRepo(self)
-                repo.tag("v3.2.8-gdh-2.0")
-                self.branch(repo)
-                (repo.root / VERSION_FILE_NAME).write_bytes(content)
-                repo.git("add", "-A")
-                repo.git("commit", "-q", "-m", "chore(version): odd")
-                result = repo.check_pr("--base", "main")
-                self.assertEqual(result.returncode, 1, result.stdout)
-
-    def test_the_wrong_upstream_fails(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        self.branch(repo)
-        repo.commit_version("3.2.9-gdh-2.1")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("upstream", result.stderr)
-
-    def test_an_upstream_move_requires_one_zero(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-4.2")
-        self.branch(repo)
-        repo.commit_version("3.2.9-gdh-1.0", upstream="3.2.9")
-        self.assertEqual(repo.check_pr("--base", "main").returncode, 0)
-
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-4.2")
-        self.branch(repo)
-        repo.commit_version("3.2.9-gdh-4.3", upstream="3.2.9")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("3.2.9-gdh-1.0", result.stderr)
-
-    def test_a_racing_pr_must_rebump(self):
-        """Two PRs bump to the same number; identical edits merge cleanly, so
-        the second PR's merge ref shows no change at all. Its own commits do."""
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        repo.git("checkout", "-q", "-b", "pr-b")
-        # Its own file, so the only overlap with A is the identical version edit.
-        (repo.root / "b.txt").write_text("work in B\n")
-        repo.git("add", "-A")
-        repo.git("commit", "-q", "-m", "feat: work in B")
-        repo.commit_version("3.2.8-gdh-2.1")
-        repo.git("checkout", "-q", "main")
-        repo.pr_merge(lambda r: (r.commit("feat: work in A"), r.commit_version("3.2.8-gdh-2.1")))
-        # refs/pull/N/merge for B: main as it stands now, merged with B.
-        repo.git("checkout", "-q", "--detach", "main")
-        repo.git("merge", "-q", "--no-ff", "-m", "Merge pr-b into main", "pr-b")
-        result = repo.check_pr("--base", "HEAD^1")
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("rebump", result.stderr.lower())
-
-    def test_a_number_already_tagged_elsewhere_fails(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        repo.git("checkout", "-q", "-b", "abandoned")
-        repo.commit("feat: never merged")
-        repo.tag("v3.2.8-gdh-2.1")
-        repo.git("checkout", "-q", "main")
-        self.branch(repo)
-        repo.commit_version("3.2.8-gdh-2.1")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("already", result.stderr)
-
-    def test_a_base_resolved_from_an_untagged_file(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        repo.commit_version("3.2.8-gdh-2.1")  # merged, not yet tagged
-        self.branch(repo)
-        repo.commit_version("3.2.8-gdh-2.2")
-        self.assertEqual(repo.check_pr("--base", "main").returncode, 0)
-
-    def test_deleting_the_file_fails(self):
-        repo = FakeRepo(self)
-        repo.commit_version("3.2.8-gdh-1.0")
-        self.branch(repo)
-        repo.git("rm", "-q", VERSION_FILE_NAME)
-        repo.git("commit", "-q", "-m", "chore: drop the version file")
-        result = repo.check_pr("--base", "main")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("delet", result.stderr)
-
-    def test_a_branch_behind_main_is_not_flagged(self):
-        repo = FakeRepo(self)
-        repo.tag("v3.2.8-gdh-2.0")
-        self.branch(repo)
-        repo.commit_version("3.2.8-gdh-2.1")
-        repo.git("checkout", "-q", "main")
-        repo.commit("fix: main moved on")
-        repo.git("checkout", "-q", "side")
-        self.assertEqual(repo.check_pr("--base", "main").returncode, 0)
 
 
 @unittest.skipIf(shutil.which("cmake") is None, "cmake is not installed")
