@@ -2,7 +2,7 @@
 # Install one Linux fleet host's tbc-tools from a build wm has already copied in.
 #
 # self-hosted-deploy.yml's deploy-fleet job runs this ON the target host, as
-# `ssh <host> bash -s -- <sha> <store-path> < ci/deploy_fleet_host.sh`, right
+# `ssh <host> bash -s -- <sha> <store-path> < ci/gdh/deploy_fleet_host.sh`, right
 # after `nix copy` has pushed wm's installed closure there. The flake builds from
 # a content-filtered source (tbcSrc in flake.nix), so the github: flake at <sha>
 # evaluates to exactly the store path wm installed. The profile operation is
@@ -70,28 +70,5 @@ if [ "$INSTALLED" != "$STORE" ]; then
   exit 1
 fi
 
-"$STORE/bin/tbc-video-export" --version
-
-# tbc-video-export's MKV display-dimension normalization falls back to the
-# mkvmerge the package ships in libexec; without one it silently skips it.
-# Run under the host's own locale (as the workers do): a host whose locales the
-# bundled copy cannot load must fail here, not in an export.
-"$STORE/libexec/tbc-video-export/mkvmerge" --version
-
-# The post-decode pipeline drives the headless aligner. With no arguments it
-# prints its usage and exits 2, which proves the headless entry point shipped
-# without touching any media.
-set +e
-QT_QPA_PLATFORM=offscreen "$STORE/bin/tbc-audio-align" --headless </dev/null >/dev/null 2>&1
-RC=$?
-set -e
-if [ "$RC" -ne 2 ]; then
-  echo "tbc-audio-align --headless with no arguments exited $RC, expected 2 (usage)." >&2
-  exit 1
-fi
-
-if ! command -v tbc-video-export >/dev/null 2>&1; then
-  echo "::warning::$HOST: tbc-tools is installed but not on PATH for a non-interactive ssh session."
-fi
-
+# The deploy then runs ci/gdh/smoke_installed.sh on this host.
 echo "Installed $SHA on $HOST: $STORE"

@@ -348,25 +348,24 @@ endfunction()
 set(APP_BUILD "unknown" CACHE STRING "How this build was made: nix, git or unknown")
 set(APP_SOURCE_ID "unknown" CACHE STRING "Source tree id (src-<hash> or tree-<hash>), not a commit")
 # Release version: <upstream>-gdh-<major>.<minor>, with +<N>.g<sha>[.dirty]
-# after the release commit. A release is a committed .gdh-version; it rides in a
-# PR, and gdh-version-tag.yml tags the commit that introduced it on main once the
-# PR merges (the merge button creates that commit, so nothing can tag it sooner).
+# after the release commit. A release is a committed .gdh-version, which
+# .github/workflows/gdh-release.yml commits on main and tags in the same push.
 # Resolution order:
 #   1. an explicit -DAPP_VERSION=               (packagers, the Nix flake)
 #   2. in a git checkout, the newer of the nearest gdh tag (git describe) and
 #      the committed .gdh-version -- the file exact on the first-parent commit
-#      that introduced it, so a PR's builds and its merge carry the new version
-#      before any tag exists
+#      that introduced it, so the version holds even where the tag has not
+#      been fetched
 #   3. the .gdh-version file                    (no .git: tarball, Nix sandbox)
 #   4. the "version" field of vcpkg.json        (upstream's own, pre-first-bump)
 #
 # scripts/gdh_version.py implements this same rule for the tooling side, and
-# ci/tests/test_gdh_version.py holds the two in agreement. Change one, change both.
+# ci/gdh/test_gdh_version.py holds the two in agreement. Change one, change both.
 #
 # This resolves on EVERY configure. It used to be written back to the cache,
 # which made a reused build directory keep its first version forever (win0's
 # reported 3.2.9-gdh-2.0+10.gf41224ca long after that commit).
-# --- gdh-version block: begin (extracted verbatim by ci/tests/test_gdh_version.py) ---
+# --- gdh-version block: begin (extracted verbatim by ci/gdh/test_gdh_version.py) ---
 # Drop our own stale cache entry from a build directory configured before the
 # fix above. An explicit -DAPP_VERSION carries a different helpstring and stays.
 if(NOT CMAKE_SCRIPT_MODE_FILE AND DEFINED CACHE{APP_VERSION})

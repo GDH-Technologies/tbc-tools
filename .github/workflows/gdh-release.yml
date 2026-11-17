@@ -1,0 +1,166 @@
+name: "GDH release"
+
+# How GDH releases of tbc-tools work
+# ==================================
+#
+# Merging a PR that changes shipped code IS a release. Nothing to do by hand:
+#
+#   1. A PR merges into main.
+#   2. This workflow works out the next version:
+#        - nothing under the shipped paths (`on.push.paths` below, the same
+#          list as SHIPPED_PATHS in scripts/gdh_version.py) changed since the
+#          last v*-gdh-* tag                      -> no release, no deploy
+#        - every unreleased PR is labelled `no-release` -> no release, no deploy
+#        - a commit marked breaking (`type!:` or a `BREAKING CHANGE:` trailer)
+#                                                  -> next major, e.g. 1.3 -> 2.0
+#        - upstream's version (vcpkg.json) moved   -> <upstream>-gdh-1.0
+#        - otherwise                               -> next minor, e.g. 1.3 -> 1.4
+#   3. It commits .gdh-version as `chore(release): <version>` (github-actions
+#      bot), tags that commit v<version>, and pushes both to main atomically.
+#   4. It deploys that commit to every GDH machine (self-hosted-deploy.yml).
+#
+# PRs never touch .gdh-version (the guardrails refuse it). The version a build
+# reports is exact on the release commit: Nix reads the committed file, CMake
+# and scripts/gdh_version.py read the tag.
+#
+# Two quick merges become one release: this always releases the latest main,
+# and runs one at a time.
+#
+# By hand (Actions -> GDH release -> Run workflow):
+#   level=auto       release whatever is pending (e.g. to retry a failed run)
+#   level=minor|major force a release even with nothing shipped (a rebuild)
+#
+# GDH tags never start upstream's release.yml (it is disabled on this fork, and
+# tags pushed with GITHUB_TOKEN start no workflows anyway).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "vcpkg.json"
+      - "flake.nix"
+      - "flake.lock"
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "auto: release what is pending; minor/major: force a release"
+        required: false
+        default: auto
+        type: choice
+        options: [auto, minor, major]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One release at a time, never cancelled: a cancelled run could stop between
+  # the push and the deploy.
+  group: tbc-tools-gdh-release
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  release:
+    name: Cut the release
+    # wm-light: wm's second runner, for short jobs.
+    runs-on: [self-hosted, Linux, X64, wm-light]
+    timeout-minutes: 10
+    permissions:
+      # Push the release commit and its tag to main. The only write token in
+      # this repository's workflows.
+      contents: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      sha: ${{ steps.release.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout main
+        # Pinned to a commit: this job holds a write token.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The latest main, not the pushed commit, and all of its history
+          # and tags: the release covers everything since the last tag.
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: false
+
+      - name: Release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LEVEL: ${{ inputs.level || 'auto' }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Three tries: if another merge lands between the fetch and the push,
+          # the atomic push is rejected and nothing reaches origin, so start
+          # again from the new main.
+          for attempt in 1 2 3; do
+            # The workspace persists between runs: a tag deleted or moved on
+            # the remote must not linger here.
+            git fetch --tags --prune --prune-tags --force origin
+            git checkout -q --detach origin/main
+
+            rc=0
+            python3 scripts/gdh_version.py next --json --level "$LEVEL" > "$RUNNER_TEMP/plan.json" || rc=$?
+            python3 scripts/gdh_version.py next --level "$LEVEL" | tee -a "$GITHUB_STEP_SUMMARY" || true
+            if [ "$rc" -eq 2 ]; then
+              echo "released=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            [ "$rc" -eq 0 ] || exit "$rc"
+
+            # `no-release`: skip only when EVERY shipped commit came in through
+            # a PR carrying the label. A commit with no PR (a direct push)
+            # always counts. Skipped commits still ship with the next release.
+            if [ "$LEVEL" = auto ]; then
+              wanted=false
+              for sha in $(jq -r '.commits[].sha' "$RUNNER_TEMP/plan.json"); do
+                labels="$(gh api "repos/$REPO/commits/$sha/pulls" \
+                            --jq '[.[] | select(.merged_at != null)][0].labels // [] | map(.name) | join(",")')"
+                case ",$labels," in
+                  *,no-release,*) ;;
+                  *) wanted=true; break ;;
+                esac
+              done
+              if [ "$wanted" = false ]; then
+                echo "Every pending PR is labelled \`no-release\`: nothing released." | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "released=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+
+            if python3 scripts/gdh_version.py release --level "$LEVEL" --push; then
+              {
+                echo "released=true"
+                echo "sha=$(git rev-parse HEAD)"
+                echo "version=$(tr -d '\n' < .gdh-version)"
+              } >> "$GITHUB_OUTPUT"
+              echo "Released **$(tr -d '\n' < .gdh-version)**." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); retrying from the new main."
+            sleep 5
+          done
+          echo "::error::Could not push the release after 3 attempts."
+          exit 1
+
+  deploy:
+    name: Deploy ${{ needs.release.outputs.version }}
+    needs: release
+    if: ${{ needs.release.outputs.released == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/self-hosted-deploy.yml
+    with:
+      ref: ${{ needs.release.outputs.sha }}
