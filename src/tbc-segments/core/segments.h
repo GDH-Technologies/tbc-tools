@@ -2,7 +2,7 @@
 
     segments.h
 
-    tbc-tools TBC library - recording-segment derivation
+    tbc-tools TBC library - segment derivation
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -32,9 +32,10 @@
 
 #include "tbcmetadata.h"
 
-// The one place the recording-segment rules live. Every tool (tbc-segments,
+// The one place the segment rules live. Every tool (tbc-segments,
 // tbc-export-metadata, tbc-analyse) derives events and segments through these
 // functions; none re-implements the gap, section or frame-range rule.
+// Vocabulary: docs/Tools/tbc-segments-glossary.md (glossary_generated.h).
 
 enum class SegmentSensitivity { Low, Normal, High };
 
@@ -44,29 +45,28 @@ struct SegmentsThresholds {
     qint32 syncConfThreshold = 50;       // % of the file's median syncConf; below = sync loss
     qint32 minRunFields = 2;             // minimum run for sync_loss / dropout_storm / field-data runs
     double dropoutStormThreshold = 0.25; // fraction of the active field area covered by dropouts
-    double sceneThresholdIre = 12.0;     // same-parity field difference marking a scene change
-    double noiseThresholdIre = 6.0;      // back-porch noise above which a field is snow
-    double blankLumaIre = 5.0;           // active luma at or below which a quiet field is blank...
+    double fieldDiffSpikeIre = 12.0;     // Glossary: field diff spike (#field-diff-spike): the threshold, a floor
+    double noiseThresholdIre = 6.0;      // Glossary: noise (#noise): back-porch noise above which a field is snow
+    double blankLumaIre = 5.0;           // Glossary: blank (#blank): active luma at or below which a quiet field is blank...
     double blankLevelDevIre = 5.0;       // ...when its levels have collapsed: blanking this far below, or
                                          // sync tip this far above, nominal (a dark recorded picture keeps them)
     double blankBelowBlackIre = -5.0;    // ...or its active luma sits below this (no picture at all)
 
-    // Segment derivation
-    qint32 minClipFields = 10;           // a section shorter than this is 'unknown', never a clip
-    qint32 minNonClipRunFields = 50;     // a noise/blank run at least this long splits a section
-    double nonClipCoverage = 0.6;        // fraction of a piece that makes it noise or blank
+    // Segment derivation (Glossary: segment, #segment)
+    qint32 minContentSpanFields = 10;    // a piece shorter than this is 'unknown', never a content span
+    qint32 minNonContentRunFields = 50;  // a noise/blank run at least this long ends a content span
+    double nonContentCoverage = 0.6;     // fraction of a piece that makes it noise or blank
 
-    // Camcorder restarts (restartmarks.h): a clean edit replaces the picture
-    // between two fields, so the same-parity difference spikes on two
-    // adjacent fields, matched, with quiet fields either side
-    bool restartMarks = true;            // detect restart marks at all
-    double restartPairMatch = 0.90;      // the weaker spike of the pair is at least this fraction of the stronger
-    double restartMinPeakIre = 5.0;      // the pair's peak field difference
-    double restartMinContrast = 1.5;     // peak over the local background
-    double restartMaxNeighbourRatio = 0.6; // fields n-1 and n+2 at most this fraction of the peak (motion keeps them high)
-    qint32 restartFlashWindowFields = 12; // a one-field flash this close before the pair rules it out
-    double restartFlashIre = 10.0;       // how far above its neighbours a flashed field's luma sits
-    bool splitAtRestarts = false;        // newly derived marks split their clip
+    // Glossary: shot boundary (#shot-boundary), detected from the picture
+    // (shotboundaries.h): the field difference spikes on two adjacent fields,
+    // matched, with quiet fields either side and no flash just before
+    bool detectShotBoundaries = true;
+    double shotBoundaryPairMatch = 0.90;      // the weaker spike of the pair is at least this fraction of the stronger
+    double shotBoundaryMinPeakIre = 5.0;      // the pair's peak field difference
+    double shotBoundaryMinContrast = 1.5;     // peak over the local background
+    double shotBoundaryMaxNeighbourRatio = 0.6; // fields n-1 and n+2 at most this fraction of the peak (motion keeps them high)
+    qint32 shotBoundaryFlashWindowFields = 12; // a one-field flash this close before the pair rules it out
+    double shotBoundaryFlashIre = 10.0;       // how far above its neighbours a flashed field's luma sits
 
     static SegmentsThresholds preset(SegmentSensitivity sensitivity);
 };
@@ -79,7 +79,7 @@ struct FieldRange {
 
 struct SegmentEvent {
     QString kind;               // gap | sync_loss | parity_break | skipped_field | dropout_storm |
-                                // scene_change | noise | blank_video | no_burst |
+                                // field_diff_spike | noise | blank_video | no_burst | shot_boundary |
                                 // and the decoder's own kinds (no_sync_pulses, no_field_start,
                                 // duplicate_field, dropped_field, resume_seam, redo)
     qint32 startField = 0;
@@ -136,7 +136,7 @@ struct SegmentsAnalysis {
     // (real tape noise raises both baselines).
     double effectiveSyncConfThreshold = 0.0;
     double medianSyncConf = 0.0;
-    double effectiveSceneThresholdIre = 0.0;
+    double effectiveFieldDiffSpikeIre = 0.0;
     double effectiveNoiseThresholdIre = 0.0;
     double medianFieldDiffIre = 0.0;
     double medianNoiseIre = 0.0;
@@ -150,6 +150,18 @@ struct SegmentsAnalysis {
     QVector<qint32> decodeFaults;
     QVector<double> dropoutCoverage;
 };
+
+// The stored kind of a content span (Glossary: content span, #content-span).
+// A stored "clip" is the kind's old name and reads the same. glossary-legacy
+inline const QString &contentSpanKind()
+{
+    static const QString kind = QStringLiteral("content_span");
+    return kind;
+}
+inline bool isContentSpanKind(const QString &kind)
+{
+    return kind == contentSpanKind() || kind == QLatin1String("clip"); // glossary-legacy: stored before 3.3.1-gdh-1.2
+}
 
 // Fields per second for the metadata's video system (50 for 625-line systems, 60000/1001 else).
 double fieldRateForSystem(VideoSystem system);
@@ -177,7 +189,7 @@ bool segmentFrameRange(const TbcMetaData &metaData, const TbcMetaData::Segment &
 // metadata (videoParameters.rfSourceSampleRateHz); with neither, the nominal
 // field length is the median of the positive fileLoc deltas. Decoder events
 // stored in the metadata are merged into the event list; they never create a
-// section on their own (sections split only at fileLoc gaps, the rule
+// section on their own (sections break only at fileLoc gaps, the rule
 // tbc-audio-align applies), but a gap they coincide with is marked confirmed.
 SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
                                  const FieldRange &range,
@@ -185,15 +197,16 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
                                  double rfSampleRateHz,
                                  const FieldMetrics *fieldMetrics);
 
-// Recording segments from an analysis: every gapless section becomes one
-// segment, split further at noise/blank runs of at least
-// thresholds.minNonClipRunFields; each piece is classified clip | blank |
-// noise | unknown and enabled when it is a clip. Adjacent non-clip pieces then
-// merge into one (across gaps too: snow broken by single quiet fields or
-// decoder resyncs is one stretch), and a piece shorter than minClipFields
-// between two clips joins the following clip, keeping the boundary where the
-// sliver started. Ids run 1..N in field order; source is "derived"; createdBy
-// names the tool.
+// Segments from an analysis (Glossary: segment, #segment). Every gapless
+// section becomes one piece, broken further at noise/blank runs of at least
+// thresholds.minNonContentRunFields; each piece is classified content_span |
+// blank | noise | unknown, and enabled when it is a content span. Adjacent
+// noise/blank/unknown pieces then merge (across gaps too: snow broken by
+// single quiet fields or decoder resyncs is one stretch); a piece shorter
+// than minContentSpanFields between two content pieces joins them; and
+// content pieces that meet across an RF gap merge into one content span (the
+// gap is a shot boundary, detectShotBoundaries). Ids run 1..N in field order;
+// source is "derived"; createdBy names the tool.
 QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
                                              const SegmentsAnalysis &analysis,
                                              const SegmentsThresholds &thresholds,

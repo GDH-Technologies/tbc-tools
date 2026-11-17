@@ -2,7 +2,7 @@
 
     main.cpp
 
-    tbc-segments - Find recording boundaries in TBC metadata and fields
+    tbc-segments - Find segments and shot boundaries in TBC metadata and fields
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -36,8 +36,9 @@
 
 #include "fieldmetrics.h"
 #include "fieldwalkpool.h"
-#include "markstore.h"
-#include "restartmarks.h"
+#include "glossary_generated.h"
+#include "shotboundaries.h"
+#include "shotboundarystore.h"
 #include "segments.h"
 #include "tbc/logging.h"
 #include "tbcmetadata.h"
@@ -264,14 +265,16 @@ int main(int argc, char *argv[])
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        "tbc-segments - Find recording boundaries in TBC metadata and fields\n"
+        "tbc-segments - Find segments and shot boundaries in TBC metadata and fields\n"
         "\n"
         "Reads .tbc.db (or legacy .tbc.json) metadata and reports gapless sections,\n"
         "boundary events (tape gaps, sync loss, parity breaks, skipped fields, dropout\n"
-        "storms, the decoder's own seam events) and the recording segments derived from\n"
-        "them. Per-field picture metrics stored by the decoder are used when present;\n"
+        "storms, the decoder's own seam events), the segments derived from them and the\n"
+        "shot boundaries inside the content spans (vocabulary:\n"
+        "docs/Tools/tbc-segments-glossary.md). Per-field picture metrics stored by the\n"
+        "decoder are used when present;\n"
         "--tbc walks the raw fields for them otherwise (luma, noise, blanking, sync-tip\n"
-        "and burst metrics and the scene changes / noise / blank / no-burst runs they\n"
+        "and burst metrics and the field diff spikes / noise / blank / no-burst runs they\n"
         "reveal). --write stores walked metrics, reconstructed events and (with\n"
         "--write-segments) the derived segments back into the metadata, SQLite first.\n"
         "Output is JSON (schema 1); fields are 0-based, seconds count from field 0.\n"
@@ -294,32 +297,35 @@ int main(int argc, char *argv[])
     QCommandLineOption tbcOption("tbc", QCoreApplication::translate("main", "Luma TBC to walk for the field metrics when the metadata holds none"), "file");
     QCommandLineOption chromaOption("chroma-tbc", QCoreApplication::translate("main", "Chroma TBC for burst amplitude (default: <luma>_chroma.tbc when present)"), "file");
     QCommandLineOption threadsOption(QStringList() << "t" << "threads", QCoreApplication::translate("main", "Worker threads for the field walk (default: logical CPUs)"), "n");
-    QCommandLineOption sceneOption("scene-threshold-ire", QCoreApplication::translate("main", "Same-parity field difference marking a scene change (default 12)"), "IRE");
+    QCommandLineOption spikeOption("field-diff-spike-ire",
+                                   QCoreApplication::translate("main", "Field diff spike threshold, a floor (default 12). ") + Glossary::tooltip(Glossary::Term::FieldDiffSpike), "IRE");
+    // glossary-legacy: digitization-toolkit passes the old name until #714
+    QCommandLineOption legacySpikeOption("scene-threshold-ire", QStringLiteral("Old name of --field-diff-spike-ire"), "IRE"); // glossary-legacy
+    legacySpikeOption.setFlags(QCommandLineOption::HiddenFromHelp);
     QCommandLineOption noiseOption("noise-threshold-ire", QCoreApplication::translate("main", "Back-porch noise above which a field is snow (default 6)"), "IRE");
     QCommandLineOption blankOption("blank-luma-ire", QCoreApplication::translate("main", "Active luma at or below which a quiet field is blank (default 5)"), "IRE");
     QCommandLineOption blankLevelOption("blank-level-dev-ire", QCoreApplication::translate("main", "A dark field is blank only when its blanking sits this far below, or its sync tip this far above, nominal (default 5)"), "IRE");
     QCommandLineOption blankBelowBlackOption("blank-below-black-ire", QCoreApplication::translate("main", "...or its active luma sits below this (default -5)"), "IRE");
-    QCommandLineOption minClipOption("min-clip-fields", QCoreApplication::translate("main", "A section shorter than this is 'unknown', never a clip (default 10)"), "n");
-    QCommandLineOption minNonClipRunOption("min-non-clip-run-fields", QCoreApplication::translate("main", "A noise/blank run at least this long splits a section (default 50)"), "n");
-    QCommandLineOption splitRestartsOption("split-restarts", QCoreApplication::translate("main", "Newly derived restart marks split their clip into segments (default: marked only)"));
-    QCommandLineOption noRestartMarksOption("no-restart-marks", QCoreApplication::translate("main", "Do not detect camcorder restart marks"));
-    QCommandLineOption restartPairOption("restart-pair-match", QCoreApplication::translate("main", "Restart: the weaker field-difference spike of the pair is at least this fraction of the stronger (default 0.9)"), "fraction");
-    QCommandLineOption restartPeakOption("restart-min-peak-ire", QCoreApplication::translate("main", "Restart: the pair's peak field difference (default 5)"), "IRE");
-    QCommandLineOption restartNeighbourOption("restart-max-neighbour-ratio", QCoreApplication::translate("main", "Restart: the fields either side of the pair at most this fraction of its peak (default 0.6)"), "fraction");
-    QCommandLineOption restartContrastOption("restart-min-contrast", QCoreApplication::translate("main", "Restart: peak over the local background (default 1.5)"), "ratio");
+    QCommandLineOption minSpanOption("min-content-span-fields", QCoreApplication::translate("main", "A piece shorter than this is 'unknown', never a content span (default 10)"), "n");
+    QCommandLineOption minNonContentRunOption("min-non-content-run-fields", QCoreApplication::translate("main", "A noise/blank run at least this long ends a content span (default 50)"), "n");
+    QCommandLineOption noShotBoundariesOption("no-shot-boundaries", QCoreApplication::translate("main", "Do not detect shot boundaries. ") + Glossary::tooltip(Glossary::Term::ShotBoundary));
+    QCommandLineOption shotPairOption("shot-boundary-pair-match", QCoreApplication::translate("main", "Shot boundary: the weaker field-difference spike of the pair is at least this fraction of the stronger (default 0.9)"), "fraction");
+    QCommandLineOption shotPeakOption("shot-boundary-min-peak-ire", QCoreApplication::translate("main", "Shot boundary: the pair's peak field difference (default 5)"), "IRE");
+    QCommandLineOption shotNeighbourOption("shot-boundary-max-neighbour-ratio", QCoreApplication::translate("main", "Shot boundary: the fields either side of the pair at most this fraction of its peak (default 0.6)"), "fraction");
+    QCommandLineOption shotContrastOption("shot-boundary-min-contrast", QCoreApplication::translate("main", "Shot boundary: peak over the local background (default 1.5)"), "ratio");
     QCommandLineOption noBurstOption("no-burst", QCoreApplication::translate("main", "Do not measure burst amplitude, and do not read the chroma TBC for it (halves the walk's I/O; no no_burst events; a stored burst amplitude is kept, not cleared)"));
     QCommandLineOption forceWalkOption("force-walk", QCoreApplication::translate("main", "Walk the TBC even when the metadata already holds picture metrics"));
     QCommandLineOption verifyStoredOption("verify-stored", QCoreApplication::translate("main", "Walk the TBC and compare with the stored metrics; exit 1 above 0.05 IRE"));
     QCommandLineOption writeOption("write", QCoreApplication::translate("main", "Store walked metrics and reconstructed events in the metadata (the .tbc.db; a JSON-only decode gets one first and the JSON is refreshed)"));
-    QCommandLineOption writeSegmentsOption("write-segments", QCoreApplication::translate("main", "With --write: also store the derived segments when the metadata holds none"));
-    QCommandLineOption forceOption("force", QCoreApplication::translate("main", "With --write-segments: replace stored derived segments (user segments are always kept)"));
+    QCommandLineOption writeSegmentsOption("write-segments", QCoreApplication::translate("main", "With --write: also store the derived segments, and the shot boundaries, when the metadata holds none"));
+    QCommandLineOption forceOption("force", QCoreApplication::translate("main", "With --write-segments: replace stored derived segments and detected shot boundaries (user segments, and user or rejected shot boundaries, are always kept)"));
     QCommandLineOption perFieldOption("per-field", QCoreApplication::translate("main", "Include per-field arrays (syncConf, decodeFaults, dropout coverage and the field metrics)"));
     QCommandLineOption summaryOption("summary", QCoreApplication::translate("main", "Print a human summary (to stderr, so --json - stays pure)"));
     for (const QCommandLineOption *opt : {&jsonOption, &startOption, &lengthOption, &rfRateOption, &sensitivityOption,
                                           &gapToleranceOption, &syncConfOption, &minRunOption, &dropoutStormOption,
-                                          &tbcOption, &chromaOption, &threadsOption, &sceneOption, &noiseOption, &blankOption,
-                                          &blankLevelOption, &blankBelowBlackOption, &splitRestartsOption, &noRestartMarksOption,
-                                          &restartPairOption, &restartPeakOption, &restartContrastOption, &restartNeighbourOption, &minClipOption, &minNonClipRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
+                                          &tbcOption, &chromaOption, &threadsOption, &spikeOption, &legacySpikeOption, &noiseOption, &blankOption,
+                                          &blankLevelOption, &blankBelowBlackOption, &noShotBoundariesOption,
+                                          &shotPairOption, &shotPeakOption, &shotContrastOption, &shotNeighbourOption, &minSpanOption, &minNonContentRunOption, &noBurstOption, &forceWalkOption, &verifyStoredOption,
                                           &writeOption, &writeSegmentsOption, &forceOption, &perFieldOption, &summaryOption}) {
         parser.addOption(*opt);
     }
@@ -360,22 +366,22 @@ int main(int argc, char *argv[])
         || !parseInt(parser, minRunOption, &thresholds.minRunFields, 1, 100000, &error)
         || !parseDouble(parser, dropoutStormOption, &thresholds.dropoutStormThreshold, 0.0, 1.0, &error)
         || !parseInt(parser, threadsOption, &threads, 1, 1024, &error)
-        || !parseDouble(parser, sceneOption, &thresholds.sceneThresholdIre, 0.0, 200.0, &error)
+        || !parseDouble(parser, legacySpikeOption, &thresholds.fieldDiffSpikeIre, 0.0, 200.0, &error) // glossary-legacy
+        || !parseDouble(parser, spikeOption, &thresholds.fieldDiffSpikeIre, 0.0, 200.0, &error)
         || !parseDouble(parser, noiseOption, &thresholds.noiseThresholdIre, 0.0, 200.0, &error)
         || !parseDouble(parser, blankOption, &thresholds.blankLumaIre, -50.0, 200.0, &error)
         || !parseDouble(parser, blankLevelOption, &thresholds.blankLevelDevIre, 0.0, 200.0, &error)
         || !parseDouble(parser, blankBelowBlackOption, &thresholds.blankBelowBlackIre, -100.0, 100.0, &error)
-        || !parseInt(parser, minClipOption, &thresholds.minClipFields, 1, 1000000, &error)
-        || !parseInt(parser, minNonClipRunOption, &thresholds.minNonClipRunFields, 1, 1000000, &error)
-        || !parseDouble(parser, restartPairOption, &thresholds.restartPairMatch, 0.0, 1.0, &error)
-        || !parseDouble(parser, restartPeakOption, &thresholds.restartMinPeakIre, 0.0, 200.0, &error)
-        || !parseDouble(parser, restartContrastOption, &thresholds.restartMinContrast, 1.0, 1000.0, &error)
-        || !parseDouble(parser, restartNeighbourOption, &thresholds.restartMaxNeighbourRatio, 0.0, 1.0, &error)) {
+        || !parseInt(parser, minSpanOption, &thresholds.minContentSpanFields, 1, 1000000, &error)
+        || !parseInt(parser, minNonContentRunOption, &thresholds.minNonContentRunFields, 1, 1000000, &error)
+        || !parseDouble(parser, shotPairOption, &thresholds.shotBoundaryPairMatch, 0.0, 1.0, &error)
+        || !parseDouble(parser, shotPeakOption, &thresholds.shotBoundaryMinPeakIre, 0.0, 200.0, &error)
+        || !parseDouble(parser, shotContrastOption, &thresholds.shotBoundaryMinContrast, 1.0, 1000.0, &error)
+        || !parseDouble(parser, shotNeighbourOption, &thresholds.shotBoundaryMaxNeighbourRatio, 0.0, 1.0, &error)) {
         qCritical().noquote() << error;
         return 1;
     }
-    thresholds.splitAtRestarts = parser.isSet(splitRestartsOption);
-    thresholds.restartMarks = !parser.isSet(noRestartMarksOption);
+    thresholds.detectShotBoundaries = !parser.isSet(noShotBoundariesOption);
     const bool wantWrite = parser.isSet(writeOption);
     const bool wantWriteSegments = parser.isSet(writeSegmentsOption);
     const bool wantVerify = parser.isSet(verifyStoredOption);
@@ -460,24 +466,25 @@ int main(int argc, char *argv[])
 
     const SegmentsAnalysis analysis = analyseSegments(metaData, range, thresholds, rfRate, metrics.enabled ? &metrics : nullptr);
 
-    // Restart marks: stored in the .tbc.db by this module (markstore.h).
-    // The derivation needs the unsplit segments to find the clips to look in.
-    const QString markDatabase = MarkStore::databasePathFor(inputFilename);
-    QVector<SegmentMark> storedMarks;
+    // Shot boundaries (Glossary: shot boundary, docs/Tools/tbc-segments-glossary.md#shot-boundary):
+    // stored in the .tbc.db by this module (shotboundarystore.h). Detection
+    // looks inside the content spans of the segments as derived.
+    QVector<ShotBoundary> storedBoundaries;
     {
-        QString markError;
-        if (!MarkStore::read(markDatabase, &storedMarks, nullptr, &markError)) {
-            qWarning().noquote() << "tbc-segments: cannot read the stored restart marks:" << markError;
+        QString storeError;
+        if (!ShotBoundaryStore::read(ShotBoundaryStore::databasePathFor(inputFilename), &storedBoundaries, nullptr, &storeError)) {
+            qWarning().noquote() << "tbc-segments: cannot read the stored shot boundaries:" << storeError;
         }
     }
     const QVector<TbcMetaData::Segment> base = deriveSegments(metaData, analysis, thresholds, QStringLiteral("tbc-segments"));
-    const QVector<SegmentMark> detected = detectRestartMarks(analysis, metrics, thresholds, base, QStringLiteral("tbc-segments"));
+    const QVector<ShotBoundary> detected = detectShotBoundaries(analysis, metrics.enabled ? &metrics : nullptr, thresholds, base,
+                                                                QStringLiteral("tbc-segments"));
     const bool replaceDerived = wantWriteSegments && parser.isSet(forceOption);
-    QVector<SegmentMark> marks = storedMarks;
-    QString marksSource = QStringLiteral("stored");
-    if (storedMarks.isEmpty() || replaceDerived) {
-        marks = mergeMarks(storedMarks, detected);
-        marksSource = marks.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
+    QVector<ShotBoundary> boundaries = storedBoundaries;
+    QString boundariesSource = QStringLiteral("stored");
+    if (storedBoundaries.isEmpty() || replaceDerived) {
+        boundaries = mergeShotBoundaries(storedBoundaries, detected);
+        boundariesSource = boundaries.isEmpty() ? QStringLiteral("none") : QStringLiteral("derived");
     }
 
     // Segments: the stored layer wins; derive otherwise
@@ -485,7 +492,7 @@ int main(int argc, char *argv[])
     QString segmentsSource = segments.isEmpty() ? QStringLiteral("derived") : QStringLiteral("stored");
     QVector<TbcMetaData::Segment> derived;
     if (segments.isEmpty() || replaceDerived) {
-        derived = splitSegmentsAtMarks(base, marks);
+        derived = base;
         if (segments.isEmpty()) segments = derived;
     }
 
@@ -545,10 +552,10 @@ int main(int argc, char *argv[])
                 qInfo() << "Metadata already holds segments; not replacing them (--force overrides)";
             }
         }
-        // Marks go in after the metadata (their tables are not the library's)
-        const bool storeMarks = wantWriteSegments && (storedMarks.isEmpty() || replaceDerived);
-        if (wantWriteSegments && !storeMarks) {
-            qInfo() << "Metadata already holds restart marks; not replacing them (--force overrides)";
+        // Shot boundaries go in after the metadata (their tables are not the library's)
+        const bool storeBoundaries = wantWriteSegments && (storedBoundaries.isEmpty() || replaceDerived);
+        if (wantWriteSegments && !storeBoundaries) {
+            qInfo() << "Metadata already holds shot boundaries; not replacing them (--force overrides)";
         }
         const bool changed = metricsDirty || captureDirty || eventsDirty || segmentsDirty;
         if (changed) {
@@ -570,25 +577,25 @@ int main(int argc, char *argv[])
             }
             qInfo().noquote() << "Metadata written:" << canonical;
         }
-        bool marksWritten = false;
-        if (storeMarks) {
-            const QString database = MarkStore::databasePathFor(inputFilename);
-            QString markError;
+        bool boundariesWritten = false;
+        if (storeBoundaries) {
+            const QString database = ShotBoundaryStore::databasePathFor(inputFilename);
+            QString storeError;
             if (database.isEmpty()) {
-                if (!marks.isEmpty()) {
-                    qWarning() << "tbc-segments: restart marks need a .tbc.db; none exists yet, so they were not stored";
+                if (!boundaries.isEmpty()) {
+                    qWarning() << "tbc-segments: shot boundaries need a .tbc.db; none exists yet, so they were not stored";
                 }
-            } else if (!MarkStore::write(database, marks, &marksWritten, &markError)) {
-                qCritical().noquote() << "Unable to store the restart marks:" << markError;
+            } else if (!ShotBoundaryStore::write(database, boundaries, &boundariesWritten, &storeError)) {
+                qCritical().noquote() << "Unable to store the shot boundaries:" << storeError;
                 return 1;
-            } else if (marksWritten) {
-                marksSource = QStringLiteral("stored");
-                qInfo().noquote() << QStringLiteral("Restart marks written: %1").arg(marks.size());
-            } else if (!marks.isEmpty()) {
-                marksSource = QStringLiteral("stored");
+            } else if (boundariesWritten) {
+                boundariesSource = QStringLiteral("stored");
+                qInfo().noquote() << QStringLiteral("Shot boundaries written: %1").arg(boundaries.size());
+            } else if (!boundaries.isEmpty()) {
+                boundariesSource = QStringLiteral("stored");
             }
         }
-        if (!changed && !marksWritten) {
+        if (!changed && !boundariesWritten) {
             qInfo() << "Nothing to write";
         }
     }
@@ -596,7 +603,7 @@ int main(int argc, char *argv[])
     QJsonObject report = buildReport(metaData, inputFilename, inputKind, startFrame, lengthFrames, range, thresholds,
                                      analysis, metrics.enabled ? &metrics : nullptr, fieldDataInfo,
                                      parser.isSet(perFieldOption), segments, segmentsSource);
-    addMarksToReport(&report, metaData, analysis, marks, marksSource);
+    addShotBoundariesToReport(&report, metaData, analysis, segments, boundaries, boundariesSource);
     const QByteArray payload = QJsonDocument(report).toJson(QJsonDocument::Compact) + "\n";
 
     const QString jsonTarget = parser.value(jsonOption);
@@ -614,9 +621,13 @@ int main(int argc, char *argv[])
     }
 
     if (parser.isSet(summaryOption)) {
+        // One string: QDebug would put a space between the pieces
         qInfo().noquote() << summariseAnalysis(analysis, range)
-                          << QStringLiteral("Segments: %1 (%2)").arg(segments.size()).arg(segmentsSource)
-                          << QStringLiteral("\nRestart marks: %1 (%2)").arg(marks.size()).arg(marksSource);
+                                 + QStringLiteral("Segments: %1 (%2)\nShot boundaries: %3 (%4)")
+                                       .arg(segments.size())
+                                       .arg(segmentsSource)
+                                       .arg(boundaries.size())
+                                       .arg(boundariesSource);
     }
     return 0;
 }

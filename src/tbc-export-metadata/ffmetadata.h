@@ -34,7 +34,7 @@
 /*!
     Write an FFMETADATA1 file containing navigation information.
 
-    When the metadata holds recording segments (written by vhs-decode's
+    When the metadata holds segments (written by vhs-decode's
     consumers: tbc-segments --write-segments, tbc-analyse's Segments viewer)
     each selected segment becomes one [CHAPTER] and the LaserDisc navigation
     chapters are not written; START/END are the segment's 0-based fields
@@ -54,8 +54,10 @@
     @param includeVitcTimecode When true, include FFmpeg-style VITC timecode
            in the output header when available.
     @param segmentMode Which stored segments become chapters.
-    @param restartChapterMarks Camcorder restarts that cut a segment's chapter
-           into takes (cutChaptersAtRestarts); empty for none.
+    @param chaptersBy One chapter per segment (the default), or per scene or
+           shot inside each content span (Glossary: chapters by,
+           docs/Tools/tbc-segments-glossary.md#chapters-by).
+    @param shotBoundaries The shot boundaries scenes and shots follow.
 
     Returns true on success, false on failure.
 */
@@ -65,6 +67,7 @@ bool writeFfmetadata(TbcMetaData &metaData,
                      qint32 lengthFrames = -1,
                      bool includeVitcTimecode = true,
                      FfmetadataSegmentMode segmentMode = FfmetadataSegmentMode::EnabledSegments,
-                     const QVector<SegmentMark> &restartChapterMarks = QVector<SegmentMark>());
+                     ChaptersBy chaptersBy = ChaptersBy::Segment,
+                     const QVector<ShotBoundary> &shotBoundaries = QVector<ShotBoundary>());
 
 #endif

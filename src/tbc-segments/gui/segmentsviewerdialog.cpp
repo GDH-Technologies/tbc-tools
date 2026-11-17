@@ -9,8 +9,9 @@
  ******************************************************************************/
 #include "segmentsviewerdialog.h"
 
+#include "glossary_generated.h"
+
 #include <QAbstractItemView>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDoubleSpinBox>
@@ -31,7 +32,15 @@
 
 namespace {
 
-const QStringList kKinds = {QStringLiteral("clip"), QStringLiteral("blank"), QStringLiteral("noise"), QStringLiteral("unknown")};
+// Glossary: segment (docs/Tools/tbc-segments-glossary.md#segment): the stored kinds
+const QStringList kKinds = {contentSpanKind(), QStringLiteral("blank"), QStringLiteral("noise"), QStringLiteral("unknown")};
+const QStringList kVerdicts = {QStringLiteral("detected"), QStringLiteral("confirmed"), QStringLiteral("rejected")};
+
+// A kind as shown: a stored legacy name reads as its current one
+QString shownKind(const QString &kind)
+{
+    return isContentSpanKind(kind) ? contentSpanKind() : kind;
+}
 
 } // namespace
 
@@ -81,10 +90,11 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     auto *editLayout = new QHBoxLayout();
     moveStartButton_ = new QPushButton(tr("Move Start Here"), this);
     moveEndButton_ = new QPushButton(tr("Move End Here"), this);
-    splitButton_ = new QPushButton(tr("Split At Current Frame"), this);
+    cutButton_ = new QPushButton(tr("Cut At Current Frame"), this);
+    cutButton_->setToolTip(Glossary::tooltip(Glossary::Term::Cut));
     mergeButton_ = new QPushButton(tr("Merge With Next"), this);
     deleteButton_ = new QPushButton(tr("Delete"), this);
-    for (QPushButton *button : {moveStartButton_, moveEndButton_, splitButton_, mergeButton_, deleteButton_}) {
+    for (QPushButton *button : {moveStartButton_, moveEndButton_, cutButton_, mergeButton_, deleteButton_}) {
         button->setAutoDefault(false);
         editLayout->addWidget(button);
     }
@@ -92,42 +102,47 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     segmentsLayout->addLayout(editLayout);
     tabs_->addTab(segmentsPage, tr("Segments"));
 
-    // Marks: camcorder restarts inside the clips. Always marked; a mark
-    // splits its clip only when its Split box is ticked.
-    auto *marksPage = new QWidget(tabs_);
-    auto *marksLayout = new QVBoxLayout(marksPage);
-    marksLayout->setContentsMargins(0, 0, 0, 0);
-    marksTable_ = new QTableWidget(0, MarkColCount, marksPage);
-    marksTable_->setObjectName(QStringLiteral("marksTable"));
-    marksTable_->setHorizontalHeaderLabels({tr("#"), tr("Time"), tr("Frame"), tr("Kind"), tr("Confidence"), tr("Reason"),
-                                            tr("Source"), tr("Split"), tr("Enabled"), tr("Comment")});
-    marksTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    marksTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    marksTable_->verticalHeader()->setVisible(false);
-    for (int c = 0; c < MarkColCount; ++c) {
-        marksTable_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+    // Shot boundaries inside the content spans; scenes and shots are worked
+    // out from them (Glossary: shot boundary, scene change, verdict)
+    auto *boundaryPage = new QWidget(tabs_);
+    auto *boundaryLayout = new QVBoxLayout(boundaryPage);
+    boundaryLayout->setContentsMargins(0, 0, 0, 0);
+    boundaryTable_ = new QTableWidget(0, BColCount, boundaryPage);
+    boundaryTable_->setObjectName(QStringLiteral("shotBoundaryTable"));
+    boundaryTable_->setHorizontalHeaderLabels({tr("#"), tr("Time"), tr("Frame"), tr("Evidence"), tr("Confidence"),
+                                               tr("Reason"), tr("Source"), tr("Verdict"), tr("Scene Change"),
+                                               tr("Scene Title"), tr("Scene Enabled"), tr("Shot Enabled"), tr("Comment")});
+    const QVector<QPair<int, Glossary::Term>> headerTerms = {
+        {BColEvidence, Glossary::Term::Evidence}, {BColConfidence, Glossary::Term::Confidence},
+        {BColSource, Glossary::Term::Source}, {BColVerdict, Glossary::Term::Verdict},
+        {BColSceneChange, Glossary::Term::SceneChange}, {BColSceneTitle, Glossary::Term::Title},
+        {BColSceneEnabled, Glossary::Term::Enabled}, {BColShotEnabled, Glossary::Term::Enabled}};
+    for (const auto &header : headerTerms) {
+        if (QTableWidgetItem *item = boundaryTable_->horizontalHeaderItem(header.first)) {
+            item->setToolTip(Glossary::tooltip(header.second));
+        }
     }
-    marksTable_->horizontalHeader()->setSectionResizeMode(MarkColReason, QHeaderView::Stretch);
-    marksTable_->horizontalHeader()->setSectionResizeMode(MarkColComment, QHeaderView::Stretch);
-    marksLayout->addWidget(marksTable_, 1);
-    auto *marksButtons = new QHBoxLayout();
-    markGoButton_ = new QPushButton(tr("Go To Mark"), marksPage);
-    addMarkButton_ = new QPushButton(tr("Add Mark At Current Frame"), marksPage);
-    for (QPushButton *button : {markGoButton_, addMarkButton_}) {
+    boundaryTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    boundaryTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    boundaryTable_->verticalHeader()->setVisible(false);
+    for (int c = 0; c < BColCount; ++c) {
+        boundaryTable_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+    }
+    boundaryTable_->horizontalHeader()->setSectionResizeMode(BColReason, QHeaderView::Stretch);
+    boundaryTable_->horizontalHeader()->setSectionResizeMode(BColComment, QHeaderView::Stretch);
+    boundaryLayout->addWidget(boundaryTable_, 1);
+    auto *boundaryButtons = new QHBoxLayout();
+    goBoundaryButton_ = new QPushButton(tr("Go To Shot Boundary"), boundaryPage);
+    addBoundaryButton_ = new QPushButton(tr("Add Shot Boundary At Current Frame"), boundaryPage);
+    addBoundaryButton_->setToolTip(Glossary::tooltip(Glossary::Term::ShotBoundary));
+    for (QPushButton *button : {goBoundaryButton_, addBoundaryButton_}) {
         button->setAutoDefault(false);
-        marksButtons->addWidget(button);
+        boundaryButtons->addWidget(button);
     }
-    marksButtons->addStretch(1);
-    splitAtRestartsCheck_ = new QCheckBox(tr("Split at restarts"), marksPage);
-    splitAtRestartsCheck_->setToolTip(tr("Every derived restart mark splits its clip into two segments (a preference: "
-                                         "it also applies to files opened later). Marks you edited keep their own Split."));
-    restartChaptersCheck_ = new QCheckBox(tr("Chapter at each restart in exports"), marksPage);
-    restartChaptersCheck_->setToolTip(tr("Video exports with metadata cut each segment's chapter at its restart marks "
-                                         "(tbc-video-export --export-metadata-restart-chapters)."));
-    marksButtons->addWidget(splitAtRestartsCheck_);
-    marksButtons->addWidget(restartChaptersCheck_);
-    marksLayout->addLayout(marksButtons);
-    tabs_->addTab(marksPage, tr("Marks"));
+    boundaryButtons->addStretch(1);
+    boundaryLayout->addLayout(boundaryButtons);
+    tabs_->addTab(boundaryPage, tr("Shot Boundaries"));
+    tabs_->setTabToolTip(1, Glossary::tooltip(Glossary::Term::ShotBoundary));
     mainLayout->addWidget(tabs_, 1);
 
     auto *deriveLayout = new QGridLayout();
@@ -136,24 +151,26 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     presetCombo_->addItems({tr("Low sensitivity"), tr("Normal"), tr("High sensitivity"), tr("Custom")});
     presetCombo_->setCurrentIndex(1);
     deriveLayout->addWidget(presetCombo_, 0, 1);
-    deriveLayout->addWidget(new QLabel(tr("Min clip fields"), this), 0, 2);
-    minClipFieldsSpin_ = new QSpinBox(this);
-    minClipFieldsSpin_->setRange(1, 100000);
-    deriveLayout->addWidget(minClipFieldsSpin_, 0, 3);
-    deriveLayout->addWidget(new QLabel(tr("Min non-clip run"), this), 0, 4);
-    minNonClipRunSpin_ = new QSpinBox(this);
-    minNonClipRunSpin_->setRange(1, 100000);
-    deriveLayout->addWidget(minNonClipRunSpin_, 0, 5);
+    deriveLayout->addWidget(new QLabel(tr("Min content span fields"), this), 0, 2);
+    minContentSpanFieldsSpin_ = new QSpinBox(this);
+    minContentSpanFieldsSpin_->setRange(1, 100000);
+    minContentSpanFieldsSpin_->setToolTip(Glossary::tooltip(Glossary::Term::ContentSpan));
+    deriveLayout->addWidget(minContentSpanFieldsSpin_, 0, 3);
+    deriveLayout->addWidget(new QLabel(tr("Min non-content run"), this), 0, 4);
+    minNonContentRunSpin_ = new QSpinBox(this);
+    minNonContentRunSpin_->setRange(1, 100000);
+    deriveLayout->addWidget(minNonContentRunSpin_, 0, 5);
     deriveLayout->addWidget(new QLabel(tr("Noise IRE"), this), 0, 6);
     noiseIreSpin_ = new QDoubleSpinBox(this);
     noiseIreSpin_->setRange(0.1, 100.0);
     noiseIreSpin_->setDecimals(1);
     deriveLayout->addWidget(noiseIreSpin_, 0, 7);
-    deriveLayout->addWidget(new QLabel(tr("Scene IRE"), this), 0, 8);
-    sceneIreSpin_ = new QDoubleSpinBox(this);
-    sceneIreSpin_->setRange(0.1, 100.0);
-    sceneIreSpin_->setDecimals(1);
-    deriveLayout->addWidget(sceneIreSpin_, 0, 9);
+    deriveLayout->addWidget(new QLabel(tr("Spike IRE"), this), 0, 8);
+    fieldDiffSpikeIreSpin_ = new QDoubleSpinBox(this);
+    fieldDiffSpikeIreSpin_->setRange(0.1, 100.0);
+    fieldDiffSpikeIreSpin_->setDecimals(1);
+    fieldDiffSpikeIreSpin_->setToolTip(Glossary::tooltip(Glossary::Term::FieldDiffSpike));
+    deriveLayout->addWidget(fieldDiffSpikeIreSpin_, 0, 9);
     rederiveButton_ = new QPushButton(tr("Re-derive"), this);
     rederiveButton_->setAutoDefault(false);
     rederiveButton_->setToolTip(tr("Derive segments again from the stored decoder events and picture metrics. "
@@ -203,7 +220,7 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
     });
     connect(moveStartButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::moveStartHere);
     connect(moveEndButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::moveEndHere);
-    connect(splitButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::splitAtCurrentFrame);
+    connect(cutButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::cutAtCurrentFrame);
     connect(mergeButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::mergeWithNext);
     connect(deleteButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::deleteSelected);
     connect(presetCombo_, &QComboBox::currentIndexChanged, this, &SegmentsViewerDialog::applyPreset);
@@ -212,31 +229,21 @@ SegmentsViewerDialog::SegmentsViewerDialog(QWidget *parent)
         flushUnappliedEdits();
         updateButtons();
     });
-    connect(marksTable_, &QTableWidget::itemSelectionChanged, this, &SegmentsViewerDialog::updateButtons);
-    connect(marksTable_, &QTableWidget::cellChanged, this, &SegmentsViewerDialog::handleMarkItemChanged);
-    connect(marksTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
-        if (row < 0 || row >= marks_.size() || column == MarkColComment || column == MarkColSplit
-            || column == MarkColEnabled) {
+    connect(boundaryTable_, &QTableWidget::itemSelectionChanged, this, &SegmentsViewerDialog::updateButtons);
+    connect(boundaryTable_, &QTableWidget::cellChanged, this, &SegmentsViewerDialog::handleBoundaryItemChanged);
+    connect(boundaryTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
+        if (row < 0 || row >= boundaries_.size() || column >= BColVerdict) {
             return;
         }
-        emit goToFieldRequested(marks_.at(row).field);
+        emit goToFieldRequested(boundaries_.at(row).field);
     });
-    connect(markGoButton_, &QPushButton::clicked, this, [this]() {
-        const int row = selectedMarkRow();
+    connect(goBoundaryButton_, &QPushButton::clicked, this, [this]() {
+        const int row = selectedBoundaryRow();
         if (row >= 0) {
-            emit goToFieldRequested(marks_.at(row).field);
+            emit goToFieldRequested(boundaries_.at(row).field);
         }
     });
-    connect(addMarkButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::addMarkAtCurrentFrame);
-    connect(splitAtRestartsCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
-        if (applyingState_) return;
-        flushUnappliedEdits();
-        emit splitAtRestartsToggled(enabled);
-    });
-    connect(restartChaptersCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
-        if (applyingState_) return;
-        emit restartChaptersToggled(enabled);
-    });
+    connect(addBoundaryButton_, &QPushButton::clicked, this, &SegmentsViewerDialog::addShotBoundaryAtCurrentFrame);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     applyPreset(1);   // after every button exists: it refreshes their enabled state
@@ -272,24 +279,15 @@ void SegmentsViewerDialog::setState(const SegmentsViewerState &state)
             refreshRow(row);
         }
     }
-    if (!marksDirty_) {
-        if (!(state.marks == marks_) || marksTable_->rowCount() != marks_.size()) {
-            marks_ = state.marks;
-            rebuildMarksTable();
+    if (!boundariesDirty_) {
+        if (!(state.shotBoundaries == boundaries_) || boundaryTable_->rowCount() != boundaries_.size()) {
+            boundaries_ = state.shotBoundaries;
+            rebuildBoundaryTable();
         } else {
-            for (int row = 0; row < marks_.size(); ++row) refreshMarkRow(row);
+            for (int row = 0; row < boundaries_.size(); ++row) refreshBoundaryRow(row);
         }
     } else {
-        for (int row = 0; row < marks_.size(); ++row) refreshMarkRow(row);
-    }
-    {
-        const bool wasApplying = applyingState_;
-        applyingState_ = true;
-        const QSignalBlocker splitBlocker(splitAtRestartsCheck_);
-        const QSignalBlocker chaptersBlocker(restartChaptersCheck_);
-        splitAtRestartsCheck_->setChecked(state.splitAtRestarts);
-        restartChaptersCheck_->setChecked(state.restartChapters);
-        applyingState_ = wasApplying;
+        for (int row = 0; row < boundaries_.size(); ++row) refreshBoundaryRow(row);
     }
     updateInfoLabel();
     updateButtons();
@@ -342,7 +340,7 @@ void SegmentsViewerDialog::rebuildTable()
             if (c == ColKind) {
                 auto *combo = new QComboBox(table_);
                 combo->addItems(kKinds);
-                combo->setCurrentText(segment.kind);
+                combo->setCurrentText(shownKind(segment.kind));
                 connect(combo, &QComboBox::currentTextChanged, this, [this, row](const QString &kind) {
                     handleKindChanged(row, kind);
                 });
@@ -406,7 +404,7 @@ void SegmentsViewerDialog::refreshRow(int row)
     setText(ColComment, segment.comment);
     if (auto *combo = qobject_cast<QComboBox *>(table_->cellWidget(row, ColKind))) {
         const QSignalBlocker comboBlocker(combo);
-        combo->setCurrentText(segment.kind);
+        combo->setCurrentText(shownKind(segment.kind));
     }
     applyingState_ = wasApplying;
 }
@@ -440,26 +438,26 @@ void SegmentsViewerDialog::updateButtons()
     }
     moveStartButton_->setEnabled(canMoveStart);
     moveEndButton_->setEnabled(canMoveEnd);
-    splitButton_->setEnabled(hasRow && hasCurrent
+    cutButton_->setEnabled(hasRow && hasCurrent
                              && state_.currentFirstField > segments_.at(row).startField
                              && state_.currentFirstField < segments_.at(row).endFieldExclusive);
     mergeButton_->setEnabled(hasRow && row + 1 < segments_.size());
     deleteButton_->setEnabled(hasRow);
     rederiveButton_->setEnabled(state_.totalFields > 0);
-    applyButton_->setEnabled(dirty_ || marksDirty_);
-    if (markGoButton_) {
-        markGoButton_->setEnabled(selectedMarkRow() >= 0);
+    applyButton_->setEnabled(dirty_ || boundariesDirty_);
+    if (goBoundaryButton_) {
+        goBoundaryButton_->setEnabled(selectedBoundaryRow() >= 0);
         bool canAdd = hasCurrent;
-        for (const SegmentMark &mark : marks_) {
-            if (qAbs(mark.field - state_.currentFirstField) <= 2) canAdd = false;
+        for (const ShotBoundary &boundary : boundaries_) {
+            if (qAbs(boundary.field - state_.currentFirstField) <= 2) canAdd = false;
         }
-        addMarkButton_->setEnabled(canAdd);
+        addBoundaryButton_->setEnabled(canAdd);
     }
     const bool custom = presetCombo_->currentIndex() == 3;
-    minClipFieldsSpin_->setEnabled(custom);
-    minNonClipRunSpin_->setEnabled(custom);
+    minContentSpanFieldsSpin_->setEnabled(custom);
+    minNonContentRunSpin_->setEnabled(custom);
     noiseIreSpin_->setEnabled(custom);
-    sceneIreSpin_->setEnabled(custom);
+    fieldDiffSpikeIreSpin_->setEnabled(custom);
 }
 
 void SegmentsViewerDialog::updateInfoLabel()
@@ -483,16 +481,16 @@ void SegmentsViewerDialog::updateInfoLabel()
         if (state_.derivedAtLoad) {
             text += tr(" Derived when the file was opened; Save Metadata stores them.");
         }
-        if (!marks_.isEmpty()) {
-            qint32 enabledMarks = 0, splitMarks = 0;
-            for (const SegmentMark &mark : marks_) {
-                if (!mark.enabled) continue;
-                enabledMarks++;
-                splitMarks += mark.split ? 1 : 0;
+        if (!boundaries_.isEmpty()) {
+            qint32 active = 0, sceneChanges = 0;
+            for (const ShotBoundary &boundary : boundaries_) {
+                if (boundary.rejected()) continue;
+                active++;
+                sceneChanges += boundary.sceneChange ? 1 : 0;
             }
-            text += tr(" %1 restart marks (%2 split).").arg(enabledMarks).arg(splitMarks);
+            text += tr(" %1 shot boundaries, %2 marked scene changes.").arg(active).arg(sceneChanges);
         }
-        if (dirty_ || marksDirty_) {
+        if (dirty_ || boundariesDirty_) {
             text += tr(" Unapplied edits.");
         }
     }
@@ -621,7 +619,7 @@ void SegmentsViewerDialog::moveEndHere()
     updateButtons();
 }
 
-void SegmentsViewerDialog::splitAtCurrentFrame()
+void SegmentsViewerDialog::cutAtCurrentFrame()
 {
     const int row = selectedRow();
     const qint32 field = state_.currentFirstField;
@@ -695,14 +693,14 @@ void SegmentsViewerDialog::applyPreset(int index)
         updateButtons();
         return;
     }
-    const QSignalBlocker b1(minClipFieldsSpin_);
-    const QSignalBlocker b2(minNonClipRunSpin_);
+    const QSignalBlocker b1(minContentSpanFieldsSpin_);
+    const QSignalBlocker b2(minNonContentRunSpin_);
     const QSignalBlocker b3(noiseIreSpin_);
-    const QSignalBlocker b4(sceneIreSpin_);
-    minClipFieldsSpin_->setValue(thresholds.minClipFields);
-    minNonClipRunSpin_->setValue(thresholds.minNonClipRunFields);
+    const QSignalBlocker b4(fieldDiffSpikeIreSpin_);
+    minContentSpanFieldsSpin_->setValue(thresholds.minContentSpanFields);
+    minNonContentRunSpin_->setValue(thresholds.minNonContentRunFields);
     noiseIreSpin_->setValue(thresholds.noiseThresholdIre);
-    sceneIreSpin_->setValue(thresholds.sceneThresholdIre);
+    fieldDiffSpikeIreSpin_->setValue(thresholds.fieldDiffSpikeIre);
     updateButtons();
 }
 
@@ -717,10 +715,10 @@ void SegmentsViewerDialog::rederive()
     } else if (index == 1) {
         thresholds = SegmentsThresholds::preset(SegmentSensitivity::Normal);
     } else {
-        thresholds.minClipFields = minClipFieldsSpin_->value();
-        thresholds.minNonClipRunFields = minNonClipRunSpin_->value();
+        thresholds.minContentSpanFields = minContentSpanFieldsSpin_->value();
+        thresholds.minNonContentRunFields = minNonContentRunSpin_->value();
         thresholds.noiseThresholdIre = noiseIreSpin_->value();
-        thresholds.sceneThresholdIre = sceneIreSpin_->value();
+        thresholds.fieldDiffSpikeIre = fieldDiffSpikeIreSpin_->value();
     }
     flushUnappliedEdits();
     emit rederiveRequested(thresholds);
@@ -733,155 +731,195 @@ void SegmentsViewerDialog::flushUnappliedEdits()
         dirty_ = false;
         emit segmentsUpdated(segments_);
     }
-    if (marksDirty_) {
-        marksDirty_ = false;
-        emit marksUpdated(marks_);
+    if (boundariesDirty_) {
+        boundariesDirty_ = false;
+        emit shotBoundariesUpdated(boundaries_);
     }
 }
 
-void SegmentsViewerDialog::rebuildMarksTable()
+void SegmentsViewerDialog::rebuildBoundaryTable()
 {
     const bool wasApplying = applyingState_;
     applyingState_ = true;
-    const QSignalBlocker blocker(marksTable_);
-    const int previousRow = marksTable_->currentRow();
-    marksTable_->setRowCount(0);
-    marksTable_->setRowCount(marks_.size());
-    for (int row = 0; row < marks_.size(); ++row) {
-        for (int c = 0; c < MarkColCount; ++c) {
+    const QSignalBlocker blocker(boundaryTable_);
+    const int previousRow = boundaryTable_->currentRow();
+    boundaryTable_->setRowCount(0);
+    boundaryTable_->setRowCount(boundaries_.size());
+    for (int row = 0; row < boundaries_.size(); ++row) {
+        for (int c = 0; c < BColCount; ++c) {
+            if (c == BColVerdict) {
+                auto *combo = new QComboBox(boundaryTable_);
+                combo->addItems(kVerdicts);
+                combo->setToolTip(Glossary::tooltip(Glossary::Term::Verdict));
+                connect(combo, &QComboBox::currentTextChanged, this, [this, row](const QString &verdict) {
+                    handleVerdictChanged(row, verdict);
+                });
+                boundaryTable_->setCellWidget(row, c, combo);
+                continue;
+            }
             auto *item = new QTableWidgetItem();
             Qt::ItemFlags flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
-            if (c == MarkColComment) {
+            if (c == BColComment || c == BColSceneTitle) {
                 flags |= Qt::ItemIsEditable;
-            } else if (c == MarkColSplit || c == MarkColEnabled) {
+            } else if (c == BColSceneChange || c == BColSceneEnabled || c == BColShotEnabled) {
                 flags |= Qt::ItemIsUserCheckable;
             }
             item->setFlags(flags);
-            marksTable_->setItem(row, c, item);
+            boundaryTable_->setItem(row, c, item);
         }
-        refreshMarkRow(row);
+        refreshBoundaryRow(row);
     }
-    if (previousRow >= 0 && previousRow < marksTable_->rowCount()) {
-        marksTable_->selectRow(previousRow);
+    if (previousRow >= 0 && previousRow < boundaryTable_->rowCount()) {
+        boundaryTable_->selectRow(previousRow);
     }
     applyingState_ = wasApplying;
 }
 
-void SegmentsViewerDialog::refreshMarkRow(int row)
+void SegmentsViewerDialog::refreshBoundaryRow(int row)
 {
-    if (row < 0 || row >= marks_.size() || row >= marksTable_->rowCount()) {
+    if (row < 0 || row >= boundaries_.size() || row >= boundaryTable_->rowCount()) {
         return;
     }
-    const QSignalBlocker blocker(marksTable_);
-    const SegmentMark &mark = marks_.at(row);
+    const QSignalBlocker blocker(boundaryTable_);
+    const bool wasApplying = applyingState_;
+    applyingState_ = true;
+    const ShotBoundary &boundary = boundaries_.at(row);
     qint32 frame = -1;
-    for (int i = 0; i < state_.marks.size() && i < state_.markFrames.size(); ++i) {
-        if (state_.marks.at(i).field == mark.field) {
-            frame = state_.markFrames.at(i);
+    for (int i = 0; i < state_.shotBoundaries.size() && i < state_.shotBoundaryFrames.size(); ++i) {
+        if (state_.shotBoundaries.at(i).field == boundary.field) {
+            frame = state_.shotBoundaryFrames.at(i);
             break;
         }
     }
     if (frame < 1) {
-        frame = mark.field / 2 + 1;
+        frame = boundary.field / 2 + 1;
     }
     auto setText = [this, row](int column, const QString &text) {
-        if (QTableWidgetItem *item = marksTable_->item(row, column)) {
+        if (QTableWidgetItem *item = boundaryTable_->item(row, column)) {
             item->setText(text);
         }
     };
-    setText(MarkColId, QString::number(mark.id));
-    setText(MarkColTime, frameToTimecode(frame));
-    setText(MarkColFrame, QString::number(frame));
-    setText(MarkColKind, mark.kind);
-    setText(MarkColConfidence, QStringLiteral("%1%").arg(qRound(mark.confidence * 100.0)));
-    setText(MarkColReason, mark.reason);
-    setText(MarkColSource, mark.source);
-    if (QTableWidgetItem *item = marksTable_->item(row, MarkColReason)) {
-        item->setToolTip(mark.reason);
+    auto setCheck = [this, row](int column, bool checked) {
+        if (QTableWidgetItem *item = boundaryTable_->item(row, column)) {
+            item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+            item->setText(checked ? tr("yes") : tr("no"));
+        }
+    };
+    setText(BColId, QString::number(boundary.id));
+    setText(BColTime, frameToTimecode(frame));
+    setText(BColFrame, QString::number(frame));
+    setText(BColEvidence, boundary.evidence);
+    setText(BColConfidence, QStringLiteral("%1%").arg(qRound(boundary.confidence * 100.0)));
+    setText(BColReason, boundary.reason);
+    if (QTableWidgetItem *item = boundaryTable_->item(row, BColReason)) {
+        item->setToolTip(boundary.reason);
     }
-    if (QTableWidgetItem *item = marksTable_->item(row, MarkColSplit)) {
-        item->setCheckState(mark.split ? Qt::Checked : Qt::Unchecked);
-        item->setText(mark.split ? tr("yes") : tr("no"));
+    setText(BColSource, boundary.source);
+    setCheck(BColSceneChange, boundary.sceneChange);
+    setText(BColSceneTitle, boundary.sceneTitle);
+    setCheck(BColSceneEnabled, boundary.sceneEnabled);
+    setCheck(BColShotEnabled, boundary.shotEnabled);
+    setText(BColComment, boundary.comment);
+    if (auto *combo = qobject_cast<QComboBox *>(boundaryTable_->cellWidget(row, BColVerdict))) {
+        const QSignalBlocker comboBlocker(combo);
+        combo->setCurrentText(boundary.verdict);
     }
-    if (QTableWidgetItem *item = marksTable_->item(row, MarkColEnabled)) {
-        item->setCheckState(mark.enabled ? Qt::Checked : Qt::Unchecked);
-        item->setText(mark.enabled ? tr("yes") : tr("dismissed"));
-    }
-    setText(MarkColComment, mark.comment);
+    applyingState_ = wasApplying;
 }
 
-int SegmentsViewerDialog::selectedMarkRow() const
+int SegmentsViewerDialog::selectedBoundaryRow() const
 {
-    if (!marksTable_) return -1;
-    const int row = marksTable_->currentRow();
-    return (row >= 0 && row < marks_.size()) ? row : -1;
+    if (!boundaryTable_) return -1;
+    const int row = boundaryTable_->currentRow();
+    return (row >= 0 && row < boundaries_.size()) ? row : -1;
 }
 
-// An edited mark is the user's: a re-derive keeps it as it is
-void SegmentsViewerDialog::markMarkUserEdited(SegmentMark &mark)
+// An edited boundary is a person's: a re-derive keeps it as it is. Any edit
+// short of rejecting it is also a review that it is real.
+void SegmentsViewerDialog::boundaryUserEdited(ShotBoundary &boundary)
 {
-    mark.source = QStringLiteral("user");
-    mark.updatedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    if (mark.createdBy.isEmpty()) {
-        mark.createdBy = QStringLiteral("tbc-analyse");
+    boundary.source = QStringLiteral("user");
+    boundary.updatedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    if (boundary.createdBy.isEmpty()) {
+        boundary.createdBy = QStringLiteral("tbc-analyse");
     }
-    marksDirty_ = true;
+    if (boundary.verdict == QLatin1String("detected")) {
+        boundary.verdict = QStringLiteral("confirmed");
+    }
+    boundariesDirty_ = true;
 }
 
-void SegmentsViewerDialog::handleMarkItemChanged(int row, int column)
+void SegmentsViewerDialog::handleBoundaryItemChanged(int row, int column)
 {
-    if (applyingState_ || row < 0 || row >= marks_.size()) {
+    if (applyingState_ || row < 0 || row >= boundaries_.size()) {
         return;
     }
-    QTableWidgetItem *item = marksTable_->item(row, column);
+    QTableWidgetItem *item = boundaryTable_->item(row, column);
     if (!item) {
         return;
     }
-    SegmentMark &mark = marks_[row];
-    if (column == MarkColComment) {
-        if (mark.comment == item->text().trimmed()) return;
-        mark.comment = item->text().trimmed();
-    } else if (column == MarkColSplit) {
-        const bool split = item->checkState() == Qt::Checked;
-        if (mark.split == split) return;
-        mark.split = split;
-    } else if (column == MarkColEnabled) {
-        const bool enabled = item->checkState() == Qt::Checked;
-        if (mark.enabled == enabled) return;
-        mark.enabled = enabled;
+    ShotBoundary &boundary = boundaries_[row];
+    const bool checked = item->checkState() == Qt::Checked;
+    if (column == BColComment) {
+        if (boundary.comment == item->text().trimmed()) return;
+        boundary.comment = item->text().trimmed();
+    } else if (column == BColSceneTitle) {
+        if (boundary.sceneTitle == item->text().trimmed()) return;
+        boundary.sceneTitle = item->text().trimmed();
+    } else if (column == BColSceneChange) {
+        if (boundary.sceneChange == checked) return;
+        boundary.sceneChange = checked;
+    } else if (column == BColSceneEnabled) {
+        if (boundary.sceneEnabled == checked) return;
+        boundary.sceneEnabled = checked;
+    } else if (column == BColShotEnabled) {
+        if (boundary.shotEnabled == checked) return;
+        boundary.shotEnabled = checked;
     } else {
         return;
     }
-    markMarkUserEdited(mark);
-    refreshMarkRow(row);
+    boundaryUserEdited(boundary);
+    refreshBoundaryRow(row);
     updateInfoLabel();
     updateButtons();
 }
 
-void SegmentsViewerDialog::addMarkAtCurrentFrame()
+void SegmentsViewerDialog::handleVerdictChanged(int row, const QString &verdict)
+{
+    if (applyingState_ || row < 0 || row >= boundaries_.size() || boundaries_.at(row).verdict == verdict) {
+        return;
+    }
+    ShotBoundary &boundary = boundaries_[row];
+    boundaryUserEdited(boundary);
+    boundary.verdict = verdict;   // after boundaryUserEdited, which confirms a detected one
+    refreshBoundaryRow(row);
+    updateInfoLabel();
+    updateButtons();
+}
+
+void SegmentsViewerDialog::addShotBoundaryAtCurrentFrame()
 {
     const qint32 field = state_.currentFirstField;
     if (field < 0) {
         return;
     }
-    for (const SegmentMark &existing : marks_) {
+    for (const ShotBoundary &existing : boundaries_) {
         if (qAbs(existing.field - field) <= 2) return;
     }
     qint32 maxId = 0;
-    for (const SegmentMark &existing : marks_) maxId = qMax(maxId, existing.id);
-    for (const SegmentMark &existing : state_.marks) maxId = qMax(maxId, existing.id);
-    SegmentMark mark;
-    mark.id = maxId + 1;
-    mark.field = field;
-    mark.confidence = 1.0;
-    mark.reason = tr("added by hand");
-    mark.split = splitAtRestartsCheck_ && splitAtRestartsCheck_->isChecked();
-    markMarkUserEdited(mark);
+    for (const ShotBoundary &existing : boundaries_) maxId = qMax(maxId, existing.id);
+    for (const ShotBoundary &existing : state_.shotBoundaries) maxId = qMax(maxId, existing.id);
+    ShotBoundary boundary;
+    boundary.id = maxId + 1;
+    boundary.field = field;
+    boundary.confidence = 1.0;
+    boundary.reason = tr("added by hand");
+    boundaryUserEdited(boundary);
     int insertAt = 0;
-    while (insertAt < marks_.size() && marks_.at(insertAt).field < field) insertAt++;
-    marks_.insert(insertAt, mark);
-    rebuildMarksTable();
-    marksTable_->selectRow(insertAt);
+    while (insertAt < boundaries_.size() && boundaries_.at(insertAt).field < field) insertAt++;
+    boundaries_.insert(insertAt, boundary);
+    rebuildBoundaryTable();
+    boundaryTable_->selectRow(insertAt);
     updateInfoLabel();
     updateButtons();
 }

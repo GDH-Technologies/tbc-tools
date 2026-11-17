@@ -1,11 +1,13 @@
 # tbc-segments
 
-**Recording-boundary analysis of TBC metadata and fields**
+**Segment analysis of TBC metadata and fields**
 
 ## Overview
 
-tbc-segments finds where a recording was started, stopped, or interrupted on a
-tape or disc capture. It reads the decode metadata (`.tbc.db`, or the legacy
+tbc-segments finds where recorded picture starts and ends on a tape or disc
+capture, and where one camera run gives way to the next. Every term below is
+defined once, in the [segment glossary](../../docs/Tools/tbc-segments-glossary.md).
+It reads the decode metadata (`.tbc.db`, or the legacy
 `.tbc.json`; a `.tbc.json` with a `.tbc.db` sibling opens the database) through
 the tbc library and reports:
 
@@ -18,13 +20,19 @@ the tbc library and reports:
   decoder itself recorded at a seam (`no_sync_pulses`, `no_field_start`,
   `duplicate_field`, `dropped_field`, `resume_seam`, `redo`) when the decode
   stored decoder events;
-- **segments**: the recording segments derived from the sections and events
-  (or the segments stored in the metadata, when there are any), each with the
-  `--start/--length` frames an export of it covers.
+- **[segments](../../docs/Tools/tbc-segments-glossary.md#segment)**: the
+  content spans, noise, blank and unknown stretches derived from the sections
+  and events (or the segments stored in the metadata, when there are any), each
+  with the `--start/--length` frames an export of it covers;
+- **[shot boundaries](../../docs/Tools/tbc-segments-glossary.md#shot-boundary)**
+  inside the content spans, and the **scenes** and **shots** worked out from
+  them.
 
 Per-field picture metrics (active luma mean, same-parity field difference n vs
 n−2, back-porch noise, blanking and sync-tip level errors, colour-burst
-amplitude) add `scene_change`, `noise`, `blank_video` and `no_burst` events.
+amplitude) add
+[`field_diff_spike`](../../docs/Tools/tbc-segments-glossary.md#field-diff-spike),
+`noise`, `blank_video` and `no_burst` events.
 The decoder stores them with the metadata (vhs-decode schema 2 and later); for
 a decode that has none, `--tbc <luma.tbc>` walks the raw fields to measure
 them (burst from the chroma TBC beside the luma one when there is one,
@@ -47,9 +55,11 @@ the feature stays apart from the shared tool sources and can move as one:
 
 | Directory | Target | What |
 | --- | --- | --- |
-| `core/` | `tbc-segments-core` (static, Qt Core) | the rules (`segments.h`), camcorder restart marks (`restartmarks.h`) and their store in the `.tbc.db` (`markstore.h`), the report (`segmentsreport.h`, used by `tbc-export-metadata --segments-json`), whole-file derivation for a loaded file (`segmentsderive.h`), segments as export chapters (`segmentchapters.h`, used by `--ffmetadata`), the per-segment export plan (`segmentexportplan.h`, used by tbc-analyse's Export tab), the field walk (`fieldmetrics.h`, `fieldwalkpool.h`) |
-| `gui/` | `tbc-segments-gui` (static, Qt Widgets) | the Segments viewer with its Marks tab (`segmentsviewerdialog.h`), the module's preferences (`segmentpreferences.h`) and `SegmentsController`, which carries tbc-analyse's segment behaviour (viewer, edits, re-derive, set In/Out, timeline ticks and tints, chapter skip, readout, timeline menu); the main window reaches it through `SegmentsController::Hooks` |
+| `core/` | `tbc-segments-core` (static, Qt Core) | the rules (`segments.h`), shot boundaries (`shotboundaries.h`) and their store in the `.tbc.db` (`shotboundarystore.h`), scenes and shots worked out from them (`sceneshots.h`), the glossary's terms and tooltips (`glossary_generated.h`), the report (`segmentsreport.h`, used by `tbc-export-metadata --segments-json`), whole-file derivation for a loaded file (`segmentsderive.h`), segments as export chapters (`segmentchapters.h`, used by `--ffmetadata`), the per-segment export plan (`segmentexportplan.h`, used by tbc-analyse's Export tab), the field walk (`fieldmetrics.h`, `fieldwalkpool.h`) |
+| `gui/` | `tbc-segments-gui` (static, Qt Widgets) | the Segments viewer with its Shot Boundaries tab (`segmentsviewerdialog.h`), the module's preferences (`segmentpreferences.h`) and `SegmentsController`, which carries tbc-analyse's segment behaviour (viewer, edits, re-derive, set In/Out, timeline ticks and tints, chapter skip, readout, timeline menu); the main window reaches it through `SegmentsController::Hooks` |
 | `cli/` | `tbc-segments` | this command and its script tests |
+| `glossary/` | ctest `tbc-segments-glossary` | `glossary.json`, the one source of the segment vocabulary, and `generate_glossary.py`, which writes `core/glossary_generated.h` and the [glossary page](../../docs/Tools/tbc-segments-glossary.md) (both committed, so a build needs no Python) and lints the module for retired words |
+| `tools/` | — | `extract-shot-boundary-fixture.py`, which builds a labelled fixture from a `.tbc.db` |
 
 The data model (`TbcMetaData::Segment`, `DecoderEvent`, `PictureMetrics` and
 their tables) stays in the tbc library with the rest of the metadata.
@@ -80,7 +90,7 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
                               the chroma TBC for it (halves the walk's I/O; a
                               stored burst amplitude is kept, not cleared)
   -t, --threads <n>           worker threads for the walk (logical CPUs)
-  --scene-threshold-ire <x>   same-parity difference marking a scene change (12)
+  --field-diff-spike-ire <x>  same-parity difference that is a field diff spike (12)
   --noise-threshold-ire <x>   back-porch noise marking snow (6)
   --blank-luma-ire <x>        active luma at or below which a quiet field is blank (5),
                               when its levels have collapsed too (below):
@@ -88,17 +98,17 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
                               above, nominal (5); a dark recorded scene keeps
                               its levels and stays picture
   --blank-below-black-ire <x> or active luma below this (-5): no picture at all
-  --no-restart-marks          do not detect camcorder restart marks
-  --split-restarts            newly derived restart marks split their clip
-                              (default: marked only)
-  --restart-pair-match <f>    restart: the weaker spike of the pair is at least
+  --no-shot-boundaries        do not detect shot boundaries
+  --shot-boundary-pair-match <f>    the weaker spike of the pair is at least
                               this fraction of the stronger (0.9)
-  --restart-min-peak-ire <x>  restart: the pair's peak field difference (5)
-  --restart-min-contrast <x>  restart: peak over the local background (1.5)
-  --restart-max-neighbour-ratio <f>  restart: the fields either side of the
+  --shot-boundary-min-peak-ire <x>  the pair's peak field difference (5)
+  --shot-boundary-min-contrast <x>  peak over the local background (1.5)
+  --shot-boundary-max-neighbour-ratio <f>  the fields either side of the
                               pair at most this fraction of its peak (0.6)
-  --min-clip-fields <n>       shorter sections are 'unknown', never a clip (10)
-  --min-non-clip-run-fields <n>  a noise/blank run this long splits a section (50)
+  --min-content-span-fields <n>     a shorter piece is 'unknown', never a
+                              content span (10)
+  --min-non-content-run-fields <n>  a noise/blank run at least this long ends
+                              a content span (50)
   --force-walk                walk even when metrics are stored
   --verify-stored             walk and compare with the stored metrics; exit 1
                               above 0.05 IRE of disagreement
@@ -106,9 +116,10 @@ tbc-segments <input.tbc.db|input.tbc.json> [options]
                               is stored) and reconstructed decoder events in the
                               metadata, SQLite first
   --write-segments            with --write: store the derived segments when none
-                              are stored
+                              are stored, and the shot boundaries
   --force                     with --write-segments: replace stored derived
-                              segments (user segments are always kept)
+                              segments and detected shot boundaries (user
+                              segments, user and rejected boundaries are kept)
   --per-field                 include per-field arrays
   --summary                   human summary on stderr
   -d, --debug / -q, --quiet   standard logging options
@@ -208,12 +219,21 @@ captures; the tool undoes that exactly as tbc-audio-align does
              "severity": 0.9, "detail": {"seamAfterField": 4999, "deltaSamples": 3336667, "deltaFields": 5.0,
                                         "missingFields": 4, "decoderConfirmed": true}}],
  "counts": {"gap": 1, "sync_loss": 0, "parity_break": 0, "skipped_field": 0, "dropout_storm": 0,
-            "scene_change": 0, "noise": 0, "blank_video": 0, "no_burst": 0, "decoderEvents": 1},
+            "field_diff_spike": 0, "noise": 0, "blank_video": 0, "no_burst": 0, "shot_boundary": 0,
+            "decoderEvents": 1},
  "segments": [{"id": 1, "startField": 0, "endFieldExclusive": 5000, "startSeconds": 0.0, "endSeconds": 83.4,
-               "kind": "clip", "source": "derived", "enabled": true, "title": "", "comment": "",
+               "kind": "content_span", "source": "derived", "enabled": true, "title": "", "comment": "",
                "createdBy": "tbc-segments", "updatedAt": "2026-09-06T12:00:00Z",
                "startFrame": 1, "lengthFrames": 2500}],
  "segmentsSource": "stored|derived|none",
+ "shotBoundaries": [{"id": 1, "field": 2400, "seconds": 40.04, "frame": 1201, "evidence": "picture|rf_gap",
+                     "source": "derived|user", "verdict": "detected|confirmed|rejected", "sceneChange": false,
+                     "sceneTitle": "", "sceneEnabled": true, "shotEnabled": true, "confidence": 0.92,
+                     "reason": "...", "comment": "", "createdBy": "tbc-segments", "updatedAt": "...", "detail": {...}}],
+ "shotBoundariesSource": "stored|derived|none",
+ "scenes": [{"id": 1, "spanId": 1, "number": 1, "startField": 0, "endFieldExclusive": 5000, "startSeconds": 0.0,
+             "endSeconds": 83.4, "shotBoundaryId": -1, "title": "Segment 1", "enabled": true, "startFrame": 1, "lengthFrames": 2500}],
+ "shots": [{"id": 1, "spanId": 1, "sceneId": 1, "number": 1, ...}],
  "perField": {...},        // with --per-field
  "fieldMetrics": {...}}    // with --per-field, when metrics are stored or walked
 ```
@@ -223,11 +243,11 @@ decoders disagree on what a healthy field scores (vhs-decode 45, ld-decode 100)
 while both force 10 or 0 on a fault; the applied value is reported as
 `thresholds.syncConfThresholdEffective`.
 
-`--scene-threshold-ire` and `--noise-threshold-ire` are floors: the value applied
+`--field-diff-spike-ire` and `--noise-threshold-ire` are floors: the value applied
 is the larger of the option and 2.5× the file's own median field difference /
 back-porch noise, because real tape (an EP VHS decode especially) raises both
 baselines. The applied values are reported under `fieldData.thresholds` as
-`sceneThresholdIreEffective` and `noiseThresholdIreEffective`. A scene-change
+`fieldDiffSpikeIreEffective` and `noiseThresholdIreEffective`. A field diff spike
 candidate whose field, or whose n−2 partner, is inside a noise run is dropped:
 snow makes every field difference enormous and the `noise` run already says so.
 
@@ -239,41 +259,54 @@ within a field of a `gap` marks it `decoderConfirmed`.
 
 ### Segments and frames
 
-Every gapless section becomes one segment, split further at noise or blank
-runs of at least `--min-non-clip-run-fields`. Snow dips under the noise
+Every gapless section becomes one segment, ended early at a noise or blank
+run of at least `--min-non-content-run-fields`. Snow dips under the noise
 threshold on a field or two, so inside a run a gap shorter than
-`--min-clip-fields` counts as part of it. Each piece is classified `noise`
-(mostly noise or no burst), `blank` (mostly blank: dark, quiet and with the
-levels collapsed, see `--blank-level-dev-ire`), `unknown` (shorter than
-`--min-clip-fields`, or mostly sync loss) or `clip`; only clips are enabled.
-Adjacent non-clip pieces then merge into one, across gaps too (the decoder
-resyncs inside snow), as noise or blank by whichever covers more of it; and a
-piece shorter than `--min-clip-fields` between two clips (a one-field section
-left at a resync) joins the following clip, so the boundary stays where it
-started. One unrecorded stretch is therefore one segment, however often the
-snow flickers.
+`--min-content-span-fields` counts as part of it. Each piece is classified
+[`noise`](../../docs/Tools/tbc-segments-glossary.md#noise) (mostly noise or no burst),
+[`blank`](../../docs/Tools/tbc-segments-glossary.md#blank) (mostly blank: dark, quiet and with the levels
+collapsed, see `--blank-level-dev-ire`), [`unknown`](../../docs/Tools/tbc-segments-glossary.md#unknown) (shorter
+than `--min-content-span-fields`, or mostly sync loss) or
+[`content_span`](../../docs/Tools/tbc-segments-glossary.md#content-span); only content spans are
+[enabled](../../docs/Tools/tbc-segments-glossary.md#enabled). Adjacent non-content pieces then merge into one,
+across gaps too (the decoder resyncs inside snow), as noise or blank by
+whichever covers more of it; a piece shorter than `--min-content-span-fields`
+between two content spans (a one-field section left at a resync) joins the
+following one; and two content pieces that meet across an RF gap, with no
+noise or blank between them, merge into one content span, the gap becoming a
+shot boundary (below). One unrecorded stretch is therefore one segment, however
+often the snow flickers, and one stretch of recorded picture is one content
+span, however often the decoder lost sync inside it. A content span runs from
+its [span start](../../docs/Tools/tbc-segments-glossary.md#span-start) to its [span end](../../docs/Tools/tbc-segments-glossary.md#span-end).
+A stored segment of the legacy kind `clip` reads as a content span. <!-- glossary-legacy -->
+
 `startFrame` / `lengthFrames` are the 1-based frame range an export of the
 segment covers (`tbc-video-export --start/--length`), under the mixed-frame
 rule: a frame whose second field starts a segment belongs to the segment that
 owns its first field, so contiguous segments tile the frame range exactly once
 and a segment holding only a second field (no frame of its own) reports 0 / 0.
+Scenes and shots follow the same rule.
 
-### Camcorder restart marks
+### Shot boundaries
 
 A camcorder that stops and starts recording leaves a clean edit: no RF gap,
-no snow, no sync loss, so nothing above splits there. What it does leave is a
-picture that changes between two fields. The same-parity field difference
-(field n against n-2) then spikes on two adjacent fields, n and n+1, each
-comparing a new-take field with an old-take one, and drops back at n+2. That
-is a restart mark when:
+no snow, no sync loss, so nothing above ends a content span there. It is a
+[shot boundary](../../docs/Tools/tbc-segments-glossary.md#shot-boundary): one [shot](../../docs/Tools/tbc-segments-glossary.md#shot) ends and the next
+begins with nothing between them. What it leaves is a picture that changes
+between two fields. The same-parity field difference (field n against n-2)
+then spikes on two adjacent fields, n and n+1, each comparing a field of the
+new shot with one of the old, and drops back at n+2. That is a shot boundary
+with [evidence](../../docs/Tools/tbc-segments-glossary.md#evidence) `picture` when:
 
-- the pair matches: the weaker spike is at least `--restart-pair-match` (0.9)
-  of the stronger, and the peak is at least `--restart-min-peak-ire` (5);
-- it stands out: the peak is at least `--restart-min-contrast` (1.5) times the
-  local background (the larger median of fields n-12..n-2 and n+3..n+14);
+- the pair matches: the weaker spike is at least `--shot-boundary-pair-match`
+  (0.9) of the stronger, and the peak is at least
+  `--shot-boundary-min-peak-ire` (5);
+- it stands out: the peak is at least `--shot-boundary-min-contrast` (1.5)
+  times the local background (the larger median of fields n-12..n-2 and
+  n+3..n+14);
 - its neighbours are quiet: fields n-1 and n+2 sit no higher than halfway from
   the background to the peak, and no higher than
-  `--restart-max-neighbour-ratio` (0.6) of it (motion keeps them high);
+  `--shot-boundary-max-neighbour-ratio` (0.6) of it (motion keeps them high);
 - neither field is snow, and no flash falls in the 12 fields before it.
 
 A photo flash lights a single field, so its spikes land on n and n+2 with n+1
@@ -281,58 +314,111 @@ quiet, and the pair test rejects it. The camera's exposure can then settle
 over the next few fields into a matched pair, which is why a flash
 (one field more than 10 IRE above its neighbours) in the window before rules
 a pair out. A cut inside a video playing on a screen in shot ramps over
-2-3 fields, so its spikes don't match.
+2-3 fields, so its spikes don't match. A
+[field diff spike](../../docs/Tools/tbc-segments-glossary.md#field-diff-spike) on its own is raw evidence, not a
+shot boundary: flashes and fast motion make them too.
 
-Marks are found only inside clips, away from their edges. Each carries a
-confidence (50% for passing, the rest from how cleanly it passes) and a
-reason in words. The rule was tuned on a hand-labelled Video8 tape:
-`test-data/segments/video8-restart-labels.json` holds the field metrics around
-30 restarts and 10 look-alikes (flashes and their aftermath, cuts on a screen),
-and `testsegments` checks every restart is marked and none of the rest is.
+An [RF gap](../../docs/Tools/tbc-segments-glossary.md#rf-gap) strictly inside a content span is a shot boundary too,
+with evidence `rf_gap` and a confidence of 0.9 when the decoder recorded the
+seam (0.75 when it did not). Boundaries closer than four fields are one: the
+stronger stands, and picture evidence wins over an RF gap at the same place.
 
-**A restart is always marked. Whether it splits its clip is the mark's own
-flag, and it is off by default:** a tape derives one segment per stretch of
-recording, with a mark at every take. `--split-restarts` (or tbc-analyse's
-Split at restarts) sets the flag on newly derived marks; a mark the user
-edits keeps its own.
+Shot boundaries are found only inside content spans, away from their edges.
+Each carries a [confidence](../../docs/Tools/tbc-segments-glossary.md#confidence) (50% for passing, the rest from
+how cleanly it passes) and a reason in words. The picture rule was tuned on a
+hand-labelled Video8 tape: `test-data/segments/video8-shot-boundary-labels.json`
+holds the field metrics around 30 shot boundaries and 10 look-alikes (flashes
+and their aftermath, cuts on a screen), and `testsegments` checks that every
+shot boundary is found and none of the rest is.
 
-Marks are stored in the `.tbc.db` in this module's own tables: `segment_mark`
-(field, kind, source, enabled, split, confidence, reason, detail, comment,
-provenance) and `tbc_segments_meta` (`marks_schema = 1`). They are not part of
-the tbc library's schema or its `user_version`, and the `.tbc.json` never
-carries them. `--write-segments` stores them with the segments under the same
-rule: when none are stored, or with `--force` (derived marks replaced, user
-and dismissed marks kept). A tool that rewrites the whole database drops them.
-tbc-analyse's Save does exactly that, and writes them back straight after.
-The report gains `marks` (each with field, seconds, frame, source, enabled,
-split, confidence, reason, detail), `marksSource` (`stored`, `derived` or
-`none`), a `restart` event per enabled mark, and `counts.restart`.
+A shot boundary never ends a segment. Each has a
+[verdict](../../docs/Tools/tbc-segments-glossary.md#verdict) (`detected`, then `confirmed` or `rejected` by a
+person), a [source](../../docs/Tools/tbc-segments-glossary.md#source) (`derived` or `user`), and per-level flags:
+`sceneChange` with `sceneTitle` and `sceneEnabled`, and `shotEnabled`. A
+rejected one counts for nothing below. To end a segment at a frame by hand,
+[cut](../../docs/Tools/tbc-segments-glossary.md#cut) it in tbc-analyse's Segments viewer.
+
+### Scenes and shots
+
+Scenes and shots are worked out from the segments and shot boundaries, never
+stored, and appear in the report as `scenes` and `shots`:
+
+| | Starts at | Enabled | Title when none is given |
+| --- | --- | --- | --- |
+| [Scene](../../docs/Tools/tbc-segments-glossary.md#scene) | the span start, and every shot boundary marked as a [scene change](../../docs/Tools/tbc-segments-glossary.md#scene-change) | the boundary's `sceneEnabled`; the first scene takes the span's flag | the boundary's `sceneTitle`, else `<span title> · scene n`; the first scene takes the span's title |
+| [Shot](../../docs/Tools/tbc-segments-glossary.md#shot) | the scene start, and every other shot boundary | the boundary's `shotEnabled`; the first shot of a span takes the span's flag | `<scene title> · n` |
+
+An untitled span is `Segment <id>`. Each level's [enabled](../../docs/Tools/tbc-segments-glossary.md#enabled) flag
+stands on its own: disabling a scene does not disable its shots. A person
+marks a scene change in tbc-analyse (the timeline menu, or the Shot Boundaries
+tab of the Segments viewer).
+
+Exports choose a granularity. tbc-analyse's Export tab
+[exports by](../../docs/Tools/tbc-segments-glossary.md#export-by) content span, scene or shot (one file per enabled
+one), with [chapters by](../../docs/Tools/tbc-segments-glossary.md#chapters-by) none, scene or shot inside each file
+(only finer than the files). `tbc-export-metadata --ffmetadata-chapters-by
+segment|scene|shot` and `tbc-video-export --export-metadata-chapters-by` do the
+same for the chapters of one export.
+
+### Where shot boundaries are stored
+
+Shot boundaries live in the `.tbc.db`, in this module's own tables:
+`shot_boundary` (field, evidence, source, verdict, scene change, scene title,
+scene enabled, shot enabled, confidence, reason, detail, comment, provenance)
+and `tbc_segments_meta` (`shot_boundary_schema = 1`). They are not part of the
+tbc library's schema or its `user_version`, and the `.tbc.json` never carries
+them.
+The legacy `segment_mark` table (3.3.1-gdh-1.1) is dropped when shot boundaries are written. <!-- glossary-legacy -->
+`--write-segments` stores them with the segments under
+the same rule: when none are stored, or with `--force` (detected boundaries
+replaced, user and rejected ones kept, ids never reused). A tool that rewrites
+the whole database drops them; tbc-analyse's Save does exactly that, and writes
+them back straight after. tbc-analyse's export snapshots carry no `.tbc.db`, so
+the export writes them beside the snapshot's JSON as `<json>.shot-boundaries.json`.
+
+The report gains `shotBoundaries` (each with field, seconds, frame and the
+fields above), `shotBoundariesSource` (`stored`, `derived` or `none`), a
+`shot_boundary` event per boundary that is not rejected, `counts.shot_boundary`,
+and the `scenes` and `shots` arrays.
+
+**Temporary aliases**, for callers still on 3.3.1-gdh-1.1, to be removed once
+they have switched:
+
+- every `field_diff_spike` event is also reported as a `scene_change` event, with `counts.scene_change`; <!-- glossary-legacy -->
+- `--scene-threshold-ire` is a hidden alias of `--field-diff-spike-ire`; <!-- glossary-legacy -->
+- the export plan accepts the selection `enabled_clips` as `enabled_content_spans`. <!-- glossary-legacy -->
 
 ## Tests
 
 `testsegments` (`core/tests`, ctest) synthesises
 metadata in memory: gaps, parity and skipped fields, sync-loss runs, dropout
 storms, a 32-bit rollover round-tripped through JSON, `--start/--length`
-clipping, the RF rate taken from the metadata, decoder-event merging, stored
+windows, the RF rate taken from the metadata, decoder-event merging, stored
 picture metrics driving the field-data events, segment derivation and
 classification (a dark scene with normal levels stays picture; snow with
 single-field dips and a resync inside it is one noise segment; a one-field
-section between two clips joins the next), restart marks against the
-hand-labelled fixture, mark merging, splitting at marks and the mark store's
-round trip, the presets, frame containment and segment tiling under the
-mixed-frame rule, and an exact equivalence of the sections with
-tbc-audio-align's `ExtractGapLessSection` + `TbcJsonFixup` over jittered,
-gapped, backward-stepping and 32-bit-wrapped `fileLoc` series in PAL and NTSC.
-`testsegmentswalk` (`core/tests/walk`) covers the field walk over a small synthetic luma +
-chroma TBC (scene change, snow, blank picture, missing burst, single- vs
-multi-threaded equality, a short TBC refused, a TBC with a trailing surplus
-walked to the metadata's count). `tbc-segments-smoke` runs the shipped
-`test-data/ntsc/ve-snw-cut` fixture through both tiers, and the scripts in
-`cli/tests` check that `--write` is idempotent and that `--no-burst` keeps a
-stored burst amplitude. `testsegmentsviewer` and `testsegmentscontroller`
-(`gui/tests`, offscreen) cover the viewer's buttons and the controller's
-lookups, readout, chapter-skip targets, timeline ticks and tints, split,
-re-derive (user segments kept), timeline menu, and the marks: detected at
-load, ticks and skip stops, split from the menu, the global switch, dismissal,
-and the Marks tab's edits. `tools/extract-restart-fixture.py` builds a fixture
-like the restart one from any labelled `.tbc.db`.
+section between two content spans joins the next; an RF gap inside picture is
+one content span with an `rf_gap` shot boundary), shot boundaries against the
+hand-labelled fixture, shot boundary merging, scenes and shots (ranges, titles,
+enabled flags), the export plan by span, scene and shot, the store's round
+trip, its sidecar and the legacy table dropped, the report's aliases, the
+presets, frame containment and segment tiling under the mixed-frame rule, and
+an exact equivalence of the sections with tbc-audio-align's
+`ExtractGapLessSection` + `TbcJsonFixup` over jittered, gapped,
+backward-stepping and 32-bit-wrapped `fileLoc` series in PAL and NTSC.
+`testsegmentswalk` (`core/tests/walk`) covers the field walk over a small
+synthetic luma + chroma TBC (a field diff spike, snow, blank picture, missing
+burst, single- vs multi-threaded equality, a short TBC refused, a TBC with a
+trailing surplus walked to the metadata's count). `tbc-segments-smoke` runs the
+shipped `test-data/ntsc/ve-snw-cut` fixture through both tiers, and the scripts
+in `cli/tests` check that `--write` is idempotent and that `--no-burst` keeps a
+stored burst amplitude; `tbc-segments-legacy-spike-flag` checks the hidden
+alias. `testsegmentsviewer` and `testsegmentscontroller` (`gui/tests`,
+offscreen) cover the viewer's buttons and the controller's lookups, readout,
+chapter-skip targets, timeline ticks and tints, cuts, re-derive (user segments
+kept), the timeline menu, and the shot boundaries: detected at load, ticks and
+skip stops, a scene change marked from the menu, and the Shot Boundaries tab's
+edits. `tbc-segments-glossary` checks that the generated glossary files are
+current and that the module uses no retired word.
+`tools/extract-shot-boundary-fixture.py` builds a fixture like the shot
+boundary one from any labelled `.tbc.db`.

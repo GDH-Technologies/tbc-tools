@@ -2,6 +2,9 @@
 #define EXPORTDIALOG_H
 
 #include <QWidget>
+
+#include "shotboundaries.h"
+#include <functional>
 #include <QProcess>
 #include <QHash>
 #include <QStringList>
@@ -40,7 +43,8 @@ public:
     };
     // One tbc-video-export run: a frame range and an output base. The
     // single-range export is a one-job queue; per-segment export queues one
-    // job per selected recording segment.
+    // job per selected content span, scene or shot (Glossary: export by,
+    // docs/Tools/tbc-segments-glossary.md#export-by).
     struct ExportJob {
         int startFrameOneBased = -1;
         int lengthFrames = -1;
@@ -53,10 +57,13 @@ public:
     // pickers open where each was last used. Not owned; may be left unset.
     void setConfiguration(Configuration *configuration);
     ~ExportDialog();
-    // Re-read the recording segments from the source (after an edit in the main window)
+    // Re-read the segments from the source (after an edit in the main window)
     void refreshSegmentsFromSource();
 
     void setSource(TbcSource *source);
+    // tbc-segments: the shot boundaries per-scene/per-shot exports and their
+    // chapters follow (the Segments viewer's, unsaved edits included)
+    void setShotBoundaryProvider(std::function<QVector<ShotBoundary>()> provider);
     void setGenerateProxyEnabledPreference(bool enabled);
     void setExportProfileConfigPreference(bool enabled, const QString &configPath);
     void setExportAdvancedOptions(const ExportAdvancedOptions &options);
@@ -192,6 +199,7 @@ private:
 
     Ui::ExportDialog *ui;
     TbcSource *tbcSource = nullptr;
+    std::function<QVector<ShotBoundary>()> shotBoundaryProvider;
     QProcess *exportProcess = nullptr;
     QProcess *parallelProxyProcess = nullptr;
     // Where an audio-track picker should open, and how any export picker's

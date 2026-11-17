@@ -5,7 +5,9 @@
 
 #include "tbcsource.h"
 #include "segmentexportplan.h"
+#include "glossary_generated.h"
 #include "segmentpreferences.h"
+#include "shotboundarystore.h"
 #include "configuration.h"
 #include "gui/processprogressrunner.h"
 
@@ -1460,18 +1462,30 @@ ExportDialog::ExportDialog(QWidget *parent) :
     }
     updateExportProfileConfigPathUi();
     if (ui->segmentSelectionComboBox) {
-        ui->segmentSelectionComboBox->addItem(tr("Enabled clips"), QStringLiteral("enabled_clips"));
-        ui->segmentSelectionComboBox->addItem(tr("Enabled segments"), QStringLiteral("enabled"));
+        // tbc-segments: Glossary: export by (docs/Tools/tbc-segments-glossary.md#export-by)
+        ui->segmentSelectionComboBox->addItem(tr("Content spans"), QStringLiteral("enabled_content_spans"));
+        ui->segmentSelectionComboBox->addItem(tr("Scenes"), QStringLiteral("enabled_scenes"));
+        ui->segmentSelectionComboBox->addItem(tr("Shots"), QStringLiteral("enabled_shots"));
         ui->segmentSelectionComboBox->addItem(tr("All segments"), QStringLiteral("all"));
-        ui->segmentSelectionComboBox->setToolTip(
-            tr("Which recording segments become files: enabled clips (blank/noise/unknown skipped), every enabled segment, or all of them."));
+        ui->segmentSelectionComboBox->setToolTip(Glossary::tooltip(Glossary::Term::ExportBy));
         connect(ui->segmentSelectionComboBox, &QComboBox::currentIndexChanged, this,
                 [this](int) { updateSegmentExportControls(); });
     }
     if (ui->exportSegmentsCheckBox) {
         ui->exportSegmentsCheckBox->setToolTip(
-            tr("Queue one tbc-video-export run per recording segment (<base>_<NN>[_<title>]), each with its own "
+            tr("Queue one tbc-video-export run per content span, scene or shot (Export by), each with its own "
                "--start/--length, chapters and audio trim. The In/Out range is ignored while checked."));
+    }
+    if (ui->chaptersByComboBox) {
+        // tbc-segments: Glossary: chapters by (docs/Tools/tbc-segments-glossary.md#chapters-by)
+        ui->chaptersByComboBox->addItem(tr("Segments"), QStringLiteral("segment"));
+        ui->chaptersByComboBox->addItem(tr("Scenes"), QStringLiteral("scene"));
+        ui->chaptersByComboBox->addItem(tr("Shots"), QStringLiteral("shot"));
+        ui->chaptersByComboBox->setToolTip(Glossary::tooltip(Glossary::Term::ChaptersBy));
+        ui->chaptersByComboBox->setCurrentIndex(qMax(0, ui->chaptersByComboBox->findData(SegmentPreferences::chaptersBy())));
+        connect(ui->chaptersByComboBox, &QComboBox::currentIndexChanged, this, [this](int) {
+            SegmentPreferences::setChaptersBy(ui->chaptersByComboBox->currentData().toString());
+        });
     }
     if (ui->appendSegmentTitleCheckBox) {
         ui->appendSegmentTitleCheckBox->setChecked(true);
@@ -1905,6 +1919,11 @@ QTableWidget *ExportDialog::processStatsTableForFeed(const QString &feedTag) con
         return mainProcessStatsTable;
     }
     return ui ? ui->processStatsTable : nullptr;
+}
+
+void ExportDialog::setShotBoundaryProvider(std::function<QVector<ShotBoundary>()> provider)
+{
+    shotBoundaryProvider = std::move(provider);
 }
 
 void ExportDialog::setSource(TbcSource *source)
@@ -3272,7 +3291,7 @@ void ExportDialog::on_exportButton_clicked()
     const bool generateProxyRequested = shouldGenerateProxyForSelection();
     const QString selectedProxyCodec = selectedProxyCodecId();
 
-    // The jobs: one per selected recording segment, or the single In/Out range
+    // The jobs: one per selected segment, or the single In/Out range
     QVector<ExportJob> jobs;
     if (segmentExportSelected()) {
         QStringList segmentNotes;
@@ -3756,15 +3775,15 @@ bool ExportDialog::buildSegmentExportJobs(const QString &outputBase, QVector<Exp
     }
     const QVector<TbcMetaData::Segment> &segments = tbcSource->getSegments();
     if (segments.isEmpty()) {
-        if (errorMessage) *errorMessage = tr("The metadata holds no recording segments.");
+        if (errorMessage) *errorMessage = tr("The metadata holds no segments.");
         return false;
     }
     const QString selection = ui && ui->segmentSelectionComboBox
                                   ? ui->segmentSelectionComboBox->currentData().toString()
-                                  : QStringLiteral("enabled_clips");
+                                  : QStringLiteral("enabled_content_spans");
     const bool appendTitle = ui && ui->appendSegmentTitleCheckBox && ui->appendSegmentTitleCheckBox->isChecked();
     const SegmentExportPlan plan = planSegmentExports(
-        segments, selection, outputBase, appendTitle,
+        segments, shotBoundaryProvider ? shotBoundaryProvider() : QVector<ShotBoundary>(), selection, outputBase, appendTitle,
         [this](const TbcMetaData::Segment &segment, qint32 *start, qint32 *length) {
             return tbcSource->segmentFrameRange(segment, start, length);
         });
@@ -3782,7 +3801,7 @@ bool ExportDialog::buildSegmentExportJobs(const QString &outputBase, QVector<Exp
         jobs->append(job);
     }
     if (jobs->isEmpty()) {
-        if (errorMessage) *errorMessage = tr("No recording segments match the selection.");
+        if (errorMessage) *errorMessage = tr("Nothing matches the Export by selection.");
         return false;
     }
     return true;
@@ -3817,9 +3836,9 @@ void ExportDialog::updateSegmentExportControls()
         if (running && exportQueue.size() > 1) {
             // startExportJob writes the progress text
         } else if (!haveSegments) {
-            ui->segmentsSummaryLabel->setText(sourceOk ? tr("No recording segments in the metadata.") : QString());
+            ui->segmentsSummaryLabel->setText(sourceOk ? tr("No segments in the metadata.") : QString());
         } else if (!segmentsMode) {
-            ui->segmentsSummaryLabel->setText(tr("%1 recording segment(s) in the metadata.").arg(tbcSource->getSegments().size()));
+            ui->segmentsSummaryLabel->setText(tr("%1 segment(s) in the metadata.").arg(tbcSource->getSegments().size()));
         } else {
             QVector<ExportJob> jobs;
             QStringList notes;
@@ -5313,16 +5332,18 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
         ExportArguments::isDefaultActiveAreaFraming(resolutionMode, hasAnyVerticalLineAdjustment);
     const bool letterboxCropRequested = advancedOptions.letterboxCrop;
     const bool forceAnamorphicRequested = advancedOptions.forceAnamorphic;
-    // tbc-segments: chapters cut at camcorder restarts (the Segments viewer's Marks tab)
-    if (includeExportMetadata && SegmentPreferences::restartChapters()) {
-        if (!executableSupportsOption(exportPath, QStringLiteral("--export-metadata-restart-chapters"))) {
+    // tbc-segments: chapters by scene or shot (Glossary: chapters by)
+    const QString chaptersBy = ui && ui->chaptersByComboBox ? ui->chaptersByComboBox->currentData().toString()
+                                                            : QStringLiteral("segment");
+    if (includeExportMetadata && chaptersBy != QLatin1String("segment")) {
+        if (!executableSupportsOption(exportPath, QStringLiteral("--export-metadata-chapters-by"))) {
             if (errorMessage) {
-                *errorMessage = unsupportedOptionError(tr("Chapters at camcorder restarts"),
-                                                       QStringLiteral("--export-metadata-restart-chapters"));
+                *errorMessage = unsupportedOptionError(tr("Chapters by scene or shot"),
+                                                       QStringLiteral("--export-metadata-chapters-by"));
             }
             return QStringList();
         }
-        args << QStringLiteral("--export-metadata-restart-chapters");
+        args << QStringLiteral("--export-metadata-chapters-by") << chaptersBy;
     }
     if (reverseFieldOrderRequested && !executableSupportsOption(exportPath, QStringLiteral("--reverse"))) {
         if (errorMessage) {
@@ -5949,6 +5970,10 @@ QString ExportDialog::createTemporaryMetadataSnapshot(QString *errorMessage)
         return QString();
     }
 
+    // tbc-segments: the shot boundaries as edited (no .tbc.db beside a snapshot)
+    if (shotBoundaryProvider) {
+        ShotBoundaryStore::writeSidecar(tempPath, shotBoundaryProvider());
+    }
     temporaryInputJsonPath = tempPath;
     return temporaryInputJsonPath;
 }
@@ -5957,6 +5982,7 @@ void ExportDialog::cleanupTemporaryMetadataSnapshot()
 {
     if (!temporaryInputJsonPath.isEmpty()) {
         QFile::remove(temporaryInputJsonPath);
+        QFile::remove(ShotBoundaryStore::sidecarPathFor(temporaryInputJsonPath));
         temporaryInputJsonPath.clear();
     }
     if (!temporaryExportConfigPath.isEmpty()) {

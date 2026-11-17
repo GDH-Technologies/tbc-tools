@@ -300,12 +300,12 @@ vhs-decode writes as its schema version 2). Tables: `capture`,
 `vitc`, `closed_caption`, plus the segmentation tables `picture_metrics`
 (per-field picture measurements in IRE), `decoder_event` (what the decoder
 knew at a seam: sync-loss jumps, skipped/duplicated/dropped fields, resume
-seams) and `segment` (the editable recording-segment layer). `capture` also
+seams) and `segment` (the editable segment layer). `capture` also
 carries `rf_source_sample_rate_hz`, the rate `file_loc` is expressed in. Older
 files migrate in place on the first write. The tables are described in
 `src/tbc-metadata-converter/README.md`.
 
-The rules that turn those records into recording segments are not part of
+The rules that turn those records into segments are not part of
 this library: they live in the tbc-segments module (`src/tbc-segments/core`,
 the `tbc-segments-core` library: `analyseSegments`, `deriveSegments`,
 `segmentFrameRange`, `resolveFieldRange`) and nowhere else. tbc-segments,

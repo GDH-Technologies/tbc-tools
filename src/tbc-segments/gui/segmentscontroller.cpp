@@ -2,7 +2,7 @@
 
     segmentscontroller.cpp
 
-    tbc-segments - tbc-analyse's recording-segment behaviour
+    tbc-segments - tbc-analyse's segment behaviour
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -25,8 +25,8 @@
 #include "segmentscontroller.h"
 
 #include "segmentsviewerdialog.h"
-#include "markstore.h"
-#include "segmentpreferences.h"
+#include "glossary_generated.h"
+#include "shotboundarystore.h"
 
 #include <QAction>
 #include <QDateTime>
@@ -36,7 +36,7 @@
 SegmentsController::SegmentsController(QWidget *parentWindow, Hooks hooks)
     : QObject(parentWindow), parentWindow_(parentWindow), hooks_(std::move(hooks))
 {
-    // Segments viewer: the editable recording-segment layer of the metadata
+    // Segments viewer: the editable segment layer of the metadata
     viewer_ = new SegmentsViewerDialog(parentWindow);
     connect(viewer_, &SegmentsViewerDialog::goToFieldRequested, this, [this](qint32 field) { hooks_.goToField(field); });
     connect(viewer_, &SegmentsViewerDialog::setInOutRequested, this, [this](qint32 segmentIndex) {
@@ -51,101 +51,79 @@ SegmentsController::SegmentsController(QWidget *parentWindow, Hooks hooks)
                 refreshViewer();
             });
     connect(viewer_, &SegmentsViewerDialog::rederiveRequested, this, &SegmentsController::rederiveSegments);
-    connect(viewer_, &SegmentsViewerDialog::marksUpdated, this, &SegmentsController::applyMarks);
-    connect(viewer_, &SegmentsViewerDialog::splitAtRestartsToggled, this, &SegmentsController::setSplitAtRestarts);
-    connect(viewer_, &SegmentsViewerDialog::restartChaptersToggled, this, [this](bool enabled) {
-        SegmentPreferences::setRestartChapters(enabled);
-        refreshViewer();
+    connect(viewer_, &SegmentsViewerDialog::shotBoundariesUpdated, this, [this](const QVector<ShotBoundary> &boundaries) {
+        applyShotBoundaries(boundaries, tr("Shot boundaries updated; Save Metadata stores them"));
     });
 }
 
 void SegmentsController::sourceLoaded()
 {
-    marks_.clear();
+    shotBoundaries_.clear();
     if (!hooks_.isLoaded()) {
         return;
     }
-    QVector<SegmentMark> stored;
+    QVector<ShotBoundary> stored;
     QString error;
-    if (!MarkStore::read(MarkStore::databasePathFor(hooks_.metadataPath()), &stored, nullptr, &error)) {
-        hooks_.showStatus(tr("Could not read the restart marks: %1").arg(error));
-    }
-    if (!stored.isEmpty()) {
-        marks_ = stored;
-        return;
+    if (!ShotBoundaryStore::read(ShotBoundaryStore::databasePathFor(hooks_.metadataPath()), &stored, nullptr, &error)) {
+        hooks_.showStatus(tr("Could not read the shot boundaries: %1").arg(error));
     }
     // None stored: detect them (they persist with the next save)
-    SegmentsThresholds thresholds = lastThresholds_;
-    thresholds.splitAtRestarts = SegmentPreferences::splitAtRestarts();
-    marks_ = hooks_.deriveLayer(thresholds, {}).marks;
-    if (thresholds.splitAtRestarts && hooks_.derivedAtLoad() && !marks_.isEmpty()) {
-        // Segments derived at load, with splitting asked for: cut them now
-        applySegmentEdit(splitSegmentsAtMarks(hooks_.segments(), marks_),
-                         tr("%1 restart marks split their clips (Split at restarts)").arg(marks_.size()));
-    }
+    shotBoundaries_ = stored.isEmpty() ? hooks_.deriveLayer(lastThresholds_, {}).shotBoundaries : stored;
 }
 
 void SegmentsController::sourceUnloaded()
 {
-    marks_.clear();
+    shotBoundaries_.clear();
 }
 
-bool SegmentsController::persistMarks(QString *error)
+bool SegmentsController::persistShotBoundaries(QString *error)
 {
     if (!hooks_.isLoaded()) {
         return true;
     }
-    const QString database = MarkStore::databasePathFor(hooks_.metadataPath());
+    const QString database = ShotBoundaryStore::databasePathFor(hooks_.metadataPath());
     if (database.isEmpty()) {
-        if (error) *error = tr("the metadata has no .tbc.db to hold restart marks");
-        return marks_.isEmpty();
+        if (error) *error = tr("the metadata has no .tbc.db to hold shot boundaries");
+        return shotBoundaries_.isEmpty();
     }
-    return MarkStore::write(database, marks_, nullptr, error);
+    return ShotBoundaryStore::write(database, shotBoundaries_, nullptr, error);
 }
 
-void SegmentsController::applyMarks(const QVector<SegmentMark> &marks)
+// Shot boundaries never change the stored segments (scenes and shots are
+// worked out from them), so an edit only flags the metadata modified
+void SegmentsController::applyShotBoundaries(const QVector<ShotBoundary> &boundaries, const QString &statusText)
 {
     if (!hooks_.isLoaded()) {
         return;
     }
-    marks_ = marks;
-    rederiveSegments(lastThresholds_);
+    shotBoundaries_ = boundaries;
+    hooks_.segmentsEdited();
+    if (!statusText.isEmpty()) {
+        hooks_.showStatus(statusText);
+    }
+    refreshViewer();
 }
 
-void SegmentsController::setSplitAtRestarts(bool enabled)
+qint32 SegmentsController::shotBoundaryNearField(qint32 field) const
 {
-    SegmentPreferences::setSplitAtRestarts(enabled);
-    // Derived marks follow the preference; marks the user edited keep theirs
-    for (SegmentMark &mark : marks_) {
-        if (mark.source != QLatin1String("user")) mark.split = enabled;
-    }
-    if (hooks_.isLoaded()) {
-        rederiveSegments(lastThresholds_);
-    } else {
-        refreshViewer();
-    }
-}
-
-qint32 SegmentsController::markNearField(qint32 field) const
-{
-    for (qint32 i = 0; i < marks_.size(); ++i) {
-        if (qAbs(marks_.at(i).field - field) <= 2) return i;
+    for (qint32 i = 0; i < shotBoundaries_.size(); ++i) {
+        if (qAbs(shotBoundaries_.at(i).field - field) <= 2) return i;
     }
     return -1;
 }
 
-void SegmentsController::restartTicks(QVector<qint32> *positions, QStringList *tooltips) const
+void SegmentsController::shotBoundaryTicks(QVector<qint32> *positions, QStringList *tooltips) const
 {
-    for (const SegmentMark &mark : marks_) {
-        if (!mark.enabled) continue;
-        const qint32 position = hooks_.sliderPositionForField(mark.field);
+    for (const ShotBoundary &boundary : shotBoundaries_) {
+        if (boundary.rejected()) continue;
+        const qint32 position = hooks_.sliderPositionForField(boundary.field);
         if (position <= 0) continue;
         positions->append(position);
-        tooltips->append(tr("Restart mark %1 (%2%%3): %4")
-                             .arg(mark.id)
-                             .arg(qRound(mark.confidence * 100.0))
-                             .arg(mark.split ? tr(", splits its clip") : QString())
-                             .arg(mark.reason));
+        tooltips->append(tr("Shot boundary %1 (%2%%3): %4")
+                             .arg(boundary.id)
+                             .arg(qRound(boundary.confidence * 100.0))
+                             .arg(boundary.sceneChange ? tr(", scene change") : QString())
+                             .arg(boundary.reason));
     }
 }
 
@@ -238,19 +216,19 @@ void SegmentsController::setInOutFromSegmentAtCurrentFrame(bool setIn, bool setO
     if (index >= 0) {
         setInOutFromSegment(index, setIn, setOut);
     } else {
-        hooks_.showStatus(tr("No recording segment at the current frame"));
+        hooks_.showStatus(tr("No segment at the current frame"));
     }
 }
 
-// Split the segment containing `field` at that field: the head keeps its id,
-// the tail becomes a new user segment. Both are marked user-edited.
-bool SegmentsController::splitSegmentAtField(qint32 field, QString *statusText)
+// Cut the segment containing `field` at that field (Glossary: cut, #cut): the
+// head keeps its id, the tail becomes a new segment; both become user segments.
+bool SegmentsController::cutSegmentAtField(qint32 field, QString *statusText)
 {
     QVector<TbcMetaData::Segment> segments = hooks_.segments();
     const qint32 index = segmentIndexContainingField(field);
     if (index < 0 || field <= segments.at(index).startField) {
         if (statusText) {
-            *statusText = tr("No segment to split at field %1").arg(field);
+            *statusText = tr("No segment to cut at field %1").arg(field);
         }
         return false;
     }
@@ -276,7 +254,7 @@ bool SegmentsController::splitSegmentAtField(qint32 field, QString *statusText)
     segments.insert(index + 1, tail);
     applySegmentEdit(segments, QString());
     if (statusText) {
-        *statusText = tr("Segment %1 split at field %2; segment %3 created").arg(head.id).arg(field).arg(tail.id);
+        *statusText = tr("Segment %1 cut at field %2; segment %3 created").arg(head.id).arg(field).arg(tail.id);
     }
     return true;
 }
@@ -295,10 +273,8 @@ void SegmentsController::rederiveSegments(const SegmentsThresholds &thresholds)
         }
     }
     lastThresholds_ = thresholds;
-    SegmentsThresholds withMarks = thresholds;
-    withMarks.splitAtRestarts = SegmentPreferences::splitAtRestarts();
-    const SegmentLayer layer = hooks_.deriveLayer(withMarks, marks_);
-    marks_ = layer.marks;
+    const SegmentLayer layer = hooks_.deriveLayer(thresholds, shotBoundaries_);
+    shotBoundaries_ = layer.shotBoundaries;
     const QVector<TbcMetaData::Segment> &derived = layer.segments;
     qint32 nextId = 0;
     for (const TbcMetaData::Segment &segment : kept) {
@@ -355,14 +331,12 @@ void SegmentsController::refreshViewer()
             row.hasFrames = hooks_.segmentFrameRange(segment, &row.startFrame, &row.lengthFrames);
             state.rows.append(row);
         }
-        state.marks = marks_;
-        state.markFrames.reserve(marks_.size());
-        for (const SegmentMark &mark : marks_) {
-            state.markFrames.append(hooks_.frameContainingField(mark.field));
+        state.shotBoundaries = shotBoundaries_;
+        state.shotBoundaryFrames.reserve(shotBoundaries_.size());
+        for (const ShotBoundary &boundary : shotBoundaries_) {
+            state.shotBoundaryFrames.append(hooks_.frameContainingField(boundary.field));
         }
     }
-    state.splitAtRestarts = SegmentPreferences::splitAtRestarts();
-    state.restartChapters = SegmentPreferences::restartChapters();
     viewer_->setState(state);
 }
 
@@ -424,10 +398,10 @@ qint32 SegmentsController::nextSegmentStartFrame(qint32 currentFrame, qint32 tot
             targetFrame = startFrame;
         }
     }
-    // Restart marks are takes inside a segment: stops of their own
-    for (const SegmentMark &mark : marks_) {
-        if (!mark.enabled) continue;
-        const qint32 frame = hooks_.frameContainingField(mark.field);
+    // Shot boundaries are stops of their own (Glossary: shot boundary, #shot-boundary)
+    for (const ShotBoundary &boundary : shotBoundaries_) {
+        if (boundary.rejected()) continue;
+        const qint32 frame = hooks_.frameContainingField(boundary.field);
         if (frame > currentFrame && frame < targetFrame) {
             targetFrame = frame;
         }
@@ -444,9 +418,9 @@ qint32 SegmentsController::previousSegmentStartFrame(qint32 currentFrame) const
             targetFrame = startFrame;
         }
     }
-    for (const SegmentMark &mark : marks_) {
-        if (!mark.enabled) continue;
-        const qint32 frame = hooks_.frameContainingField(mark.field);
+    for (const ShotBoundary &boundary : shotBoundaries_) {
+        if (boundary.rejected()) continue;
+        const qint32 frame = hooks_.frameContainingField(boundary.field);
         if (frame < currentFrame && frame > targetFrame) {
             targetFrame = frame;
         }
@@ -470,11 +444,11 @@ std::function<bool(QAction *)> SegmentsController::addTimelineMenuActions(QMenu 
                                                                          const QString &framePointTimecode,
                                                                          qint32 clickedFirstField)
 {
-    // Recording segments: act on the segment holding the clicked frame
+    // Segments: act on the segment holding the clicked frame
     const QVector<TbcMetaData::Segment> &segments = hooks_.segments();
     const qint32 segmentIndexAtFrame = clickedFirstField >= 0 ? segmentIndexContainingField(clickedFirstField) : -1;
     QAction *setInOutFromSegmentAction = nullptr;
-    QAction *splitSegmentAction = nullptr;
+    QAction *cutSegmentAction = nullptr;
     if (!segments.isEmpty()) {
         menu->addSeparator();
         const qint32 segmentId = segmentIndexAtFrame >= 0 ? segments.at(segmentIndexAtFrame).id : -1;
@@ -482,67 +456,73 @@ std::function<bool(QAction *)> SegmentsController::addTimelineMenuActions(QMenu 
                                                         ? tr("Set In/Out From Segment %1").arg(segmentId)
                                                         : tr("Set In/Out From Segment"));
         setInOutFromSegmentAction->setEnabled(segmentIndexAtFrame >= 0 && !hooks_.isMetadataOnly());
-        splitSegmentAction = menu->addAction(tr("Split Segment Here (%1 | %2)")
-                                                 .arg(framePoint)
-                                                 .arg(framePointTimecode));
-        splitSegmentAction->setEnabled(segmentIndexAtFrame >= 0
-                                       && clickedFirstField > segments.at(segmentIndexAtFrame).startField);
+        cutSegmentAction = menu->addAction(tr("Cut Segment Here (%1 | %2)")
+                                               .arg(framePoint)
+                                               .arg(framePointTimecode));
+        cutSegmentAction->setToolTip(Glossary::tooltip(Glossary::Term::Cut));
+        cutSegmentAction->setEnabled(segmentIndexAtFrame >= 0
+                                     && clickedFirstField > segments.at(segmentIndexAtFrame).startField);
     }
-    // Restart marks: split or unsplit the one at the clicked frame, or add one
-    QAction *restartAction = nullptr;
-    const qint32 markIndex = clickedFirstField >= 0 ? markNearField(clickedFirstField) : -1;
+    // Shot boundaries: mark or unmark the one at the clicked frame as a scene
+    // change, or add one there
+    QAction *shotBoundaryAction = nullptr;
+    const qint32 boundaryIndex = clickedFirstField >= 0 ? shotBoundaryNearField(clickedFirstField) : -1;
     if (hooks_.isLoaded() && clickedFirstField >= 0) {
-        if (markIndex >= 0) {
-            const SegmentMark &mark = marks_.at(markIndex);
-            restartAction = menu->addAction(mark.split ? tr("Unsplit Restart Here (mark %1)").arg(mark.id)
-                                                       : tr("Split At Restart Here (mark %1)").arg(mark.id));
+        if (boundaryIndex >= 0) {
+            const ShotBoundary &boundary = shotBoundaries_.at(boundaryIndex);
+            shotBoundaryAction = menu->addAction(boundary.sceneChange
+                                                     ? tr("Unmark Scene Change (shot boundary %1)").arg(boundary.id)
+                                                     : tr("Mark Scene Change (shot boundary %1)").arg(boundary.id));
+            shotBoundaryAction->setToolTip(Glossary::tooltip(Glossary::Term::SceneChange));
         } else {
-            restartAction = menu->addAction(tr("Add Restart Mark Here (%1 | %2)").arg(framePoint).arg(framePointTimecode));
+            shotBoundaryAction = menu->addAction(tr("Add Shot Boundary Here (%1 | %2)").arg(framePoint).arg(framePointTimecode));
+            shotBoundaryAction->setToolTip(Glossary::tooltip(Glossary::Term::ShotBoundary));
         }
     }
     QAction *openSegmentsViewerAction = menu->addAction(tr("Open Segments Viewer..."));
-    return [this, setInOutFromSegmentAction, splitSegmentAction, openSegmentsViewerAction, segmentIndexAtFrame,
-            clickedFirstField, restartAction, markIndex](QAction *selectedAction) {
+    return [this, setInOutFromSegmentAction, cutSegmentAction, openSegmentsViewerAction, segmentIndexAtFrame,
+            clickedFirstField, shotBoundaryAction, boundaryIndex](QAction *selectedAction) {
         if (!selectedAction) {
             return false;
         }
-        if (restartAction && selectedAction == restartAction) {
-            QVector<SegmentMark> marks = marks_;
+        if (shotBoundaryAction && selectedAction == shotBoundaryAction) {
+            QVector<ShotBoundary> boundaries = shotBoundaries_;
             const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-            if (markIndex >= 0 && markIndex < marks.size()) {
-                SegmentMark &mark = marks[markIndex];
-                mark.split = !mark.split;
-                mark.enabled = true;
-                mark.source = QStringLiteral("user");
-                mark.updatedAt = now;
+            if (boundaryIndex >= 0 && boundaryIndex < boundaries.size()) {
+                // Marking a scene change is a person's review: it confirms the boundary
+                ShotBoundary &boundary = boundaries[boundaryIndex];
+                boundary.sceneChange = !boundary.sceneChange;
+                boundary.verdict = QStringLiteral("confirmed");
+                boundary.source = QStringLiteral("user");
+                boundary.updatedAt = now;
             } else {
-                SegmentMark mark;
+                ShotBoundary boundary;
                 qint32 maxId = 0;
-                for (const SegmentMark &existing : marks) maxId = qMax(maxId, existing.id);
-                mark.id = maxId + 1;
-                mark.field = clickedFirstField;
-                mark.source = QStringLiteral("user");
-                mark.confidence = 1.0;
-                mark.reason = tr("added by hand");
-                mark.split = SegmentPreferences::splitAtRestarts();
-                mark.createdBy = QStringLiteral("tbc-analyse");
-                mark.updatedAt = now;
-                marks.append(mark);
-                std::stable_sort(marks.begin(), marks.end(), [](const SegmentMark &a, const SegmentMark &b) {
+                for (const ShotBoundary &existing : boundaries) maxId = qMax(maxId, existing.id);
+                boundary.id = maxId + 1;
+                boundary.field = clickedFirstField;
+                boundary.source = QStringLiteral("user");
+                boundary.verdict = QStringLiteral("confirmed");
+                boundary.confidence = 1.0;
+                boundary.reason = tr("added by hand");
+                boundary.createdBy = QStringLiteral("tbc-analyse");
+                boundary.updatedAt = now;
+                boundaries.append(boundary);
+                std::stable_sort(boundaries.begin(), boundaries.end(), [](const ShotBoundary &a, const ShotBoundary &b) {
                     return a.field < b.field;
                 });
             }
-            applyMarks(marks);
+            applyShotBoundaries(boundaries);
             return true;
         }
         if (setInOutFromSegmentAction && selectedAction == setInOutFromSegmentAction) {
             setInOutFromSegment(segmentIndexAtFrame, true, true);
             return true;
         }
-        if (splitSegmentAction && selectedAction == splitSegmentAction) {
-            QString splitStatus;
-            splitSegmentAtField(clickedFirstField, &splitStatus);
-            hooks_.showStatus(splitStatus);
+        if (cutSegmentAction && selectedAction == cutSegmentAction) {
+            QString cutStatus;
+            cutSegmentAtField(clickedFirstField, &cutStatus);
+            hooks_.showStatus(cutStatus);
             refreshViewer();
             return true;
         }

@@ -192,10 +192,10 @@ void testFieldWalk()
 
     SegmentsThresholds t;
     const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &one);
-    const SegmentEvent *scene = firstOfKind(a, "scene_change");
-    CHECK(scene && scene->startField == 60);
+    const SegmentEvent *spike = firstOfKind(a, "field_diff_spike");
+    CHECK(spike && spike->startField == 60);
     for (const SegmentEvent &e : a.events) {
-        if (e.kind == QLatin1String("scene_change")) CHECK(!(e.startField > 121 && e.startField < 138));
+        if (e.kind == QLatin1String("field_diff_spike")) CHECK(!(e.startField > 121 && e.startField < 138));
     }
     const SegmentEvent *noise = firstOfKind(a, "noise");
     CHECK(noise && noise->startField == 120 && noise->endFieldExclusive == 140);

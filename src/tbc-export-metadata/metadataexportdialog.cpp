@@ -9,6 +9,8 @@
  ******************************************************************************/
 
 #include "metadataexportdialog.h"
+
+#include "glossary_generated.h"
 #include "ui_metadataexportdialog.h"
 
 #include "tbc/uistyle.h"
@@ -159,8 +161,15 @@ void MetadataExportDialog::setInitialOptions(const InitialOptions &options)
     if (ui->ffmetadataSegmentsComboBox) {
         ui->ffmetadataSegmentsComboBox->setCurrentIndex(qBound(0, options.ffmetadataSegmentMode, 2));
     }
-    if (ui->ffmetadataRestartChaptersCheckBox) {
-        ui->ffmetadataRestartChaptersCheckBox->setChecked(options.ffmetadataRestartChapters);
+    if (ui->ffmetadataChaptersByComboBox) {
+        // tbc-segments: Glossary: chapters by (docs/Tools/tbc-segments-glossary.md#chapters-by)
+        if (ui->ffmetadataChaptersByComboBox->count() == 0) {
+            ui->ffmetadataChaptersByComboBox->addItem(tr("Chapters by segment"), QStringLiteral("segment"));
+            ui->ffmetadataChaptersByComboBox->addItem(tr("Chapters by scene"), QStringLiteral("scene"));
+            ui->ffmetadataChaptersByComboBox->addItem(tr("Chapters by shot"), QStringLiteral("shot"));
+        }
+        ui->ffmetadataChaptersByComboBox->setCurrentIndex(
+            qMax(0, ui->ffmetadataChaptersByComboBox->findData(options.ffmetadataChaptersBy)));
     }
     if (ui->segmentsJsonCheckBox) {
         ui->segmentsJsonCheckBox->setChecked(options.exportSegmentsJson);
@@ -356,9 +365,11 @@ void MetadataExportDialog::on_exportButton_clicked()
                 arguments << QStringLiteral("--ffmetadata-no-segments");
             }
         }
-        if (ui->ffmetadataRestartChaptersCheckBox && ui->ffmetadataRestartChaptersCheckBox->isEnabled()
-            && ui->ffmetadataRestartChaptersCheckBox->isChecked()) {
-            arguments << QStringLiteral("--ffmetadata-restart-chapters");
+        if (ui->ffmetadataChaptersByComboBox && ui->ffmetadataChaptersByComboBox->isEnabled()) {
+            const QString chaptersBy = ui->ffmetadataChaptersByComboBox->currentData().toString();
+            if (chaptersBy == QLatin1String("scene") || chaptersBy == QLatin1String("shot")) {
+                arguments << QStringLiteral("--ffmetadata-chapters-by") << chaptersBy;
+            }
         }
     }
     if (ffmetadataSelected || segmentsJsonSelected) {
@@ -615,15 +626,15 @@ void MetadataExportDialog::applyOptionSupport(OptionSupport support, const QStri
     if (ui->ffmetadataSegmentsComboBox) {
         ui->ffmetadataSegmentsComboBox->setToolTip(
             ffmetadataSegmentsSupported
-                ? tr("Recording segments stored in the metadata become chapters in place of LaserDisc navigation chapters.")
+                ? tr("Segments stored in the metadata become chapters in place of LaserDisc navigation chapters.")
                 : unavailableText(QStringLiteral("--ffmetadata-no-segments")));
     }
-    ffmetadataRestartChaptersSupported = supported(QStringLiteral("--ffmetadata-restart-chapters"));
-    if (ui->ffmetadataRestartChaptersCheckBox) {
-        ui->ffmetadataRestartChaptersCheckBox->setToolTip(
-            ffmetadataRestartChaptersSupported
-                ? tr("Cut each segment's chapter at its camcorder restart marks, so every take is a chapter.")
-                : unavailableText(QStringLiteral("--ffmetadata-restart-chapters")));
+    ffmetadataChaptersBySupported = supported(QStringLiteral("--ffmetadata-chapters-by"));
+    if (ui->ffmetadataChaptersByComboBox) {
+        ui->ffmetadataChaptersByComboBox->setToolTip(
+            ffmetadataChaptersBySupported
+                ? Glossary::tooltip(Glossary::Term::ChaptersBy)
+                : unavailableText(QStringLiteral("--ffmetadata-chapters-by")));
     }
     updateFfmetadataControlsEnabled();
 
@@ -674,7 +685,7 @@ void MetadataExportDialog::updateFfmetadataControlsEnabled()
     if (ui->ffmetadataSegmentsComboBox) {
         ui->ffmetadataSegmentsComboBox->setEnabled(enabled && ffmetadataSegmentsSupported);
     }
-    if (ui->ffmetadataRestartChaptersCheckBox) {
-        ui->ffmetadataRestartChaptersCheckBox->setEnabled(enabled && ffmetadataRestartChaptersSupported);
+    if (ui->ffmetadataChaptersByComboBox) {
+        ui->ffmetadataChaptersByComboBox->setEnabled(enabled && ffmetadataChaptersBySupported);
     }
 }

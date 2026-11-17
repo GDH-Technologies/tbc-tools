@@ -930,17 +930,17 @@ class TestWrappersExportMetadata:
         )
         return wrapper.command.data
 
-    def test_restart_chapters_off_by_default(  # noqa: D102
+    def test_chapters_by_off_by_default(  # noqa: D102
         self, program_state: Callable[[list[str], str], ProgramState]
     ) -> None:
         cmds = self._command(program_state, ["--export-metadata"])
         assert "--ffmetadata" in cmds
-        assert "--ffmetadata-restart-chapters" not in cmds
+        assert "--ffmetadata-chapters-by" not in cmds
 
-    def test_restart_chapters_passed_through(  # noqa: D102
+    def test_chapters_by_passed_through(  # noqa: D102
         self, program_state: Callable[[list[str], str], ProgramState]
     ) -> None:
         cmds = self._command(
-            program_state, ["--export-metadata", "--export-metadata-restart-chapters"]
+            program_state, ["--export-metadata", "--export-metadata-chapters-by", "scene"]
         )
-        assert "--ffmetadata-restart-chapters" in cmds
+        assert {"--ffmetadata-chapters-by", "scene"}.issubset(cmds)

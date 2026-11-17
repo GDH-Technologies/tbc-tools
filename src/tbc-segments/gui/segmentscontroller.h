@@ -2,7 +2,7 @@
 
     segmentscontroller.h
 
-    tbc-segments - tbc-analyse's recording-segment behaviour
+    tbc-segments - tbc-analyse's segment behaviour
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -32,7 +32,7 @@
 #include <QVector>
 #include <functional>
 
-#include "restartmarks.h"
+#include "shotboundaries.h"
 #include "segments.h"
 #include "segmentsderive.h"
 #include "tbcmetadata.h"
@@ -49,8 +49,9 @@ struct SegmentTimelineSpan {
     QColor color;
 };
 
-// Everything tbc-analyse does with recording segments: the Segments viewer,
-// edits (apply, split, re-derive), set In/Out from a segment, the timeline's
+// Everything tbc-analyse does with segments: the Segments viewer,
+// edits (apply, cut, re-derive), shot boundaries and scene changes, set In/Out
+// from a segment, the timeline's
 // boundary ticks and tints, chapter-skip targets, the status readout and the
 // timeline context menu. The main window supplies its source and view through
 // Hooks and keeps only the calls, so the segment behaviour lives in one module.
@@ -85,12 +86,12 @@ public:
         std::function<bool()> canSetInOut;
         std::function<void(qint32)> setInPoint;
         std::function<void(qint32)> setOutPoint;
-        // After the segment layer changed: mark modified, refresh panels
+        // After the segments or shot boundaries changed: flag the window modified, refresh panels
         std::function<void()> segmentsEdited;
-        // The metadata file the source was opened from (marks live in its .tbc.db)
+        // The metadata file the source was opened from (shot boundaries live in its .tbc.db)
         std::function<QString()> metadataPath;
-        // The whole-file derived layer (segments and merged restart marks)
-        std::function<SegmentLayer(const SegmentsThresholds &, const QVector<SegmentMark> &)> deriveLayer;
+        // The whole-file derived layer (segments and merged shot boundaries)
+        std::function<SegmentLayer(const SegmentsThresholds &, const QVector<ShotBoundary> &)> deriveLayer;
     };
 
     SegmentsController(QWidget *parentWindow, Hooks hooks);
@@ -106,20 +107,20 @@ public:
     void applySegmentEdit(const QVector<TbcMetaData::Segment> &segments, const QString &statusText);
     void setInOutFromSegment(qint32 segmentIndex, bool setIn, bool setOut);
     void setInOutFromSegmentAtCurrentFrame(bool setIn, bool setOut);
-    bool splitSegmentAtField(qint32 field, QString *statusText);
+    bool cutSegmentAtField(qint32 field, QString *statusText);   // Glossary: cut (docs/Tools/tbc-segments-glossary.md#cut)
     void rederiveSegments(const SegmentsThresholds &thresholds);
 
-    // Restart marks: read from the .tbc.db when a source loads (detected when
-    // none are stored), edited in the viewer, written back after every save
-    // (tbc-analyse's save writes a new database, which would drop them)
+    // Glossary: shot boundary (docs/Tools/tbc-segments-glossary.md#shot-boundary).
+    // Read from the .tbc.db when a source loads (detected when none are
+    // stored), edited in the viewer and the timeline menu, written back after
+    // every save (tbc-analyse's save writes a new database, which drops them).
     void sourceLoaded();
     void sourceUnloaded();
-    bool persistMarks(QString *error = nullptr);
-    const QVector<SegmentMark> &marks() const { return marks_; }
-    void applyMarks(const QVector<SegmentMark> &marks);
-    void setSplitAtRestarts(bool enabled);
-    // Timeline: a tick per enabled mark, with its confidence and reason
-    void restartTicks(QVector<qint32> *positions, QStringList *tooltips) const;
+    bool persistShotBoundaries(QString *error = nullptr);
+    const QVector<ShotBoundary> &shotBoundaries() const { return shotBoundaries_; }
+    void applyShotBoundaries(const QVector<ShotBoundary> &boundaries, const QString &statusText = QString());
+    // Timeline: a tick per shot boundary that is not rejected, with its reason
+    void shotBoundaryTicks(QVector<qint32> *positions, QStringList *tooltips) const;
 
     // Viewer
     void refreshViewer();
@@ -145,9 +146,9 @@ private:
     QWidget *parentWindow_ = nullptr;
     Hooks hooks_;
     SegmentsViewerDialog *viewer_ = nullptr;
-    QVector<SegmentMark> marks_;
+    QVector<ShotBoundary> shotBoundaries_;
     SegmentsThresholds lastThresholds_;
-    qint32 markNearField(qint32 field) const;
+    qint32 shotBoundaryNearField(qint32 field) const;
 };
 
 #endif // SEGMENTSCONTROLLER_H

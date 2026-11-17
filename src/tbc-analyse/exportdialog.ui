@@ -739,14 +739,14 @@
      <item>
       <widget class="QCheckBox" name="exportSegmentsCheckBox">
        <property name="text">
-        <string>Export each segment as a separate file</string>
+        <string>Export separately</string>
        </property>
       </widget>
      </item>
      <item>
       <widget class="QLabel" name="segmentSelectionLabel">
        <property name="text">
-        <string>Segments</string>
+        <string>Export by</string>
        </property>
       </widget>
      </item>
@@ -759,6 +759,16 @@
         <string>Append title to file name</string>
        </property>
       </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="chaptersByLabel">
+       <property name="text">
+        <string>Chapters by</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="chaptersByComboBox"/>
      </item>
      <item>
       <widget class="QLabel" name="segmentsSummaryLabel">

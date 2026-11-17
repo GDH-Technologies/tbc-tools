@@ -14,7 +14,7 @@
 
 #if !defined(Q_OS_WIN)
 #include <QApplication>
-#include <QCheckBox>
+#include <QComboBox>
 #include <QPushButton>
 #include <QTableWidget>
 
@@ -51,7 +51,7 @@ TbcMetaData::Segment segment(qint32 id, qint32 startField, qint32 endFieldExclus
     result.id = id;
     result.startField = startField;
     result.endFieldExclusive = endFieldExclusive;
-    result.kind = QStringLiteral("clip");
+    result.kind = contentSpanKind();
     return result;
 }
 
@@ -75,80 +75,84 @@ void setState(SegmentsViewerDialog &dialog, qint32 currentFirstField)
     dialog.setState(state);
 }
 
-// Move Start, Move End and Split are enabled exactly where the move is valid,
+// Move Start, Move End and Cut are enabled exactly where the move is valid,
 // so a click never has to be refused
-void testMoveAndSplitEnabled()
+void testMoveAndCutEnabled()
 {
-    std::cerr << "Testing Move Start/End and Split enablement\n";
+    std::cerr << "Testing Move Start/End and Cut enablement\n";
 
     SegmentsViewerDialog dialog;
     QTableWidget *table = dialog.findChild<QTableWidget *>(QStringLiteral("segmentsTable"));
     CHECK(table != nullptr);
     QPushButton *moveStart = button(dialog, QStringLiteral("Move Start Here"));
     QPushButton *moveEnd = button(dialog, QStringLiteral("Move End Here"));
-    QPushButton *split = button(dialog, QStringLiteral("Split At Current Frame"));
+    QPushButton *cut = button(dialog, QStringLiteral("Cut At Current Frame"));
 
     // Current field 20: inside the first segment
     setState(dialog, 20);
     table->clearSelection();
-    CHECK(!moveStart->isEnabled() && !moveEnd->isEnabled() && !split->isEnabled());
+    CHECK(!moveStart->isEnabled() && !moveEnd->isEnabled() && !cut->isEnabled());
 
     table->selectRow(0);
     CHECK(moveStart->isEnabled());
     CHECK(moveEnd->isEnabled());
-    CHECK(split->isEnabled());
+    CHECK(cut->isEnabled());
 
     // The second segment: its start can move back to 20 (after the first
     // segment's start), but its end can't move before its own start, and 20
-    // isn't inside it to split
+    // isn't inside it to cut
     table->selectRow(1);
     CHECK(moveStart->isEnabled());
     CHECK(!moveEnd->isEnabled());
-    CHECK(!split->isEnabled());
+    CHECK(!cut->isEnabled());
 
     // Current field 0: the second segment's start can't reach the first's
     setState(dialog, 0);
     table->selectRow(1);
     CHECK(!moveStart->isEnabled());
 
-    // No current frame: nothing to move to or split at
+    // No current frame: nothing to move to or cut at
     setState(dialog, -1);
     table->selectRow(0);
-    CHECK(!moveStart->isEnabled() && !moveEnd->isEnabled() && !split->isEnabled());
+    CHECK(!moveStart->isEnabled() && !moveEnd->isEnabled() && !cut->isEnabled());
 }
 
-// The Marks tab: ticking Split or unticking Enabled makes the mark the
-// user's and waits for Apply; Apply hands the marks over; the global
-// checkbox reports at once
-void testMarksTab()
+// The Shot Boundaries tab: ticking Scene Change confirms the boundary and
+// makes it the user's; a verdict, the scene's title and enabled flag and the
+// shot's flag wait for Apply; Apply hands the boundaries over; Add makes a
+// confirmed user boundary at the current frame
+void testShotBoundariesTab()
 {
-    std::cerr << "Testing the Marks tab\n";
+    std::cerr << "Testing the Shot Boundaries tab\n";
     SegmentsViewerDialog dialog;
-    QTableWidget *marks = dialog.findChild<QTableWidget *>(QStringLiteral("marksTable"));
-    CHECK(marks != nullptr);
+    QTableWidget *table = dialog.findChild<QTableWidget *>(QStringLiteral("shotBoundaryTable"));
+    CHECK(table != nullptr);
     SegmentsViewerState state;
     state.totalFrames = 50;
     state.totalFields = 100;
     state.currentFrame = 11;
     state.currentFirstField = 20;
-    SegmentMark a;
+    ShotBoundary a;
     a.id = 1; a.field = 30; a.confidence = 0.92; a.reason = QStringLiteral("matched field pair");
-    SegmentMark b = a;
+    ShotBoundary b = a;
     b.id = 2; b.field = 70;
-    state.marks = {a, b};
-    state.markFrames = {16, 36};
+    state.shotBoundaries = {a, b};
+    state.shotBoundaryFrames = {16, 36};
     dialog.setState(state);
-    CHECK(marks->rowCount() == 2);
-    CHECK(marks->item(0, 4)->text() == QStringLiteral("92%"));
-    CHECK(marks->item(1, 2)->text() == QStringLiteral("36"));
+    CHECK(table->rowCount() == 2);
+    CHECK(table->item(0, 4)->text() == QStringLiteral("92%"));
+    CHECK(table->item(1, 2)->text() == QStringLiteral("36"));
 
-    QVector<SegmentMark> applied;
-    QObject::connect(&dialog, &SegmentsViewerDialog::marksUpdated, [&applied](const QVector<SegmentMark> &m) { applied = m; });
-    bool splitToggled = false;
-    QObject::connect(&dialog, &SegmentsViewerDialog::splitAtRestartsToggled, [&splitToggled](bool on) { splitToggled = on; });
+    QVector<ShotBoundary> applied;
+    QObject::connect(&dialog, &SegmentsViewerDialog::shotBoundariesUpdated,
+                     [&applied](const QVector<ShotBoundary> &updated) { applied = updated; });
 
-    marks->item(0, 7)->setCheckState(Qt::Checked);      // Split
-    marks->item(1, 8)->setCheckState(Qt::Unchecked);    // Enabled: dismiss
+    table->item(0, 8)->setCheckState(Qt::Checked);        // Scene Change
+    table->item(0, 9)->setText(QStringLiteral("Wedding ceremony"));
+    table->item(1, 11)->setCheckState(Qt::Unchecked);     // Shot Enabled
+    auto *verdict = qobject_cast<QComboBox *>(table->cellWidget(1, 7));
+    CHECK(verdict != nullptr);
+    verdict->setCurrentText(QStringLiteral("rejected"));
     QPushButton *apply = nullptr;
     for (QPushButton *candidate : dialog.findChildren<QPushButton *>()) {
         if (candidate->text().remove(QLatin1Char('&')) == QStringLiteral("Apply")) apply = candidate;
@@ -156,22 +160,14 @@ void testMarksTab()
     CHECK(apply && apply->isEnabled() && applied.isEmpty());
     apply->click();
     CHECK(applied.size() == 2);
-    CHECK(applied[0].split && applied[0].source == QLatin1String("user"));
-    CHECK(!applied[1].enabled && applied[1].source == QLatin1String("user") && applied[1].field == 70);
+    CHECK(applied[0].sceneChange && applied[0].sceneTitle == QLatin1String("Wedding ceremony"));
+    CHECK(applied[0].source == QLatin1String("user") && applied[0].verdict == QLatin1String("confirmed"));
+    CHECK(!applied[1].shotEnabled && applied[1].verdict == QLatin1String("rejected") && applied[1].field == 70);
 
-    // Add a mark by hand at the current frame (field 20)
-    QPushButton *add = button(dialog, QStringLiteral("Add Mark At Current Frame"));
+    QPushButton *add = button(dialog, QStringLiteral("Add Shot Boundary At Current Frame"));
     CHECK(add->isEnabled());
     add->click();
-    CHECK(marks->rowCount() == 3 && marks->item(0, 6)->text() == QStringLiteral("user"));
-
-    QCheckBox *global = nullptr;
-    for (QCheckBox *candidate : dialog.findChildren<QCheckBox *>()) {
-        if (candidate->text() == QStringLiteral("Split at restarts")) global = candidate;
-    }
-    CHECK(global && !global->isChecked());
-    global->setChecked(true);
-    CHECK(splitToggled);
+    CHECK(table->rowCount() == 3 && table->item(0, 6)->text() == QStringLiteral("user"));
 }
 
 } // namespace
@@ -185,8 +181,8 @@ int main(int argc, char *argv[])
     // the QApplication constructor.
 #if !defined(Q_OS_WIN)
     QApplication application(argc, argv);
-    testMoveAndSplitEnabled();
-    testMarksTab();
+    testMoveAndCutEnabled();
+    testShotBoundariesTab();
 #else
     Q_UNUSED(argc);
     Q_UNUSED(argv);

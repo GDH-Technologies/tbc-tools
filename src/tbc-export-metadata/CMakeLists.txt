@@ -24,7 +24,7 @@ if(BUILD_TESTING)
         metadataexportdialog.ui
         ../library/gui/processprogressrunner.cpp
     )
-    target_link_libraries(testmetadataexportdialog PRIVATE Qt::Core Qt::Gui Qt::Widgets tbc-library)
+    target_link_libraries(testmetadataexportdialog PRIVATE Qt::Core Qt::Gui Qt::Widgets tbc-library tbc-segments-core)
     add_test(NAME testmetadataexportdialog COMMAND testmetadataexportdialog)
     # It builds a QApplication (not on Windows; see testmetadataexportdialog.cpp);
     # no display is needed or wanted.

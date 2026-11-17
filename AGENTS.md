@@ -104,9 +104,11 @@ source.open("input.tbc", fieldWidth);
 #include "filter/firfilter.h"
 FIRFilter<double> filter(coefficients);
 
-// Recording segments: derived only through the library. No tool re-implements
-// the gap/section rule, the segment classification or the frame-range rule.
-#include "tbc/segments.h"
+// Segments and shot boundaries: derived only through the tbc-segments module
+// (src/tbc-segments/core, target tbc-segments-core). No tool re-implements the
+// gap/section rule, the segment classification, the shot boundary rule or the
+// frame-range rule. Vocabulary: docs/Tools/tbc-segments-glossary.md.
+#include "segments.h"
 SegmentsAnalysis analysis = analyseSegments(metadata, range, thresholds, 0.0, nullptr);
 QVector<TbcMetaData::Segment> segments = deriveSegments(metadata, analysis, thresholds, "my-tool");
 ```

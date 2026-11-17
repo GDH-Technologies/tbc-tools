@@ -15,11 +15,10 @@
 #include <QVector>
 #include <QtGlobal>
 
-#include "restartmarks.h"
+#include "shotboundaries.h"
 #include "segments.h"
 #include "tbcmetadata.h"
 
-class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -48,20 +47,18 @@ struct SegmentsViewerState {
     bool derivedAtLoad = false;
     bool evidenceAvailable = false;    // decoder events or picture metrics stored
     QVector<SegmentsViewerRow> rows;
-    // Restart marks (with the 1-based frame each falls in) and the module's
-    // preferences shown beside them
-    QVector<SegmentMark> marks;
-    QVector<qint32> markFrames;
-    bool splitAtRestarts = false;
-    bool restartChapters = false;
+    // Shot boundaries, with the 1-based frame each falls in
+    // (Glossary: shot boundary, docs/Tools/tbc-segments-glossary.md#shot-boundary)
+    QVector<ShotBoundary> shotBoundaries;
+    QVector<qint32> shotBoundaryFrames;
 };
 
-// The Segments viewer: list, jump, set In/Out, enable/disable, rename,
-// move a boundary, split/merge, delete, re-derive; and, on its Marks tab, the
-// camcorder restart marks (go to, split or not, dismiss, comment, add by
-// hand) with the split-at-restarts and restart-chapter preferences. Edits are
-// applied by the controller on Apply (the segment layer and the marks;
-// decoder records stay immutable) and saved with Save Metadata.
+// The Segments viewer. Segments tab: list, jump, set In/Out, enable/disable,
+// rename, move a boundary, cut/merge, delete, re-derive. Shot Boundaries tab:
+// go to, verdict, scene change with the scene's title and enabled flag, the
+// shot's enabled flag, comment, add by hand. Edits are applied by the
+// controller on Apply and saved with Save Metadata; decoder records stay
+// immutable. Vocabulary: docs/Tools/tbc-segments-glossary.md.
 class SegmentsViewerDialog : public QDialog
 {
     Q_OBJECT
@@ -75,21 +72,21 @@ signals:
     void setInOutRequested(qint32 segmentIndex);
     void segmentsUpdated(const QVector<TbcMetaData::Segment> &segments);
     void rederiveRequested(const SegmentsThresholds &thresholds);
-    void marksUpdated(const QVector<SegmentMark> &marks);
-    void splitAtRestartsToggled(bool enabled);
-    void restartChaptersToggled(bool enabled);
+    void shotBoundariesUpdated(const QVector<ShotBoundary> &boundaries);
 
 private:
     enum Column { ColId = 0, ColStart, ColEnd, ColFrames, ColDuration, ColKind, ColSource, ColEnabled, ColTitle, ColComment, ColCount };
-    enum MarkColumn { MarkColId = 0, MarkColTime, MarkColFrame, MarkColKind, MarkColConfidence, MarkColReason,
-                      MarkColSource, MarkColSplit, MarkColEnabled, MarkColComment, MarkColCount };
+    enum BoundaryColumn { BColId = 0, BColTime, BColFrame, BColEvidence, BColConfidence, BColReason, BColSource,
+                          BColVerdict, BColSceneChange, BColSceneTitle, BColSceneEnabled, BColShotEnabled,
+                          BColComment, BColCount };
 
-    void rebuildMarksTable();
-    void refreshMarkRow(int row);
-    int selectedMarkRow() const;
-    void markMarkUserEdited(SegmentMark &mark);
-    void handleMarkItemChanged(int row, int column);
-    void addMarkAtCurrentFrame();
+    void rebuildBoundaryTable();
+    void refreshBoundaryRow(int row);
+    int selectedBoundaryRow() const;
+    void boundaryUserEdited(ShotBoundary &boundary);
+    void handleBoundaryItemChanged(int row, int column);
+    void handleVerdictChanged(int row, const QString &verdict);
+    void addShotBoundaryAtCurrentFrame();
     void flushUnappliedEdits();
 
     QString frameToTimecode(qint32 frameNumber) const;
@@ -105,7 +102,7 @@ private:
     void handleKindChanged(int row, const QString &kind);
     void moveStartHere();
     void moveEndHere();
-    void splitAtCurrentFrame();
+    void cutAtCurrentFrame();
     void mergeWithNext();
     void deleteSelected();
     void rederive();
@@ -116,14 +113,12 @@ private:
     bool dirty_ = false;
     bool applyingState_ = false;
 
-    QVector<SegmentMark> marks_;               // working copy
-    bool marksDirty_ = false;
+    QVector<ShotBoundary> boundaries_;         // working copy
+    bool boundariesDirty_ = false;
     QTabWidget *tabs_ = nullptr;
-    QTableWidget *marksTable_ = nullptr;
-    QPushButton *markGoButton_ = nullptr;
-    QPushButton *addMarkButton_ = nullptr;
-    QCheckBox *splitAtRestartsCheck_ = nullptr;
-    QCheckBox *restartChaptersCheck_ = nullptr;
+    QTableWidget *boundaryTable_ = nullptr;
+    QPushButton *goBoundaryButton_ = nullptr;
+    QPushButton *addBoundaryButton_ = nullptr;
     QTableWidget *table_ = nullptr;
     QLabel *infoLabel_ = nullptr;
     QPushButton *goStartButton_ = nullptr;
@@ -131,14 +126,14 @@ private:
     QPushButton *setInOutButton_ = nullptr;
     QPushButton *moveStartButton_ = nullptr;
     QPushButton *moveEndButton_ = nullptr;
-    QPushButton *splitButton_ = nullptr;
+    QPushButton *cutButton_ = nullptr;
     QPushButton *mergeButton_ = nullptr;
     QPushButton *deleteButton_ = nullptr;
     QComboBox *presetCombo_ = nullptr;
-    QSpinBox *minClipFieldsSpin_ = nullptr;
-    QSpinBox *minNonClipRunSpin_ = nullptr;
+    QSpinBox *minContentSpanFieldsSpin_ = nullptr;
+    QSpinBox *minNonContentRunSpin_ = nullptr;
     QDoubleSpinBox *noiseIreSpin_ = nullptr;
-    QDoubleSpinBox *sceneIreSpin_ = nullptr;
+    QDoubleSpinBox *fieldDiffSpikeIreSpin_ = nullptr;
     QPushButton *rederiveButton_ = nullptr;
     QPushButton *applyButton_ = nullptr;
 };

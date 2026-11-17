@@ -2,7 +2,7 @@
 
     testsegments.cpp
 
-    tbc-tools TBC library - unit tests for the recording-segment derivation
+    tbc-tools TBC library - unit tests for the segment derivation
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -35,8 +35,12 @@
 #include <cstdlib>
 #include <iostream>
 
-#include "markstore.h"
-#include "restartmarks.h"
+#include "sceneshots.h"
+#include "segmentexportplan.h"
+#include "shotboundaries.h"
+#include "shotboundarystore.h"
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include "segments.h"
 #include "tbcmetadata.h"
 
@@ -420,7 +424,7 @@ void testDecoderEventsMerge()
     CHECK(jumpEvent && jumpEvent->startField == 100);
     CHECK(jumpEvent->detail.value("source").toString() == QLatin1String("decoder"));
     CHECK(jumpEvent->detail.value("decoderDetail").toObject().value("jumpSamples").toInt() == 4000000);
-    // The decoder's skipped_field for a field the fault bit already marks is not a second event
+    // The decoder's skipped_field for a field the fault bit already flags is not a second event
     CHECK(countKind(a, "skipped_field") == 1);
     // A resume seam is an event but never a section boundary
     CHECK(countKind(a, "resume_seam") == 1);
@@ -452,7 +456,7 @@ void testStoredMetricsDriveFieldDataEvents()
     CHECK(stored.lumaMeanIre.size() == 400 && std::abs(stored.noiseIre[130] - 25.0) < 1e-9);
 
     const SegmentsAnalysis a = analyseSegments(m, fullRange(m), SegmentsThresholds(), 40e6, &stored);
-    const SegmentEvent *scene = firstOfKind(a, "scene_change");
+    const SegmentEvent *scene = firstOfKind(a, "field_diff_spike");
     CHECK(scene && scene->startField == 60);
     const SegmentEvent *noise = firstOfKind(a, "noise");
     CHECK(noise && noise->startField == 120 && noise->endFieldExclusive == 140);
@@ -481,17 +485,17 @@ void testDeriveSegments()
     }
     const FieldMetrics stored = FieldMetrics::fromMetadata(m);
     SegmentsThresholds t;
-    t.minNonClipRunFields = 30;   // the 20-field noise burst is too short to split
+    t.minNonContentRunFields = 30;   // the 20-field noise burst is too short to end a content span
     const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
     const QVector<TbcMetaData::Segment> segments = deriveSegments(m, a, t, QStringLiteral("testsegments"));
 
-    // [0,200) clip, [200,260) blank, [260,396) clip, [396,400) unknown
+    // [0,200) content span, [200,260) blank, [260,396) content span, [396,400) unknown
     CHECK(segments.size() == 4);
     CHECK(segments[0].id == 1 && segments[0].startField == 0 && segments[0].endFieldExclusive == 200);
-    CHECK(segments[0].kind == QLatin1String("clip") && segments[0].enabled);
+    CHECK(segments[0].kind == QLatin1String("content_span") && segments[0].enabled);
     CHECK(segments[1].startField == 200 && segments[1].endFieldExclusive == 260);
     CHECK(segments[1].kind == QLatin1String("blank") && !segments[1].enabled);
-    CHECK(segments[2].startField == 260 && segments[2].endFieldExclusive == 396 && segments[2].kind == QLatin1String("clip"));
+    CHECK(segments[2].startField == 260 && segments[2].endFieldExclusive == 396 && segments[2].kind == QLatin1String("content_span"));
     CHECK(segments[3].startField == 396 && segments[3].endFieldExclusive == 400 && segments[3].kind == QLatin1String("unknown"));
     for (const TbcMetaData::Segment &s : segments) {
         CHECK(s.source == QLatin1String("derived"));
@@ -503,13 +507,13 @@ void testDeriveSegments()
     m.setSegments(segments);
     CHECK(m.getSegments()[3].id == 4);
 
-    // A lower run threshold splits the noise burst out of the first clip
-    t.minNonClipRunFields = 10;
+    // A lower run threshold takes the noise burst out of the first content span
+    t.minNonContentRunFields = 10;
     const SegmentsAnalysis b = analyseSegments(m, fullRange(m), t, 40e6, &stored);
-    const QVector<TbcMetaData::Segment> split = deriveSegments(m, b, t, QStringLiteral("testsegments"));
-    CHECK(split.size() == 6);
-    CHECK(split[1].startField == 120 && split[1].endFieldExclusive == 140 && split[1].kind == QLatin1String("noise"));
-    CHECK(split[2].startField == 140 && split[2].endFieldExclusive == 200 && split[2].kind == QLatin1String("clip"));
+    const QVector<TbcMetaData::Segment> pieces = deriveSegments(m, b, t, QStringLiteral("testsegments"));
+    CHECK(pieces.size() == 6);
+    CHECK(pieces[1].startField == 120 && pieces[1].endFieldExclusive == 140 && pieces[1].kind == QLatin1String("noise"));
+    CHECK(pieces[2].startField == 140 && pieces[2].endFieldExclusive == 200 && pieces[2].kind == QLatin1String("content_span"));
 }
 
 // Picture metrics for a simple synthetic tape: picture everywhere, with
@@ -527,7 +531,7 @@ TbcMetaData::PictureMetrics pictureField()
 }
 
 // A dark recorded scene (luma at black, levels normal) is picture, not blank:
-// it neither raises blank_video nor splits its clip. With collapsed levels, or
+// it neither raises blank_video nor ends its content span. With collapsed levels, or
 // with luma below black, the same stretch is blank; without level metrics the
 // luma test stands alone.
 void testDarkSceneIsNotBlank()
@@ -553,7 +557,7 @@ void testDarkSceneIsNotBlank()
 
     const auto dark = derive(-0.4, 2.8, 1.6);         // the levels of a real dark scene
     CHECK(dark.first == 0);
-    CHECK(dark.second.size() == 1 && dark.second[0].kind == QLatin1String("clip"));
+    CHECK(dark.second.size() == 1 && dark.second[0].kind == QLatin1String("content_span"));
 
     const auto collapsed = derive(-18.0, 22.0, 1.6);  // the levels of real blank tape
     CHECK(collapsed.first == 1);
@@ -589,16 +593,17 @@ void testNoiseFragmentsMerge()
     CHECK(countKind(a, "noise") >= 4);   // the dips really do break the run
     const QVector<TbcMetaData::Segment> segments = deriveSegments(m, a, t, QStringLiteral("testsegments"));
     CHECK(segments.size() == 3);
-    CHECK(segments[0].startField == 0 && segments[0].endFieldExclusive == 100 && segments[0].kind == QLatin1String("clip"));
+    CHECK(segments[0].startField == 0 && segments[0].endFieldExclusive == 100 && segments[0].kind == QLatin1String("content_span"));
     CHECK(segments[1].startField == 100 && segments[1].endFieldExclusive == 400 && segments[1].kind == QLatin1String("noise"));
     CHECK(!segments[1].enabled);
-    CHECK(segments[2].startField == 400 && segments[2].endFieldExclusive == 600 && segments[2].kind == QLatin1String("clip"));
+    CHECK(segments[2].startField == 400 && segments[2].endFieldExclusive == 600 && segments[2].kind == QLatin1String("content_span"));
     for (qint32 i = 0; i < segments.size(); i++) CHECK(segments[i].id == i + 1);
 }
 
-// A one-field section between two clips (a decoder resync at a record
-// restart) joins the following clip: the boundary stays where it started
-void testSliverBetweenClipsKeepsBoundary()
+// Content pieces that meet across an RF gap, with a one-field section the
+// decoder left between them (a seamless shot boundary it lost sync at), are
+// one content span; the gap is an rf_gap shot boundary inside it
+void testRfGapInsideContentSpan()
 {
     TbcMetaData m;
     buildMetadata(m, 600);
@@ -612,25 +617,28 @@ void testSliverBetweenClipsKeepsBoundary()
     const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
     CHECK(a.sections.size() == 3);
     const QVector<TbcMetaData::Segment> segments = deriveSegments(m, a, t, QStringLiteral("testsegments"));
-    CHECK(segments.size() == 2);
-    CHECK(segments[0].endFieldExclusive == 300 && segments[0].kind == QLatin1String("clip"));
-    CHECK(segments[1].startField == 300 && segments[1].endFieldExclusive == 600 && segments[1].kind == QLatin1String("clip"));
-    CHECK(segments[1].id == 2 && segments[1].enabled);
+    CHECK(segments.size() == 1);
+    CHECK(segments[0].startField == 0 && segments[0].endFieldExclusive == 600 && isContentSpanKind(segments[0].kind));
+    const QVector<ShotBoundary> boundaries = detectShotBoundaries(a, &stored, t, segments, QStringLiteral("testsegments"));
+    CHECK(boundaries.size() == 1);
+    CHECK(boundaries[0].evidence == QLatin1String("rf_gap") && boundaries[0].field == 300);
+    CHECK(boundaries[0].verdict == QLatin1String("detected") && boundaries[0].confidence > 0.7);
 }
 
-// --- restart marks ---------------------------------------------------------------------
+// --- shot boundaries, scenes and shots ----------------------------------------------------
 
-// Restarts, flashes and screen cuts hand-checked on a Video8 camcorder tape:
-// every restart is marked within the fixture's tolerance, nothing else is
-void testRestartFixture()
+// Shot boundaries, flashes and screen cuts hand-checked on a Video8 camcorder
+// tape: every shot boundary is found within the fixture's tolerance, no
+// look-alike is
+void testShotBoundaryFixture()
 {
-    QFile file(QStringLiteral(TBC_TEST_DATA_DIR "/segments/video8-restart-labels.json"));
+    QFile file(QStringLiteral(TBC_TEST_DATA_DIR "/segments/video8-shot-boundary-labels.json"));
     CHECK(file.open(QIODevice::ReadOnly));
     const QJsonObject fixture = QJsonDocument::fromJson(file.readAll()).object();
     const qint32 tolerance = fixture.value("toleranceFields").toInt();
     const QJsonArray windows = fixture.value("windows").toArray();
     CHECK(windows.size() >= 30);
-    qint32 restarts = 0, others = 0;
+    qint32 boundariesSeen = 0, lookAlikes = 0;
     for (const QJsonValue &value : windows) {
         const QJsonObject window = value.toObject();
         const qint32 fields = window.value("fields").toInt();
@@ -655,105 +663,179 @@ void testRestartFixture()
         const SegmentsThresholds t;
         const SegmentsAnalysis a = analyseSegments(m, fullRange(m), t, 40e6, &stored);
         const QVector<TbcMetaData::Segment> base = deriveSegments(m, a, t, QStringLiteral("testsegments"));
-        const QVector<SegmentMark> marks = detectRestartMarks(a, stored, t, base, QStringLiteral("testsegments"));
-        const SegmentMark *hit = nullptr;
-        for (const SegmentMark &mark : marks) {
-            if (std::abs(mark.field - point) <= tolerance) hit = &mark;
+        const QVector<ShotBoundary> found = detectShotBoundaries(a, &stored, t, base, QStringLiteral("testsegments"));
+        const ShotBoundary *hit = nullptr;
+        for (const ShotBoundary &boundary : found) {
+            if (std::abs(boundary.field - point) <= tolerance) hit = &boundary;
         }
         const QString label = window.value("label").toString();
-        if (label == QLatin1String("restart")) {
-            restarts++;
-            if (!hit) std::cerr << "restart window " << restarts + others << " not marked\n";
+        if (label == QLatin1String("shot_boundary")) {
+            boundariesSeen++;
+            if (!hit) std::cerr << "shot boundary window " << boundariesSeen + lookAlikes << " not found\n";
             CHECK(hit != nullptr);
             CHECK(hit->confidence >= 0.5 && hit->confidence <= 1.0);
-            CHECK(!hit->reason.isEmpty() && hit->enabled && !hit->split && hit->source == QLatin1String("derived"));
+            CHECK(!hit->reason.isEmpty() && hit->evidence == QLatin1String("picture") && hit->source == QLatin1String("derived"));
+            CHECK(hit->verdict == QLatin1String("detected") && !hit->sceneChange);
         } else {
-            others++;
-            if (hit) std::cerr << label.toStdString() << " window " << restarts + others << " marked\n";
+            CHECK(label == QLatin1String("look_alike"));
+            lookAlikes++;
+            if (hit) std::cerr << "look-alike window " << boundariesSeen + lookAlikes << " found\n";
             CHECK(hit == nullptr);
         }
     }
-    CHECK(restarts == 30 && others == 10);
+    CHECK(boundariesSeen == 30 && lookAlikes == 10);
 }
 
-SegmentMark mark(qint32 id, qint32 field, const QString &source = QStringLiteral("derived"), bool enabled = true, bool split = false)
+ShotBoundary boundaryAt(qint32 id, qint32 field, const QString &source = QStringLiteral("derived"),
+                        const QString &verdict = QStringLiteral("detected"), bool sceneChange = false)
 {
-    SegmentMark m;
-    m.id = id;
-    m.field = field;
-    m.source = source;
-    m.enabled = enabled;
-    m.split = split;
-    return m;
+    ShotBoundary b;
+    b.id = id;
+    b.field = field;
+    b.source = source;
+    b.verdict = verdict;
+    b.sceneChange = sceneChange;
+    return b;
 }
 
-// User and dismissed marks survive a fresh detection; derived ones are
-// replaced, keeping their ids where the detection finds them again
-void testMergeMarks()
+// User and rejected boundaries survive a fresh detection; derived ones are
+// replaced, keeping their ids where the detection finds them again; ids are
+// never reused
+void testMergeShotBoundaries()
 {
-    const QVector<SegmentMark> stored = {mark(1, 100), mark(2, 200, QStringLiteral("user"), true, true),
-                                         mark(3, 300, QStringLiteral("derived"), false), mark(4, 400)};
-    const QVector<SegmentMark> detected = {mark(1, 101), mark(2, 199), mark(3, 301), mark(4, 500)};
-    const QVector<SegmentMark> merged = mergeMarks(stored, detected);
+    const QVector<ShotBoundary> stored = {boundaryAt(1, 100), boundaryAt(2, 200, QStringLiteral("user"), QStringLiteral("confirmed"), true),
+                                          boundaryAt(3, 300, QStringLiteral("derived"), QStringLiteral("rejected")), boundaryAt(4, 400)};
+    const QVector<ShotBoundary> detected = {boundaryAt(1, 101), boundaryAt(2, 199), boundaryAt(3, 301), boundaryAt(4, 500)};
+    const QVector<ShotBoundary> merged = mergeShotBoundaries(stored, detected);
     CHECK(merged.size() == 4);
-    CHECK(merged[0].field == 101 && merged[0].id == 1);                     // found again: id kept
-    CHECK(merged[1].field == 200 && merged[1].source == QLatin1String("user") && merged[1].split);
-    CHECK(merged[2].field == 300 && !merged[2].enabled);                     // dismissed stays dismissed
-    CHECK(merged[3].field == 500 && merged[3].id == 5);                      // new: next free id
-    // The derived mark at 400 that the detection no longer finds is gone
-    for (const SegmentMark &m : merged) CHECK(m.field != 400);
+    CHECK(merged[0].field == 101 && merged[0].id == 1);                  // found again: id kept
+    CHECK(merged[1].field == 200 && merged[1].source == QLatin1String("user") && merged[1].sceneChange);
+    CHECK(merged[2].field == 300 && merged[2].rejected());               // rejected stays rejected
+    CHECK(merged[3].field == 500 && merged[3].id == 5);                  // new: above every stored id
+    for (const ShotBoundary &b : merged) CHECK(b.field != 400);
 }
 
-// Only enabled marks that split cut a clip; noise, and marks on a start, cut nothing
-void testSplitSegmentsAtMarks()
+// Scenes break at scene changes, shots at every boundary that is not
+// rejected; titles and enabled flags follow the glossary's rules
+void testScenesAndShots()
 {
-    TbcMetaData::Segment clip;
-    clip.id = 1; clip.startField = 0; clip.endFieldExclusive = 300; clip.kind = QStringLiteral("clip"); clip.title = QStringLiteral("Party");
+    TbcMetaData::Segment span;
+    span.id = 9; span.startField = 0; span.endFieldExclusive = 600; span.kind = contentSpanKind(); span.enabled = true;
     TbcMetaData::Segment noise;
-    noise.id = 2; noise.startField = 300; noise.endFieldExclusive = 400; noise.kind = QStringLiteral("noise"); noise.enabled = false;
-    const QVector<TbcMetaData::Segment> segments = {clip, noise};
-    CHECK(splitSegmentsAtMarks(segments, {mark(1, 100)}).size() == 2);                                     // not split
-    CHECK(splitSegmentsAtMarks(segments, {mark(1, 100, QStringLiteral("derived"), false, true)}).size() == 2); // dismissed
-    const QVector<TbcMetaData::Segment> split = splitSegmentsAtMarks(
-        segments, {mark(1, 100, QStringLiteral("derived"), true, true), mark(2, 200, QStringLiteral("user"), true, true),
-                   mark(3, 0, QStringLiteral("derived"), true, true), mark(4, 350, QStringLiteral("derived"), true, true)});
-    CHECK(split.size() == 4);
-    CHECK(split[0].id == 1 && split[0].endFieldExclusive == 100 && split[0].title == QLatin1String("Party"));
-    CHECK(split[1].startField == 100 && split[1].endFieldExclusive == 200 && split[1].title.isEmpty() && split[1].id == 3);
-    CHECK(split[2].startField == 200 && split[2].endFieldExclusive == 300 && split[2].kind == QLatin1String("clip") && split[2].id == 4);
-    CHECK(split[3].id == 2 && split[3].startField == 300 && split[3].endFieldExclusive == 400);
+    noise.id = 10; noise.startField = 600; noise.endFieldExclusive = 700; noise.kind = QStringLiteral("noise"); noise.enabled = false;
+    TbcMetaData::Segment legacy;   // a span stored under the kind's old name
+    legacy.id = 11; legacy.startField = 700; legacy.endFieldExclusive = 800; legacy.kind = QStringLiteral("clip"); legacy.enabled = false; // glossary-legacy
+    const QVector<TbcMetaData::Segment> segments = {span, noise, legacy};
+
+    ShotBoundary wedding = boundaryAt(1, 200, QStringLiteral("user"), QStringLiteral("confirmed"), true);
+    wedding.sceneTitle = QStringLiteral("Wedding ceremony");
+    ShotBoundary insideWedding = boundaryAt(2, 300);
+    insideWedding.shotEnabled = false;
+    ShotBoundary rejected = boundaryAt(3, 350, QStringLiteral("user"), QStringLiteral("rejected"), true);
+    ShotBoundary later = boundaryAt(4, 450, QStringLiteral("user"), QStringLiteral("confirmed"), true);
+    later.sceneEnabled = false;
+    const QVector<ShotBoundary> boundaries = {wedding, insideWedding, rejected, later};
+
+    const QVector<SegmentPart> scenes = scenesOf(segments, boundaries);
+    CHECK(scenes.size() == 4);   // span 9: 3 scenes (the rejected scene change is not one); span 11: 1
+    CHECK(scenes[0].startField == 0 && scenes[0].endFieldExclusive == 200 && scenes[0].title == QLatin1String("Segment 9"));
+    CHECK(scenes[0].enabled && scenes[0].boundaryId == -1);
+    CHECK(scenes[1].startField == 200 && scenes[1].endFieldExclusive == 450 && scenes[1].title == QLatin1String("Wedding ceremony"));
+    CHECK(scenes[2].startField == 450 && scenes[2].title == QStringLiteral("Segment 9 \u00b7 scene 3") && !scenes[2].enabled);
+    CHECK(scenes[3].spanId == 11 && !scenes[3].enabled);   // the first scene takes the span's flag
+
+    const QVector<SegmentPart> shots = shotsOf(segments, boundaries);
+    // span 9: [0,200) [200,300) [300,450) [450,600); span 11: [700,800)
+    CHECK(shots.size() == 5);
+    CHECK(shots[0].title == QStringLiteral("Segment 9 \u00b7 1") && shots[0].enabled);
+    CHECK(shots[1].startField == 200 && shots[1].title == QStringLiteral("Wedding ceremony \u00b7 1") && shots[1].enabled);
+    CHECK(shots[2].startField == 300 && shots[2].endFieldExclusive == 450 && shots[2].title == QStringLiteral("Wedding ceremony \u00b7 2"));
+    CHECK(!shots[2].enabled);      // its boundary's shot flag
+    CHECK(shots[3].startField == 450 && shots[3].number == 1);
+    CHECK(shots[4].spanId == 11 && !shots[4].enabled);
 }
 
-// Marks round-trip through the .tbc.db in the module's own table; writing
-// what is already stored writes nothing; the library's tables are untouched
-void testMarkStoreRoundTrip()
+// Export by span, scene or shot; a stored legacy selection reads as spans
+void testExportPlanGranularity()
+{
+    TbcMetaData::Segment span;
+    span.id = 1; span.startField = 0; span.endFieldExclusive = 400; span.kind = contentSpanKind(); span.enabled = true;
+    span.title = QStringLiteral("Party");
+    TbcMetaData::Segment noise;
+    noise.id = 2; noise.startField = 400; noise.endFieldExclusive = 500; noise.kind = QStringLiteral("noise"); noise.enabled = false;
+    const QVector<TbcMetaData::Segment> segments = {span, noise};
+    ShotBoundary scene = boundaryAt(1, 200, QStringLiteral("user"), QStringLiteral("confirmed"), true);
+    ShotBoundary shot = boundaryAt(2, 300);
+    const QVector<ShotBoundary> boundaries = {scene, shot};
+    const auto frames = [](const TbcMetaData::Segment &s, qint32 *start, qint32 *length) {
+        *start = s.startField / 2 + 1;
+        *length = (s.endFieldExclusive - s.startField) / 2;
+        return true;
+    };
+    const SegmentExportPlan spans = planSegmentExports(segments, boundaries, QStringLiteral("enabled_content_spans"), QStringLiteral("out"), true, frames);
+    CHECK(spans.items.size() == 1 && spans.items[0].outputBase == QLatin1String("out_01_Party"));
+    const SegmentExportPlan legacy = planSegmentExports(segments, boundaries, QStringLiteral("enabled_clips"), QStringLiteral("out"), false, frames); // glossary-legacy
+    CHECK(legacy.items.size() == 1);
+    const SegmentExportPlan scenes = planSegmentExports(segments, boundaries, QStringLiteral("enabled_scenes"), QStringLiteral("out"), false, frames);
+    CHECK(scenes.items.size() == 2 && scenes.items[1].outputBase == QLatin1String("out_scene02"));
+    CHECK(scenes.items[1].startFrameOneBased == 101 && scenes.items[1].lengthFrames == 100);
+    const SegmentExportPlan shots = planSegmentExports(segments, boundaries, QStringLiteral("enabled_shots"), QStringLiteral("out"), false, frames);
+    CHECK(shots.items.size() == 3 && shots.items[2].outputBase == QLatin1String("out_shot03"));
+}
+
+// Shot boundaries round-trip through the .tbc.db in the module's own table
+// (and a legacy segment_mark table is dropped: glossary-legacy); writing what is already
+// stored writes nothing; the library's tables are untouched; the export
+// snapshot sidecar round-trips too
+void testShotBoundaryStore()
 {
     QTemporaryDir dir;
     CHECK(dir.isValid());
-    const QString db = dir.filePath(QStringLiteral("marks.tbc.db"));
+    const QString db = dir.filePath(QStringLiteral("store.tbc.db"));
     TbcMetaData m;
     buildMetadata(m, 100);
     CHECK(m.write(db));
-    QVector<SegmentMark> read;
+    {
+        QSqlDatabase legacyDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("legacy"));
+        legacyDb.setDatabaseName(db);
+        CHECK(legacyDb.open());
+        QSqlQuery q(legacyDb);
+        CHECK(q.exec(QStringLiteral("CREATE TABLE segment_mark (mark_id INTEGER PRIMARY KEY)"))); // glossary-legacy
+        legacyDb.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("legacy"));
+    QVector<ShotBoundary> read;
     bool hasTable = true;
-    CHECK(MarkStore::read(db, &read, &hasTable) && read.isEmpty() && !hasTable);
-    CHECK(MarkStore::databasePathFor(dir.filePath(QStringLiteral("marks.tbc.json"))) == db);
+    CHECK(ShotBoundaryStore::read(db, &read, &hasTable) && read.isEmpty() && !hasTable);
+    CHECK(ShotBoundaryStore::databasePathFor(dir.filePath(QStringLiteral("store.tbc.json"))) == db);
 
-    SegmentMark a = mark(1, 40, QStringLiteral("derived"), true, false);
+    ShotBoundary a = boundaryAt(1, 40);
     a.confidence = 0.875; a.reason = QStringLiteral("matched field pair"); a.detailJson = QStringLiteral("{\"contrast\":3.2}");
     a.createdBy = QStringLiteral("testsegments"); a.updatedAt = QStringLiteral("2026-11-11T00:00:00Z");
-    SegmentMark b = mark(2, 70, QStringLiteral("user"), false, true);
-    b.comment = QStringLiteral("not a restart");
+    ShotBoundary b = boundaryAt(2, 70, QStringLiteral("user"), QStringLiteral("confirmed"), true);
+    b.sceneTitle = QStringLiteral("Wedding ceremony"); b.sceneEnabled = false; b.shotEnabled = false; b.evidence = QStringLiteral("rf_gap");
     bool changed = false;
-    CHECK(MarkStore::write(db, {a, b}, &changed) && changed);
-    CHECK(MarkStore::read(db, &read, &hasTable) && hasTable);
+    CHECK(ShotBoundaryStore::write(db, {a, b}, &changed) && changed);
+    CHECK(ShotBoundaryStore::read(db, &read, &hasTable) && hasTable);
     CHECK(read.size() == 2 && read[0] == a && read[1] == b);
-    CHECK(MarkStore::write(db, {a, b}, &changed) && !changed);
-    CHECK(MarkStore::write(db, {a}, &changed) && changed);
-    CHECK(MarkStore::read(db, &read) && read.size() == 1 && read[0] == a);
-
+    CHECK(ShotBoundaryStore::write(db, {a, b}, &changed) && !changed);
+    {
+        QSqlDatabase check = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("check"));
+        check.setDatabaseName(db);
+        CHECK(check.open());
+        QSqlQuery q(check);
+        CHECK(q.exec(QStringLiteral("SELECT count(*) FROM sqlite_master WHERE name = 'segment_mark'")) && q.next()); // glossary-legacy
+        CHECK(q.value(0).toInt() == 0);
+        check.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("check"));
     TbcMetaData again;
     CHECK(again.read(db) && again.getNumberOfFields() == 100);
+
+    const QString snapshot = dir.filePath(QStringLiteral("snapshot.tbc.json"));
+    CHECK(ShotBoundaryStore::writeSidecar(snapshot, {a, b}));
+    QVector<ShotBoundary> fromSidecar;
+    CHECK(ShotBoundaryStore::readSidecar(snapshot, &fromSidecar) && fromSidecar.size() == 2 && fromSidecar[1] == b);
 }
 
 void testPresets()
@@ -763,7 +845,7 @@ void testPresets()
     const SegmentsThresholds high = SegmentsThresholds::preset(SegmentSensitivity::High);
     CHECK(low.syncConfThreshold < normal.syncConfThreshold && normal.syncConfThreshold < high.syncConfThreshold);
     CHECK(low.minRunFields > normal.minRunFields && normal.minRunFields > high.minRunFields);
-    CHECK(low.minClipFields > normal.minClipFields && normal.minClipFields > high.minClipFields);
+    CHECK(low.minContentSpanFields > normal.minContentSpanFields && normal.minContentSpanFields > high.minContentSpanFields);
     CHECK(normal.gapTolerance == SegmentsThresholds().gapTolerance);
 }
 
@@ -858,7 +940,24 @@ void testReportShape()
     CHECK(segs.size() == 1);
     CHECK(segs.at(0).toObject().value("startFrame").toInt() == 1);
     CHECK(segs.at(0).toObject().value("lengthFrames").toInt() == 20);
-    CHECK(segs.at(0).toObject().value("kind").toString() == QLatin1String("clip"));
+    CHECK(segs.at(0).toObject().value("kind").toString() == QLatin1String("content_span"));
+    CHECK(report.value("counts").toObject().contains("field_diff_spike"));
+    CHECK(report.value("counts").toObject().contains("scene_change"));   // glossary-legacy: until digitization-toolkit #714
+
+    // Shot boundaries, scenes and shots join the report
+    QJsonObject withBoundaries = report;
+    ShotBoundary boundary;
+    boundary.id = 1;
+    boundary.field = 20;
+    boundary.sceneChange = true;
+    TbcMetaData::Segment span;
+    span.id = 1; span.startField = 0; span.endFieldExclusive = 40; span.kind = contentSpanKind(); span.enabled = true;
+    addShotBoundariesToReport(&withBoundaries, m, a, {span}, {boundary}, QStringLiteral("derived"));
+    CHECK(withBoundaries.value("shotBoundaries").toArray().size() == 1);
+    CHECK(withBoundaries.value("shotBoundariesSource").toString() == QLatin1String("derived"));
+    CHECK(withBoundaries.value("counts").toObject().value("shot_boundary").toInt() == 1);
+    CHECK(withBoundaries.value("scenes").toArray().size() == 2 && withBoundaries.value("shots").toArray().size() == 2);
+    CHECK(withBoundaries.value("scenes").toArray().at(1).toObject().value("startFrame").toInt() == 11);
     CHECK(!QJsonDocument(report).toJson(QJsonDocument::Compact).isEmpty());
 }
 
@@ -881,11 +980,12 @@ int main(int argc, char *argv[])
     testDeriveSegments();
     testDarkSceneIsNotBlank();
     testNoiseFragmentsMerge();
-    testSliverBetweenClipsKeepsBoundary();
-    testRestartFixture();
-    testMergeMarks();
-    testSplitSegmentsAtMarks();
-    testMarkStoreRoundTrip();
+    testRfGapInsideContentSpan();
+    testShotBoundaryFixture();
+    testMergeShotBoundaries();
+    testScenesAndShots();
+    testExportPlanGranularity();
+    testShotBoundaryStore();
     testPresets();
     testFrameRanges();
     testReportShape();

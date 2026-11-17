@@ -453,12 +453,12 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
     )
 
     export_metadata.add_argument(
-        "--export-metadata-restart-chapters",
-        action="store_true",
-        default=False,
+        "--export-metadata-chapters-by",
+        choices=["segment", "scene", "shot"],
+        default=None,
         help=(
-            "With --export-metadata, cut each recording segment's chapter at\n"
-            "its camcorder restart marks (one chapter per take). (default: no)\n\n"
+            "With --export-metadata, chapters by segment (the default), scene or\n"
+            "shot (see docs/Tools/tbc-segments-glossary.md#chapters-by).\n\n"
         ),
     )
 

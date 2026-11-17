@@ -179,7 +179,8 @@ bool writeFfmetadata(TbcMetaData &metaData,
                      qint32 lengthFrames,
                      bool includeVitcTimecode,
                      FfmetadataSegmentMode segmentMode,
-                     const QVector<SegmentMark> &restartChapterMarks)
+                     ChaptersBy chaptersByChoice,
+                     const QVector<ShotBoundary> &shotBoundaries)
 {
     const auto videoParameters = metaData.getVideoParameters();
 
@@ -203,10 +204,9 @@ bool writeFfmetadata(TbcMetaData &metaData,
     const NavigationInfo navInfo(metaData);
     std::vector<FfmetadataChapter> chapters;
 
-    // Recording segments stored in the metadata take the place of the
+    // Segments stored in the metadata take the place of the
     // LaserDisc navigation chapters (a tape has none; a disc has no segments)
-    const QVector<SegmentChapter> segmentList = cutChaptersAtRestarts(segmentChapters(metaData, segmentMode),
-                                                                      restartChapterMarks);
+    const QVector<SegmentChapter> segmentList = chaptersBy(metaData, segmentMode, chaptersByChoice, shotBoundaries);
     if (!segmentList.isEmpty()) {
         chapters.reserve(static_cast<size_t>(segmentList.size()) + 1);
         for (const SegmentChapter &segment : segmentList) {

@@ -22,7 +22,7 @@
 
 ************************************************************************/
 
-// Recording segments as FFMETADATA1 chapters, and the segments JSON report,
+// Segments as FFMETADATA1 chapters, and the segments JSON report,
 // over synthetic NTSC metadata: chapter placement, START/END rebased to the
 // export start field, titles, disabled segments, the navigation fallback,
 // the user-marker splice, and the frame ranges of the JSON report.
@@ -116,9 +116,9 @@ TbcMetaData::Segment segment(qint32 id, qint32 start, qint32 end, const QString 
 void addSegments(TbcMetaData &m)
 {
     QVector<TbcMetaData::Segment> segments;
-    segments.append(segment(1, 0, 101, QStringLiteral("clip"), true, QStringLiteral("Intro")));
+    segments.append(segment(1, 0, 101, contentSpanKind(), true, QStringLiteral("Intro")));
     segments.append(segment(2, 101, 250, QStringLiteral("blank"), false));
-    segments.append(segment(3, 250, 400, QStringLiteral("clip"), true, QString(), QStringLiteral("second take")));
+    segments.append(segment(3, 250, 400, contentSpanKind(), true, QString(), QStringLiteral("second take")));
     m.setSegments(segments);
 }
 
@@ -310,7 +310,7 @@ void testSegmentsJson(const QTemporaryDir &dir)
     CHECK(report.value(QStringLiteral("range")).toObject().value(QStringLiteral("endFieldExclusive")).toInt() == 400);
     CHECK(!report.contains(QStringLiteral("perField")));
 
-    // No stored segments: derived through the library, and the whole file is one clip
+    // No stored segments: derived through the library, and the whole file is one content span
     TbcMetaData bare;
     buildMetadata(bare, 400);
     const QString barePath = tmpPath(dir, QStringLiteral("bare.json"));
@@ -324,35 +324,54 @@ void testSegmentsJson(const QTemporaryDir &dir)
     CHECK(bareReport.value(QStringLiteral("range")).toObject().value(QStringLiteral("lengthFrames")).toInt() == 100);
 }
 
-// Restart chapters: off by default; with marks, a segment's chapter is cut
-// into takes that tile it exactly; a mark that splits (already a segment
-// boundary), a dismissed mark and one on a chapter start cut nothing
-void testRestartChapters(const QTemporaryDir &dir)
+// Chapters by scene or shot (Glossary: chapters by): one chapter per segment
+// by default; by scene, a content span's chapter becomes its scenes; by
+// shot, its shots; a rejected boundary starts nothing; disabled segments stay
+// out under EnabledSegments
+void testChaptersBy(const QTemporaryDir &dir)
 {
     TbcMetaData m;
     buildMetadata(m, 400);
     addSegments(m);
-    const auto restart = [](qint32 field, bool enabled = true, bool split = false) {
-        SegmentMark mark;
-        mark.field = field;
-        mark.enabled = enabled;
-        mark.split = split;
-        return mark;
+    const auto boundary = [](qint32 id, qint32 field, bool sceneChange, const QString &verdict = QStringLiteral("detected")) {
+        ShotBoundary b;
+        b.id = id;
+        b.field = field;
+        b.sceneChange = sceneChange;
+        b.verdict = verdict;
+        return b;
     };
-    const QString plainPath = tmpPath(dir, QStringLiteral("restart-off.txt"));
-    CHECK(writeFfmetadata(m, plainPath, -1, -1, true, FfmetadataSegmentMode::EnabledSegments, {}));
+    ShotBoundary cake = boundary(1, 40, true, QStringLiteral("confirmed"));
+    cake.sceneTitle = QStringLiteral("Cake");
+    const QVector<ShotBoundary> boundaries = {cake, boundary(2, 70, false), boundary(3, 80, true, QStringLiteral("rejected")),
+                                              boundary(4, 300, false)};
+
+    const QString plainPath = tmpPath(dir, QStringLiteral("chapters-segment.txt"));
+    CHECK(writeFfmetadata(m, plainPath, -1, -1, true, FfmetadataSegmentMode::EnabledSegments, ChaptersBy::Segment, boundaries));
     CHECK(parse(plainPath).chapters.size() == 2);
 
-    const QString path = tmpPath(dir, QStringLiteral("restart-on.txt"));
-    CHECK(writeFfmetadata(m, path, -1, -1, true, FfmetadataSegmentMode::EnabledSegments,
-                          {restart(40), restart(70), restart(300, true, true), restart(320, false), restart(250)}));
-    const Parsed p = parse(path);
-    CHECK(p.chapters.size() == 4);
-    CHECK(p.chapters[0].start == 0 && p.chapters[0].end == 39 && p.chapters[0].title == QStringLiteral("Intro · take 1"));
-    CHECK(p.chapters[1].start == 40 && p.chapters[1].end == 69 && p.chapters[1].title == QStringLiteral("Intro · take 2"));
-    CHECK(p.chapters[2].start == 70 && p.chapters[2].end == 100 && p.chapters[2].title == QStringLiteral("Intro · take 3"));
-    CHECK(p.chapters[3].start == 250 && p.chapters[3].end == 399 && p.chapters[3].title == QLatin1String("Segment 3"));
-    CHECK(p.chapters[2].comment.isEmpty() && p.chapters[3].comment == QLatin1String("second take"));
+    const QString scenePath = tmpPath(dir, QStringLiteral("chapters-scene.txt"));
+    CHECK(writeFfmetadata(m, scenePath, -1, -1, true, FfmetadataSegmentMode::EnabledSegments, ChaptersBy::Scene, boundaries));
+    const Parsed scenes = parse(scenePath);
+    CHECK(scenes.chapters.size() == 3);
+    CHECK(scenes.chapters[0].start == 0 && scenes.chapters[0].end == 39 && scenes.chapters[0].title == QLatin1String("Intro"));
+    CHECK(scenes.chapters[1].start == 40 && scenes.chapters[1].end == 100 && scenes.chapters[1].title == QLatin1String("Cake"));
+    CHECK(scenes.chapters[2].start == 250 && scenes.chapters[2].end == 399 && scenes.chapters[2].title == QLatin1String("Segment 3"));
+
+    const QString shotPath = tmpPath(dir, QStringLiteral("chapters-shot.txt"));
+    CHECK(writeFfmetadata(m, shotPath, -1, -1, true, FfmetadataSegmentMode::EnabledSegments, ChaptersBy::Shot, boundaries));
+    const Parsed shots = parse(shotPath);
+    CHECK(shots.chapters.size() == 5);
+    CHECK(shots.chapters[0].title == QStringLiteral("Intro \u00b7 1") && shots.chapters[0].end == 39);
+    CHECK(shots.chapters[1].title == QStringLiteral("Cake \u00b7 1") && shots.chapters[1].start == 40 && shots.chapters[1].end == 69);
+    CHECK(shots.chapters[2].title == QStringLiteral("Cake \u00b7 2") && shots.chapters[2].start == 70 && shots.chapters[2].end == 100);
+    CHECK(shots.chapters[3].title == QStringLiteral("Segment 3 \u00b7 1") && shots.chapters[3].end == 299);
+    CHECK(shots.chapters[4].title == QStringLiteral("Segment 3 \u00b7 2") && shots.chapters[4].start == 300);
+    CHECK(chaptersByFromName(QStringLiteral("scene")) == ChaptersBy::Scene && chaptersByFromName(QStringLiteral("x")) == ChaptersBy::Segment);
+    bool ok = true;
+    CHECK(chaptersByFromName(QStringLiteral("x"), &ok) == ChaptersBy::Segment && !ok);
+    CHECK(chaptersByFromName(QStringLiteral("Segment"), &ok) == ChaptersBy::Segment && ok);
+    CHECK(chaptersByFromName(QString(), &ok) == ChaptersBy::Segment && ok);
 }
 
 } // namespace
@@ -368,7 +387,7 @@ int main(int argc, char *argv[])
     testRangeRebasing(dir);
     testUserMarkerSplice(dir);
     testSegmentsJson(dir);
-    testRestartChapters(dir);
+    testChaptersBy(dir);
     std::cout << "testffmetadata: all checks passed\n";
     return 0;
 }

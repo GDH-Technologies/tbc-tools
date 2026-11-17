@@ -6,8 +6,8 @@ This application reads ld-decode metadata (`.db` or `.json`) and exports informa
 - Per-frame LaserDisc VBI control signals, as CSV
 - LaserDisc navigation information, as Audacity labels
 - LaserDisc navigation information, as FFMETADATA1 (which FFmpeg can use to add chapter navigation to a video file, including VITC `timecode` when available)
-- Recording segments stored in the metadata (tape record start/stop seams found by tbc-segments or edited in tbc-analyse), as FFMETADATA1 chapters in place of the LaserDisc navigation chapters, rebased to the `--start`/`--length` window so a per-segment export carries its own chapters
-- The recording-segment report (segments, events, per-segment frame ranges) as JSON, from the metadata alone
+- [Segments](tbc-segments-glossary.md#segment) stored in the metadata (found by tbc-segments or edited in tbc-analyse), as FFMETADATA1 chapters in place of the LaserDisc navigation chapters, rebased to the `--start`/`--length` window so a per-segment export carries its own chapters; or [chapters by](tbc-segments-glossary.md#chapters-by) scene or shot
+- The segment report (segments, [shot boundaries](tbc-segments-glossary.md#shot-boundary), scenes, shots, events and their frame ranges) as JSON, from the metadata alone
 - FFmpeg readvitc filter style VITC text, as `lavfi.readvitc.*` key lines for every frame
 - Closed Captions, as SCC format (which tools like [ttconv](https://github.com/sandflow/ttconv) can read)
 
@@ -34,12 +34,12 @@ Options:
   --ffmetadata-no-vitc-timecode  Disable FFmpeg-style VITC timecode output in FFMETADATA
   --start <frame>           FFMETADATA / segments JSON export start frame (1-based)
   --length <frames>         FFMETADATA / segments JSON export frame length
-  --ffmetadata-all-segments Write a chapter for every stored recording segment, disabled ones included
+  --ffmetadata-all-segments Write a chapter for every stored segment, disabled ones included
                             (default: enabled segments only)
-  --ffmetadata-no-segments  Ignore stored recording segments; write LaserDisc navigation chapters only
-  --ffmetadata-restart-chapters  Cut each segment's chapter at its camcorder restart marks
-                            (one chapter per take)
-  --segments-json <file>    Write the recording-segment report (stored or derived segments, events,
+  --ffmetadata-no-segments  Ignore stored segments; write LaserDisc navigation chapters only
+  --ffmetadata-chapters-by <segment|scene|shot>
+                            Chapters by segment (default), scene or shot
+  --segments-json <file>    Write the segment report (stored or derived segments, shot boundaries, scenes, shots, events,
                             frame ranges) as JSON; '-' for stdout
   --ffmpeg-vitc <file>      Write FFmpeg readvitc filter style VITC text (lavfi.readvitc.*)
   --closed-captions <file>  Write closed captions as Scenarist SCC V1.0 format
@@ -48,9 +48,9 @@ Arguments:
   input                     Specify input metadata file
 ```
 
-### Recording segments as chapters
+### Segments as chapters
 
-When the metadata holds recording segments (`segments` in the JSON, the
+When the metadata holds [segments](tbc-segments-glossary.md#segment) (`segments` in the JSON, the
 `segment` table in the SQLite database; written by `tbc-segments
 --write-segments` or tbc-analyse's Segments viewer), `--ffmetadata` writes one
 `[CHAPTER]` per enabled segment instead of the LaserDisc navigation chapters.
@@ -63,17 +63,25 @@ marker is still spliced in. `--ffmetadata-all-segments` includes disabled
 segments; `--ffmetadata-no-segments` restores the navigation-only output. A
 decode without stored segments is unchanged.
 
-`--ffmetadata-restart-chapters` also cuts each segment's chapter at its
-camcorder restart marks (see `docs/Tools/tbc-segments.md`): the pieces are
-titled `<title> · take 1`, `· take 2`... A mark that already splits its clip
-is a segment boundary, so it does not cut twice. The marks are the ones stored
-in the `.tbc.db`, else a detection over the file. Off by default: the MKV keeps
-one chapter per segment.
+`--ffmetadata-chapters-by scene` or `shot` replaces each content span's
+chapter with its [scenes](tbc-segments-glossary.md#scene) or
+[shots](tbc-segments-glossary.md#shot), worked out from the
+[shot boundaries](tbc-segments-glossary.md#shot-boundary) and titled with
+their [titles](tbc-segments-glossary.md#title) (an untitled scene is
+`<span title> · scene n`, a shot `<scene title> · n`). Under the default
+(enabled segments) only scenes or shots
+[enabled](tbc-segments-glossary.md#enabled) at that level are written. The
+shot boundaries are the ones stored in the `.tbc.db`; for tbc-analyse's export
+snapshot (which has no `.tbc.db`) the `<snapshot>.shot-boundaries.json`
+sidecar it writes beside it; else a detection over the file. The default is
+one chapter per segment, as before.
 
 `--segments-json` writes tbc-segments' report (schema 1) from the metadata
 alone: the stored segments (derived when none are stored), the events
-derived from the field records and any stored picture metrics, the restart
-marks (stored, else detected), and each segment's 1-based `startFrame`/`lengthFrames` under the
-mixed-frame rule, so a caller can export every segment with
+derived from the field records and any stored picture metrics, the
+[shot boundaries](tbc-segments-glossary.md#shot-boundary) (stored, else
+detected), the `scenes` and `shots` worked out from them, and each item's
+1-based `startFrame`/`lengthFrames` under the
+mixed-frame rule, so a caller can export by content span, scene or shot with
 `tbc-video-export --start/--length` and know the ranges tile the tape. No TBC
-is read. See `docs/Tools/tbc-segments.md`.
+is read. See `docs/Tools/tbc-segments.md` and the [glossary](tbc-segments-glossary.md).

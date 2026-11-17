@@ -2,7 +2,7 @@
 
     segments.cpp
 
-    tbc-segments - Recording-boundary analysis of TBC metadata and fields
+    tbc-segments - Segment analysis of TBC metadata and fields
     Copyright (C) 2026 GDH-Technologies LLC
 
     This file is part of tbc-tools.
@@ -165,20 +165,20 @@ SegmentsThresholds SegmentsThresholds::preset(SegmentSensitivity sensitivity)
         t.syncConfThreshold = 30;
         t.minRunFields = 4;
         t.dropoutStormThreshold = 0.40;
-        t.sceneThresholdIre = 16.0;
+        t.fieldDiffSpikeIre = 16.0;
         t.noiseThresholdIre = 8.0;
-        t.minClipFields = 20;
-        t.minNonClipRunFields = 100;
+        t.minContentSpanFields = 20;
+        t.minNonContentRunFields = 100;
         break;
     case SegmentSensitivity::High:
         t.gapTolerance = 0.25;
         t.syncConfThreshold = 70;
         t.minRunFields = 1;
         t.dropoutStormThreshold = 0.15;
-        t.sceneThresholdIre = 9.0;
+        t.fieldDiffSpikeIre = 9.0;
         t.noiseThresholdIre = 4.5;
-        t.minClipFields = 4;
-        t.minNonClipRunFields = 25;
+        t.minContentSpanFields = 4;
+        t.minNonContentRunFields = 25;
         break;
     case SegmentSensitivity::Normal:
         break;
@@ -454,18 +454,19 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
         a.medianNoiseIre = finiteMedian(m.noiseIre);
         a.medianFieldDiffIre = finiteMedian(m.fieldDiffIre);
         a.effectiveNoiseThresholdIre = std::max(t.noiseThresholdIre, std::isfinite(a.medianNoiseIre) ? 2.5 * a.medianNoiseIre : 0.0);
-        a.effectiveSceneThresholdIre = std::max(t.sceneThresholdIre, std::isfinite(a.medianFieldDiffIre) ? 2.5 * a.medianFieldDiffIre : 0.0);
+        a.effectiveFieldDiffSpikeIre = std::max(t.fieldDiffSpikeIre, std::isfinite(a.medianFieldDiffIre) ? 2.5 * a.medianFieldDiffIre : 0.0);
 
         noiseMask.fill(false, n);
         for (qint32 i = 0; i < n; i++) noiseMask[i] = std::isfinite(m.noiseIre[i]) && m.noiseIre[i] >= a.effectiveNoiseThresholdIre;
 
-        // A scene change needs a stable picture on both sides: snow makes every
-        // same-parity difference enormous, so a candidate whose own field or whose
-        // n-2 partner is noisy is the noise run's business, not a cut.
-        for (qint32 i : localMaxima(m.fieldDiffIre, a.effectiveSceneThresholdIre, std::max(2, minRun))) {
+        // Glossary: field diff spike (#field-diff-spike). It needs a stable
+        // picture on both sides: snow makes every same-parity difference
+        // enormous, so a candidate whose own field or whose n-2 partner is
+        // noisy is the noise run's business, not a spike.
+        for (qint32 i : localMaxima(m.fieldDiffIre, a.effectiveFieldDiffSpikeIre, std::max(2, minRun))) {
             if (noiseMask[i] || (i >= 2 && noiseMask[i - 2])) continue;
             SegmentEvent ev;
-            ev.kind = QStringLiteral("scene_change");
+            ev.kind = QStringLiteral("field_diff_spike");
             ev.startField = i;
             ev.endFieldExclusive = i + 1;
             ev.severity = clamp01(m.fieldDiffIre[i] / 40.0);
@@ -478,7 +479,7 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
 
         // Blank is no picture: dark and quiet, and either below black or with
         // the levels collapsed (blanking well below nominal, the sync tip well
-        // above it). A dark recorded scene keeps its levels and stays picture.
+        // above it). A dark recorded picture keeps its levels and stays picture.
         // Without level metrics the luma test stands alone.
         const auto levelsSayBlank = [&](qint32 i) {
             const double blanking = m.blankingDevIre[i];
@@ -527,9 +528,9 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
 
     // --- decoder events ------------------------------------------------------------------
     // Facts the decoder stored (what it knew at a seam) join the list under
-    // their own kinds. They never create a section: sections split only at
+    // their own kinds. They never create a section: sections break only at
     // fileLoc gaps, the rule tbc-audio-align applies, so the two stay equal.
-    // A seam-class decoder event within a field of a gap marks it confirmed.
+    // A seam-class decoder event within a field of a gap confirms the gap.
     {
         QVector<qint32> seamFields;
         for (const TbcMetaData::DecoderEvent &de : metaData.getDecoderEvents()) {
@@ -577,7 +578,7 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
         }
     }
 
-    // --- clip to the requested range and order ---------------------------------------
+    // --- limit to the requested range and order ---------------------------------------
     QVector<SegmentEvent> clipped;
     for (SegmentEvent ev : events) {
         if (ev.endFieldExclusive <= range.startField || ev.startField >= range.endFieldExclusive) continue;
@@ -592,7 +593,7 @@ SegmentsAnalysis analyseSegments(const TbcMetaData &metaData,
     a.events = clipped;
     for (const SegmentEvent &ev : clipped) a.counts[ev.kind] += 1;
 
-    // --- gapless sections ----------------------------------------------------------------
+    // --- gapless sections (Glossary: section, docs/Tools/tbc-segments-glossary.md#section) ----------------------------------------------------------------
     qint32 sectionStart = range.startField;
     for (const SegmentEvent &ev : clipped) {
         if (ev.kind != QLatin1String("gap")) continue;
@@ -686,14 +687,14 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
     thresholds.insert("syncConfThreshold", t.syncConfThreshold);
     thresholds.insert("minRunFields", t.minRunFields);
     thresholds.insert("dropoutStormThreshold", t.dropoutStormThreshold);
-    thresholds.insert("sceneThresholdIre", t.sceneThresholdIre);
+    thresholds.insert("fieldDiffSpikeIre", t.fieldDiffSpikeIre);
     thresholds.insert("noiseThresholdIre", t.noiseThresholdIre);
     thresholds.insert("blankLumaIre", t.blankLumaIre);
     thresholds.insert("blankLevelDevIre", t.blankLevelDevIre);
     thresholds.insert("blankBelowBlackIre", t.blankBelowBlackIre);
-    thresholds.insert("minClipFields", t.minClipFields);
-    thresholds.insert("minNonClipRunFields", t.minNonClipRunFields);
-    thresholds.insert("nonClipCoverage", t.nonClipCoverage);
+    thresholds.insert("minContentSpanFields", t.minContentSpanFields);
+    thresholds.insert("minNonContentRunFields", t.minNonContentRunFields);
+    thresholds.insert("nonContentCoverage", t.nonContentCoverage);
     provenance.insert("thresholds", thresholds);
     provenance.insert("nominalSource", a.nominalSource);
     const QString derivedFrom = QString::fromUtf8(QJsonDocument(provenance).toJson(QJsonDocument::Compact));
@@ -706,10 +707,11 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
             if (blankLike[i]) blank += 1;
             if (syncLoss[i]) sync += 1;
         }
-        if (noise / length >= t.nonClipCoverage) return QStringLiteral("noise");
-        if (blank / length >= t.nonClipCoverage) return QStringLiteral("blank");
-        if (length < t.minClipFields || sync / length >= 0.5) return QStringLiteral("unknown");
-        return QStringLiteral("clip");
+        if (noise / length >= t.nonContentCoverage) return QStringLiteral("noise");
+        if (blank / length >= t.nonContentCoverage) return QStringLiteral("blank");
+        // Glossary: unknown (docs/Tools/tbc-segments-glossary.md#unknown)
+        if (length < t.minContentSpanFields || sync / length >= 0.5) return QStringLiteral("unknown");
+        return contentSpanKind();
     };
 
     const auto emitSegment = [&](qint32 s, qint32 e) {
@@ -720,7 +722,7 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
         segment.endFieldExclusive = e;
         segment.kind = classify(s, e);
         segment.source = QStringLiteral("derived");
-        segment.enabled = segment.kind == QLatin1String("clip");
+        segment.enabled = isContentSpanKind(segment.kind);
         segment.createdBy = createdBy;
         segment.updatedAt = stamp;
         segment.derivedFrom = derivedFrom;
@@ -730,26 +732,26 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
     for (const SegmentSection &section : a.sections) {
         const qint32 length = section.endFieldExclusive - section.startField;
         if (length < 1) continue;
-        // A long noise/blank run inside a section splits it: the run becomes
-        // its own segment and the picture on either side stays a candidate
-        QVector<bool> nonClip(length, false);
+        // A long noise/blank run inside a section ends a content span: the run
+        // becomes its own segment and the picture on either side stays a candidate
+        QVector<bool> nonContent(length, false);
         for (qint32 i = 0; i < length; i++) {
             const qint32 field = section.startField + i;
-            nonClip[i] = noiseLike[field] || blankLike[field];
+            nonContent[i] = noiseLike[field] || blankLike[field];
         }
         // Snow dips under the noise threshold on a field or two; a gap in the
-        // run shorter than a clip could ever be is part of the run
-        qint32 lastNonClip = -1;
+        // run shorter than a content span could ever be is part of the run
+        qint32 lastNonContent = -1;
         for (qint32 i = 0; i < length; i++) {
-            if (!nonClip[i]) continue;
-            if (lastNonClip >= 0 && i - lastNonClip - 1 > 0 && i - lastNonClip - 1 < t.minClipFields) {
-                for (qint32 j = lastNonClip + 1; j < i; j++) nonClip[j] = true;
+            if (!nonContent[i]) continue;
+            if (lastNonContent >= 0 && i - lastNonContent - 1 > 0 && i - lastNonContent - 1 < t.minContentSpanFields) {
+                for (qint32 j = lastNonContent + 1; j < i; j++) nonContent[j] = true;
             }
-            lastNonClip = i;
+            lastNonContent = i;
         }
         qint32 cursor = section.startField;
-        for (const auto &run : runsOf(nonClip)) {
-            if (run.second - run.first < t.minNonClipRunFields) continue;
+        for (const auto &run : runsOf(nonContent)) {
+            if (run.second - run.first < t.minNonContentRunFields) continue;
             const qint32 runStart = section.startField + run.first;
             const qint32 runEnd = section.startField + run.second;
             emitSegment(cursor, runStart);
@@ -761,14 +763,14 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
 
     // Snow does not stay above the noise threshold on every field, and the
     // decoder resyncs inside it, so one unrecorded stretch arrives as many
-    // pieces. Adjacent non-clip pieces are one stretch: merge them, as noise
+    // pieces. Adjacent noise/blank/unknown pieces are one stretch: merge them, as noise
     // or blank by whichever covers more of it.
-    const auto isClip = [](const TbcMetaData::Segment &segment) { return segment.kind == QLatin1String("clip"); };
+    const auto isSpan = [](const TbcMetaData::Segment &segment) { return isContentSpanKind(segment.kind); };
     QVector<TbcMetaData::Segment> merged;
     QVector<qint32> pieces;
     merged.reserve(out.size());
     for (const TbcMetaData::Segment &segment : out) {
-        if (!merged.isEmpty() && !isClip(segment) && !isClip(merged.last())
+        if (!merged.isEmpty() && !isSpan(segment) && !isSpan(merged.last())
             && merged.last().endFieldExclusive == segment.startField) {
             merged.last().endFieldExclusive = segment.endFieldExclusive;
             pieces.last()++;
@@ -791,16 +793,15 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
         segment.enabled = false;
     }
 
-    // A sliver between two clips (a one-field section the decoder left at a
-    // resync, say) is not a stretch of its own: it joins the following clip,
-    // so the boundary stays where the sliver started.
+    // A sliver between two content pieces (a one-field section the decoder
+    // left at a resync, say) is not a stretch of its own: it joins them.
     QVector<TbcMetaData::Segment> result;
     result.reserve(merged.size());
     for (qint32 i = 0; i < merged.size(); i++) {
         const TbcMetaData::Segment &segment = merged.at(i);
         const qint32 length = segment.endFieldExclusive - segment.startField;
-        if (!isClip(segment) && length < t.minClipFields && i > 0 && i + 1 < merged.size()
-            && isClip(merged.at(i - 1)) && isClip(merged.at(i + 1))
+        if (!isSpan(segment) && length < t.minContentSpanFields && i > 0 && i + 1 < merged.size()
+            && isSpan(merged.at(i - 1)) && isSpan(merged.at(i + 1))
             && merged.at(i - 1).endFieldExclusive == segment.startField
             && segment.endFieldExclusive == merged.at(i + 1).startField) {
             merged[i + 1].startField = segment.startField;
@@ -808,8 +809,25 @@ QVector<TbcMetaData::Segment> deriveSegments(const TbcMetaData &metaData,
         }
         result.append(segment);
     }
-    for (qint32 i = 0; i < result.size(); i++) result[i].id = i + 1;
-    return result;
+
+    // Every content span now starts at a span start and ends at a span end
+    // (Glossary: span start, span end; #span-start, #span-end).
+    // Content pieces that meet with no noise or blank between them met across
+    // an RF gap (within a section, content pieces are always apart): it is one
+    // content span. Glossary: RF gap (#rf-gap); the gap is a shot boundary,
+    // which detectShotBoundaries reports.
+    QVector<TbcMetaData::Segment> spans;
+    spans.reserve(result.size());
+    for (const TbcMetaData::Segment &segment : result) {
+        if (!spans.isEmpty() && isSpan(segment) && isSpan(spans.last())
+            && spans.last().endFieldExclusive == segment.startField) {
+            spans.last().endFieldExclusive = segment.endFieldExclusive;
+            continue;
+        }
+        spans.append(segment);
+    }
+    for (qint32 i = 0; i < spans.size(); i++) spans[i].id = i + 1;
+    return spans;
 }
 
 namespace {
@@ -909,12 +927,12 @@ QJsonObject buildReport(const TbcMetaData &metaData,
     fieldData.insert("enabled", fieldMetrics != nullptr && fieldMetrics->enabled);
     if (fieldMetrics && fieldMetrics->enabled) {
         QJsonObject ft;
-        ft.insert("sceneThresholdIre", t.sceneThresholdIre);
+        ft.insert("fieldDiffSpikeIre", t.fieldDiffSpikeIre);
         ft.insert("noiseThresholdIre", t.noiseThresholdIre);
         ft.insert("blankLumaIre", t.blankLumaIre);
         ft.insert("blankLevelDevIre", t.blankLevelDevIre);
         ft.insert("blankBelowBlackIre", t.blankBelowBlackIre);
-        ft.insert("sceneThresholdIreEffective", a.effectiveSceneThresholdIre);
+        ft.insert("fieldDiffSpikeIreEffective", a.effectiveFieldDiffSpikeIre);
         ft.insert("noiseThresholdIreEffective", a.effectiveNoiseThresholdIre);
         ft.insert("medianFieldDiffIre", std::isfinite(a.medianFieldDiffIre) ? QJsonValue(a.medianFieldDiffIre) : QJsonValue(QJsonValue::Null));
         ft.insert("medianNoiseIre", std::isfinite(a.medianNoiseIre) ? QJsonValue(a.medianNoiseIre) : QJsonValue(QJsonValue::Null));
@@ -945,14 +963,21 @@ QJsonObject buildReport(const TbcMetaData &metaData,
         o.insert("severity", std::round(ev.severity * 1000.0) / 1000.0);
         o.insert("detail", ev.detail);
         events.append(o);
+        if (ev.kind == QLatin1String("field_diff_spike")) {
+            // glossary-legacy: digitization-toolkit reads spikes as scene_change until #714
+            QJsonObject legacy = o;
+            legacy.insert("kind", QStringLiteral("scene_change")); // glossary-legacy
+            events.append(legacy);
+        }
     }
     report.insert("events", events);
 
     QJsonObject counts;
     for (const char *kind : {"gap", "sync_loss", "parity_break", "skipped_field", "dropout_storm",
-                             "scene_change", "noise", "blank_video", "no_burst"}) {
+                             "field_diff_spike", "noise", "blank_video", "no_burst"}) {
         counts.insert(kind, a.counts.value(QString::fromLatin1(kind), 0));
     }
+    counts.insert("scene_change", a.counts.value(QStringLiteral("field_diff_spike"), 0)); // glossary-legacy: until #714
     counts.insert("decoderEvents", a.decoderEventCount);
     report.insert("counts", counts);
 

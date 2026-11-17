@@ -10,6 +10,11 @@ if(BUILD_TESTING)
                      --tbc ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut.tbc
                      --json - --quiet --threads 2)
 
+    # glossary-legacy: digitization-toolkit passes --scene-threshold-ire until #714
+    add_test(NAME tbc-segments-legacy-spike-flag
+             COMMAND tbc-segments ${CMAKE_SOURCE_DIR}/test-data/ntsc/ve-snw-cut.tbc.db
+                     --scene-threshold-ire 12 --json - --quiet) # glossary-legacy
+
     # --write must be a no-op once the metadata already holds what it would
     # store, or a backfill rewrites the whole file every time it is run.
     find_package(Python3 COMPONENTS Interpreter)

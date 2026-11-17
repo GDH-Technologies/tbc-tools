@@ -1,0 +1,316 @@
+{
+  "title": "tbc-segments glossary",
+  "intro": "The one vocabulary for how tbc-tools describes the structure of a tape: what is on it, where one part meets the next, and how tbc-tools stores and edits that. Code comments, GUI tooltips, command-line help and the other docs point here rather than re-defining a term. Worked examples come from a hand-checked NTSC Video8 camcorder tape (timecodes from the start of the capture).",
+  "groups": [
+    {
+      "id": "tape",
+      "title": "On the tape"
+    },
+    {
+      "id": "points",
+      "title": "Where one part meets the next"
+    },
+    {
+      "id": "data",
+      "title": "What tbc-tools stores and edits"
+    },
+    {
+      "id": "other",
+      "title": "Related words with other meanings"
+    }
+  ],
+  "terms": [
+    {
+      "id": "shot",
+      "group": "tape",
+      "term": "shot",
+      "tooltip": "One run of the camera: from the operator pressing record to pressing stop or pause.",
+      "definition": "One run of the camera: everything recorded from the moment the operator pressed record until they pressed stop or pause. Shots are the smallest unit tbc-tools finds; they are separated by shot boundaries, or by a span start or end.",
+      "example": "01:16:20.04 to 01:16:29.38: a nine-second shot during a wedding ceremony.",
+      "seeAlso": [
+        "shot_boundary",
+        "scene",
+        "content_span"
+      ]
+    },
+    {
+      "id": "scene",
+      "group": "tape",
+      "term": "scene",
+      "tooltip": "Consecutive shots of one event or place; a person marks where one scene ends.",
+      "definition": "Consecutive shots that belong together because they show the same event or place. Nothing technical separates two scenes: a person marks a scene change at a shot boundary. Every content span starts a new scene too.",
+      "example": "The flamingos (the shots up to 01:16:29.38) and the wedding ceremony (from 01:16:29.38) are two scenes, joined by a seamless shot boundary.",
+      "seeAlso": [
+        "scene_change",
+        "shot"
+      ]
+    },
+    {
+      "id": "content_span",
+      "group": "tape",
+      "term": "content span",
+      "tooltip": "Continuous recorded picture between noise or blank; holds one or more scenes. Also the segment kind.",
+      "definition": "A continuous stretch of recorded picture, with noise or blank (or the start or end of the capture) on either side. A camcorder joins a new shot onto the end of the last one, so one content span can hold many shots and several scenes. content_span is also the stored segment kind for such a stretch (formerly clip; a stored clip is still read as a content span).",
+      "example": "01:14:09.78 to 01:32:40.43 holds the flamingos and the wedding ceremony, with no noise between them.",
+      "seeAlso": [
+        "span_start",
+        "span_end",
+        "segment",
+        "scene"
+      ]
+    },
+    {
+      "id": "noise",
+      "group": "tape",
+      "term": "noise",
+      "tooltip": "Tape with no recording on it: the heads read only snow.",
+      "definition": "Tape with no recording on it, or a recording too damaged to read: the heads read only snow (high back-porch noise, or no colour burst). Also the segment kind for such a stretch.",
+      "example": "00:07:49.54 to 00:08:03.58 between two content spans, and the unrecorded tail from 02:01:52.71 to the end of the capture.",
+      "seeAlso": [
+        "blank",
+        "segment"
+      ]
+    },
+    {
+      "id": "blank",
+      "group": "tape",
+      "term": "blank",
+      "tooltip": "No picture at all: the signal's levels collapse (not just a dark picture).",
+      "definition": "No picture at all: the active picture sits at or below black and the signal's levels collapse (blanking well below nominal, or the sync tip well above it). A dark recorded picture keeps its levels and is not blank. Also the segment kind for such a stretch.",
+      "example": "01:34:33.81 to 01:34:44.68 is blank; the dark recorded scene at 00:57:40 is not.",
+      "seeAlso": [
+        "noise",
+        "segment"
+      ]
+    },
+    {
+      "id": "span_start",
+      "group": "points",
+      "term": "span start",
+      "tooltip": "Where a content span begins: picture out of noise or blank.",
+      "definition": "Where a content span begins: the picture starts out of noise or blank (or at the start of the capture). Stored segments always break here.",
+      "example": "00:08:03.58, the start of the content span 00:08:03.58 to 00:35:36.12.",
+      "seeAlso": [
+        "span_end",
+        "content_span"
+      ]
+    },
+    {
+      "id": "span_end",
+      "group": "points",
+      "term": "span end",
+      "tooltip": "Where a content span ends: picture into noise or blank.",
+      "definition": "Where a content span ends: the picture stops into noise or blank (or at the end of the capture). Stored segments always break here.",
+      "example": "00:35:36.12, the end of the content span 00:08:03.58 to 00:35:36.12.",
+      "seeAlso": [
+        "span_start",
+        "content_span"
+      ]
+    },
+    {
+      "id": "shot_boundary",
+      "group": "points",
+      "term": "shot boundary",
+      "tooltip": "Where one shot ends and the next begins with no noise or blank between them.",
+      "definition": "Where one shot ends and the next begins with nothing between them: the operator stopped or paused and pressed record again, and the camcorder joined the two shots seamlessly. tbc-tools detects them (see evidence), gives each a confidence and a reason, and stores them beside the segments; a person reviews them (see verdict). Shots break at every shot boundary that is not rejected; scenes break only at the ones marked a scene change.",
+      "example": "01:16:42.13 (two shots of the same ceremony, found from the picture) and 01:30:01.52 (found from an RF gap).",
+      "seeAlso": [
+        "evidence",
+        "verdict",
+        "scene_change",
+        "shot"
+      ]
+    },
+    {
+      "id": "scene_change",
+      "group": "points",
+      "term": "scene change",
+      "tooltip": "A shot boundary a person marked as starting a new scene.",
+      "definition": "A shot boundary that a person has marked as the start of a new scene. Scenes break here. A scene change can carry the new scene's title and its own enabled flag.",
+      "example": "01:16:29.38, where the flamingos end and the wedding ceremony begins.",
+      "seeAlso": [
+        "scene",
+        "shot_boundary",
+        "title"
+      ]
+    },
+    {
+      "id": "evidence",
+      "group": "points",
+      "term": "evidence",
+      "tooltip": "How a shot boundary was found: from the picture, or from an RF gap.",
+      "definition": "How tbc-tools found a shot boundary. picture: the same-parity field difference spikes on two adjacent fields, matched, with quiet fields either side and no flash just before. rf_gap: the decoder's position in the RF capture jumps inside a content span, because it lost sync where the camcorder joined two shots.",
+      "example": "01:16:42.13 is picture evidence; 01:30:01.52 is an RF gap.",
+      "seeAlso": [
+        "rf_gap",
+        "confidence"
+      ]
+    },
+    {
+      "id": "field_diff_spike",
+      "group": "points",
+      "term": "field diff spike",
+      "tooltip": "The same-parity field difference crossed its threshold: raw evidence, not a decision.",
+      "definition": "A raw report event: the picture differs sharply from the field of the same parity two fields earlier (1/30 s on NTSC), above the threshold (12 IRE, or 2.5 times the file's median, whichever is larger). Shot boundaries, flashes and fast motion all raise one; it is evidence, not a shot boundary or a scene change. Formerly reported as scene_change.",
+      "example": "01:16:29.38 (a shot boundary) and 01:23:38.51 (a flash).",
+      "seeAlso": [
+        "shot_boundary",
+        "evidence"
+      ]
+    },
+    {
+      "id": "rf_gap",
+      "group": "points",
+      "term": "RF gap",
+      "tooltip": "The decoder's position in the RF capture jumps: it lost sync and resynced.",
+      "definition": "The decoder's position in the RF capture (fileLoc) jumps by more than a third of a field: it lost sync and resynced, often duplicating or dropping a field. Inside a content span an RF gap is a shot boundary (its evidence is rf_gap); next to noise or blank it belongs to the span start or end.",
+      "example": "01:30:01.52.",
+      "seeAlso": [
+        "evidence",
+        "section"
+      ]
+    },
+    {
+      "id": "confidence",
+      "group": "points",
+      "term": "confidence",
+      "tooltip": "How cleanly a detected shot boundary passed the rule, from 50% to 100%.",
+      "definition": "How cleanly a detected shot boundary passed the detection rule: 50% for passing at all, rising with how well the two spikes match, how far they stand above the background and how quiet the neighbouring fields are. An RF gap scores 90% when the decoder also recorded the seam, 75% otherwise. A shot boundary added by hand scores 100%.",
+      "example": "",
+      "seeAlso": [
+        "shot_boundary",
+        "evidence"
+      ]
+    },
+    {
+      "id": "segment",
+      "group": "data",
+      "term": "segment",
+      "tooltip": "A stored stretch of the tape: a content span, noise, blank or unknown.",
+      "definition": "A stretch of the tape stored in the metadata (the segment table, and the Segments Viewer's rows), derived by tbc-tools and editable by a person. Its kind is content_span, noise, blank or unknown; it also has an enabled flag, a title and a comment. Stored segments break at span starts and ends (and wherever a person cuts one by hand); scenes and shots are worked out from the shot boundaries, never stored as segments.",
+      "example": "The content span segment 01:14:09.78 to 01:32:40.43.",
+      "seeAlso": [
+        "content_span",
+        "enabled",
+        "cut",
+        "export_by"
+      ]
+    },
+    {
+      "id": "unknown",
+      "group": "data",
+      "term": "unknown",
+      "tooltip": "Segment kind: too short to judge, or mostly lost sync.",
+      "definition": "The segment kind for a piece that is too short to call content (under the minimum length) or that is mostly sync loss.",
+      "example": "",
+      "seeAlso": [
+        "segment"
+      ]
+    },
+    {
+      "id": "enabled",
+      "group": "data",
+      "term": "enabled",
+      "tooltip": "Goes into exports at this level (span, scene or shot); each level stands on its own.",
+      "definition": "Whether a content span, a scene or a shot goes into exports. Each level stands on its own: an export by scene looks only at scene flags, an export by shot only at shot flags. A scene's flag lives on its scene change, a shot's on the shot boundary that starts it; the first scene or shot of a span uses the span's own flag. Derived content spans are enabled; noise, blank and unknown are not.",
+      "example": "",
+      "seeAlso": [
+        "export_by",
+        "segment"
+      ]
+    },
+    {
+      "id": "verdict",
+      "group": "data",
+      "term": "verdict",
+      "tooltip": "A person's review of a detected shot boundary: detected, confirmed or rejected.",
+      "definition": "A person's review of a shot boundary: detected (not reviewed yet), confirmed (it is real) or rejected (it is not: it starts no shot or scene, and a re-derive does not bring it back). The detector never rejects; a shot boundary added by hand is confirmed.",
+      "example": "01:16:42.13 would be confirmed; a flash mistaken for a shot boundary would be rejected.",
+      "seeAlso": [
+        "shot_boundary"
+      ]
+    },
+    {
+      "id": "cut",
+      "group": "data",
+      "term": "cut",
+      "tooltip": "Cutting a stored segment by hand at any frame (a user segment).",
+      "definition": "Cutting a stored segment in two by hand at any frame (Cut At Current Frame, Cut Segment Here). Both pieces become user segments. To divide recorded picture into scenes or shots, mark scene changes or add shot boundaries instead; those leave the content span whole.",
+      "example": "",
+      "seeAlso": [
+        "segment",
+        "shot_boundary"
+      ]
+    },
+    {
+      "id": "title",
+      "group": "data",
+      "term": "title",
+      "tooltip": "The name a content span, scene or shot carries in exports (file names and chapters).",
+      "definition": "The name a content span, scene or shot carries into exports, as a file name suffix and a chapter title. A content span uses its segment's title (or Segment <id>). A scene uses the title on its scene change, else <span title> · scene n; the first scene of a span uses the span's title. A shot is <scene title> · n.",
+      "example": "The scene from 01:16:29.38 titled Wedding ceremony; its second shot is Wedding ceremony · 2.",
+      "seeAlso": [
+        "export_by",
+        "chapters_by"
+      ]
+    },
+    {
+      "id": "export_by",
+      "group": "data",
+      "term": "export by",
+      "tooltip": "Which granularity exported files follow: content span, scene or shot.",
+      "definition": "Which granularity an export of separate files follows: one file per content span, per scene or per shot, each covering the frames its range holds and skipping the ones that are not enabled at that level. tbc-analyse's Export tab offers it; tbc-export-metadata's segments report lists all three so other tools can do the same.",
+      "example": "The content span 01:14:09.78 to 01:32:40.43 exports as one file by span, as the flamingos and the wedding ceremony by scene, or one file per shot by shot.",
+      "seeAlso": [
+        "chapters_by",
+        "enabled",
+        "title"
+      ]
+    },
+    {
+      "id": "chapters_by",
+      "group": "data",
+      "term": "chapters by",
+      "tooltip": "Which granularity the chapters inside an exported file follow: none, scene or shot.",
+      "definition": "Which granularity the chapters inside an exported file follow: none (one chapter per file), scene or shot, and only finer than the files themselves (a span's file can carry scene or shot chapters, a scene's file shot chapters). tbc-export-metadata --ffmetadata-chapters-by, tbc-video-export --export-metadata-chapters-by, and tbc-analyse's Export tab.",
+      "example": "Exporting 01:14:09.78 to 01:32:40.43 as one file with chapters by scene gives two chapters, the flamingos and the wedding ceremony.",
+      "seeAlso": [
+        "export_by",
+        "title"
+      ]
+    },
+    {
+      "id": "source",
+      "group": "data",
+      "term": "derived / user",
+      "tooltip": "derived: made by tbc-tools; user: edited by a person (a re-derive keeps it).",
+      "definition": "Where a segment or shot boundary came from. derived: tbc-tools made it, and a re-derive replaces it. user: a person edited or added it, and a re-derive keeps it.",
+      "example": "",
+      "seeAlso": [
+        "segment",
+        "shot_boundary"
+      ]
+    },
+    {
+      "id": "section",
+      "group": "other",
+      "term": "section",
+      "tooltip": "Internal: a run of fields with no RF gap (tbc-audio-align's gapless section).",
+      "definition": "Internal to the analysis: a run of fields whose RF positions advance without a gap (tbc-audio-align's gapless section). Sections are where the analysis starts; they are not segments.",
+      "example": "",
+      "seeAlso": [
+        "rf_gap",
+        "segment"
+      ]
+    },
+    {
+      "id": "marker",
+      "group": "other",
+      "term": "marker",
+      "tooltip": "A user note on a frame (tbc-analyse's Marker Viewer); not a shot boundary.",
+      "definition": "A note a person attaches to a frame in tbc-analyse (the Marker Viewer, the blue timeline ticks). Unrelated to shot boundaries or segments.",
+      "example": "",
+      "seeAlso": []
+    }
+  ]
+}

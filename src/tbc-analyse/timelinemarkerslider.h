@@ -21,13 +21,13 @@ class TimelineMarkerSlider : public QSlider
 public:
     explicit TimelineMarkerSlider(QWidget *parent = nullptr);
     void setMarkerFrames(qint32 inFrame, qint32 outFrame, const QVector<qint32> &noteFrames);
-    // Recording-segment boundaries (one tick each, with a tooltip) and the
-    // spans that deserve a tint (noise, blank, disabled clips).
+    // Segment boundaries (one tick each, with a tooltip) and the spans that
+    // deserve a tint (noise, blank, disabled segments).
     void setSegmentMarkers(const QVector<qint32> &boundaryPositions,
                            const QStringList &boundaryTooltips,
                            const QVector<TimelineSegmentSpan> &spans);
-    // One more layer of ticks (with tooltips) in its own colour: camcorder
-    // restart marks, from the tbc-segments module
+    // One more layer of ticks (with tooltips) in its own colour: shot
+    // boundaries, from the tbc-segments module
     void setExtraTicks(const QVector<qint32> &positions, const QStringList &tooltips, const QColor &color);
 
 protected:

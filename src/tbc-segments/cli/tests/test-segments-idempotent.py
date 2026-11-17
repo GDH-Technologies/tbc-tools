@@ -45,10 +45,10 @@ def inject_gap(db: Path) -> None:
         if len(rows) < 4 or rows[0][1] is None or rows[1][1] is None:
             raise SystemExit("fixture has no usable file_loc values")
         step = rows[1][1] - rows[0][1]
-        split = rows[len(rows) // 2][0]
+        middle = rows[len(rows) // 2][0]
         conn.executemany(
             "UPDATE field_record SET file_loc = ? WHERE field_id = ?",
-            [(loc + 10 * step, fid) for fid, loc in rows if fid >= split],
+            [(loc + 10 * step, fid) for fid, loc in rows if fid >= middle],
         )
 
 

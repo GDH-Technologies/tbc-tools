@@ -1497,7 +1497,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
         showOrRaise(notesViewerDialog);
     });
 
-    // Recording segments: the Segments viewer, edits, timeline and menus live
+    // Segments: the Segments viewer, edits, timeline and menus live
     // in the tbc-segments module; it reaches the source and view through hooks
     SegmentsController::Hooks segmentHooks;
     segmentHooks.isLoaded = [this]() { return tbcSource.getIsSourceLoaded(); };
@@ -1506,8 +1506,8 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     segmentHooks.numberOfFields = [this]() { return tbcSource.getNumberOfFields(); };
     segmentHooks.segments = [this]() -> const QVector<TbcMetaData::Segment> & { return tbcSource.getSegments(); };
     segmentHooks.setSegments = [this](const QVector<TbcMetaData::Segment> &segments) { tbcSource.setSegments(segments); };
-    segmentHooks.deriveLayer = [this](const SegmentsThresholds &thresholds, const QVector<SegmentMark> &marks) {
-        return tbcSource.deriveSegmentLayer(thresholds, marks);
+    segmentHooks.deriveLayer = [this](const SegmentsThresholds &thresholds, const QVector<ShotBoundary> &boundaries) {
+        return tbcSource.deriveSegmentLayer(thresholds, boundaries);
     };
     segmentHooks.metadataPath = [this]() { return tbcSource.getCurrentMetadataFilename(); };
     segmentHooks.derivedAtLoad = [this]() { return tbcSource.getSegmentsDerivedAtLoad(); };
@@ -1538,6 +1538,9 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
         }
     };
     segmentsController = new SegmentsController(this, segmentHooks);
+    exportDialog->setShotBoundaryProvider([this]() {
+        return segmentsController ? segmentsController->shotBoundaries() : QVector<ShotBoundary>();
+    });
     segmentsViewerAction = new QAction(tr("Segments Viewer..."), this);
     if (ui->menuWindow) {
         ui->menuWindow->addAction(segmentsViewerAction);
@@ -1813,7 +1816,7 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     skipBySegmentsAction = new QAction(tr("Skip by segments"), this);
     skipBySegmentsAction->setCheckable(true);
     skipBySegmentsAction->setChecked(configuration.getSkipBySegments());
-    skipBySegmentsAction->setToolTip(tr("Previous/next chapter buttons jump between recording segments when the metadata holds any"));
+    skipBySegmentsAction->setToolTip(tr("Previous/next chapter buttons jump between segments when the metadata holds any"));
     if (ui->menuView) {
         ui->menuView->addAction(skipBySegmentsAction);
     }
@@ -4268,7 +4271,7 @@ void MainWindow::updateTimelineMarkers()
     }
     ui->posHorizontalSlider->setMarkerFrames(inPosition, outPosition, notePositions);
 
-    // Recording segments: boundary ticks and tinted spans
+    // Segments: boundary ticks and tinted spans
     QVector<qint32> boundaryPositions;
     QStringList boundaryTooltips;
     QVector<SegmentTimelineSpan> segmentSpans;
@@ -4279,12 +4282,12 @@ void MainWindow::updateTimelineMarkers()
     for (const SegmentTimelineSpan &segmentSpan : segmentSpans) {
         spans.append({segmentSpan.startPosition, segmentSpan.endPosition, segmentSpan.color});
     }
-    QVector<qint32> restartPositions;
-    QStringList restartTooltips;
+    QVector<qint32> shotBoundaryPositions;
+    QStringList shotBoundaryTooltips;
     if (segmentsController) {
-        segmentsController->restartTicks(&restartPositions, &restartTooltips);
+        segmentsController->shotBoundaryTicks(&shotBoundaryPositions, &shotBoundaryTooltips);
     }
-    ui->posHorizontalSlider->setExtraTicks(restartPositions, restartTooltips, QColor(170, 80, 230));
+    ui->posHorizontalSlider->setExtraTicks(shotBoundaryPositions, shotBoundaryTooltips, QColor(170, 80, 230));
     ui->posHorizontalSlider->setSegmentMarkers(boundaryPositions, boundaryTooltips, spans);
 }
 
@@ -9038,11 +9041,11 @@ void MainWindow::onSourceSaved(bool success)
 
     if (success) {
         setWindowModified(false);
-        // The save wrote a new .tbc.db: put the restart marks back in it
+        // The save wrote a new .tbc.db: put the shot boundaries back in it
         if (segmentsController) {
-            QString markError;
-            if (!segmentsController->persistMarks(&markError)) {
-                statusBar()->showMessage(tr("Restart marks were not saved: %1").arg(markError), 5000);
+            QString storeError;
+            if (!segmentsController->persistShotBoundaries(&storeError)) {
+                statusBar()->showMessage(tr("Shot boundaries were not saved: %1").arg(storeError), 5000);
             }
         }
 
