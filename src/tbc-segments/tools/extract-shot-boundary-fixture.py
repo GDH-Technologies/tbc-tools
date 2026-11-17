@@ -11,8 +11,8 @@ scalar metrics are copied (no picture, no audio), in short windows.
 labels.txt holds one point per line: a label and a timecode (HH:MM:SS.ss from
 field 0, at the decode's field rate), e.g.
 
-    shot_boundary  00:05:13.58
-    look_alike     01:23:38.51
+    shot_boundary  00:12:25.00
+    look_alike     00:16:30.00
 
 "shot_boundary" points must be found (Glossary: shot boundary,
 docs/Tools/tbc-segments-glossary.md#shot-boundary); "look_alike" points
