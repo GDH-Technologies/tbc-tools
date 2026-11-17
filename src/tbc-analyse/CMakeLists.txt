@@ -9,6 +9,7 @@ set(tbc-analyse_SOURCES
     efmhandlerdialog.cpp efmhandlerdialog.h
     exportdialog.cpp exportdialog.ui
     exportarguments.cpp exportarguments.h
+    processshutdown.cpp processshutdown.h
     metadataconversiondialog.cpp metadataconversiondialog.ui
     metadatastatusdialog.cpp metadatastatusdialog.ui
     notesviewerdialog.cpp notesviewerdialog.h
