@@ -10,6 +10,7 @@
 #include "shotboundarystore.h"
 #include "configuration.h"
 #include "gui/processprogressrunner.h"
+#include "processshutdown.h"
 
 #include "tbc/uistyle.h"
 
@@ -1793,8 +1794,20 @@ ExportDialog::ExportDialog(QWidget *parent) :
 
 ExportDialog::~ExportDialog()
 {
+    // Before `delete ui`: the QProcess members are children destroyed after
+    // this body, and one destroyed while running emits errorOccurred, whose
+    // handler touches the UI (a segfault when tbc-analyse quit mid-export).
+    ProcessShutdown::stopForShutdown(this, {exportProcess, parallelProxyProcess});
     cleanupTemporaryMetadataSnapshot();
     delete ui;
+}
+
+bool ExportDialog::isExportRunning() const
+{
+    const auto running = [](const QProcess *process) {
+        return process && process->state() != QProcess::NotRunning;
+    };
+    return running(exportProcess) || running(parallelProxyProcess);
 }
 
 void ExportDialog::setConfiguration(Configuration *newConfiguration)

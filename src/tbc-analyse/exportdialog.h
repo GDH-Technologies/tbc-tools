@@ -70,6 +70,9 @@ public:
     void setInPoint(int frameNumber);
     void setOutPoint(int frameNumber);
     bool hasAudioTracksConfigured() const;
+    // True while tbc-video-export or the parallel proxy export is running;
+    // the main window asks before a close would stop it
+    bool isExportRunning() const;
     void loadAudioTracksForExport(const QStringList &trackFiles,
                                   const QStringList &trackNames = QStringList());
     void refreshResolutionOptions();

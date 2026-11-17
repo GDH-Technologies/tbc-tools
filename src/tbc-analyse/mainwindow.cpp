@@ -5512,6 +5512,20 @@ void MainWindow::closeEvent(QCloseEvent *event)
         event->ignore();
         return;
     }
+    // Quitting stops a running export (ExportDialog's teardown ends it), so
+    // never do that without asking. After maybeSave: a Save closes again once
+    // it is done, and this question must come once, not twice.
+    if (exportDialog && exportDialog->isExportRunning()) {
+        const QMessageBox::StandardButton choice = QMessageBox::warning(
+            this, tr("Export still running"),
+            tr("An export is still running. Quitting tbc-analyse stops it.\n"
+               "Quit anyway?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (choice != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+    }
     QMainWindow::closeEvent(event);
 }
 
