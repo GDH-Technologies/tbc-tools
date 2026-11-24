@@ -320,8 +320,24 @@
             # mkvmerge then aborts at startup under LANG=en_US.UTF-8
             # ("locale::facet::_S_create_c_locale name not valid"). C.UTF-8 is
             # built into glibc, so it needs no locale files on any host.
+            #
+            # ffmpeg, ffprobe and ffplay go here too. Upstream's postInstall
+            # (after cmakeFlags, pinned by its CI contract) links them into bin/, and on
+            # a host whose nix profile sits ahead of /usr/bin on PATH, as on
+            # the Fedora fleet, that replaces the host's ffmpeg for every
+            # caller: the toolkit then loses NVENC/QSV/VAAPI, which nixpkgs'
+            # ffmpeg cannot load there. So they move out of bin/. Every lookup
+            # (tbc-video-export's find_binary, tbc-analyse's resolveFfmpegPath,
+            # AAA's resolveBundledOrPathTool) takes the host's on PATH first
+            # and these only when the host has none. Linked afresh rather than
+            # moved: wrapQtAppsHook may have turned the bin/ links into Qt
+            # wrappers.
             postFixup = ''
               mkdir -p $out/libexec/tbc-video-export
+              for tool in ffmpeg ffprobe ffplay; do
+                rm -f $out/bin/$tool
+                ln -s ${pkgs.ffmpeg.bin}/bin/$tool $out/libexec/tbc-video-export/$tool
+              done
             '' + (if isLinux then ''
               makeBinaryWrapper ${p.mkvtoolnix-cli}/bin/mkvmerge \
                 $out/libexec/tbc-video-export/mkvmerge --set LC_ALL C.UTF-8

@@ -4652,6 +4652,17 @@ QString ExportDialog::resolveFfmpegPath(const QString &toolName) const
         return fromPath;
     }
 
+    // GDH fork: the Nix package keeps its ffmpeg/ffprobe/ffplay in
+    // libexec/tbc-video-export (outside bin/, so it never shadows the host's);
+    // used only when the host has none
+    for (const QString &name : candidateNames) {
+        const QFileInfo bundled(QDir(QCoreApplication::applicationDirPath())
+                                    .filePath(QStringLiteral("../libexec/tbc-video-export/") + name));
+        if (bundled.exists() && bundled.isExecutable()) {
+            return bundled.absoluteFilePath();
+        }
+    }
+
     return QString();
 }
 

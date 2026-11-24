@@ -47,4 +47,13 @@ def find_binary(name: str) -> Path:
     if which(name):
         return Path(name)
 
+    # GDH fork: the Nix package ships ffmpeg/ffprobe/ffplay in
+    # libexec/tbc-video-export, outside bin/ so installing it never shadows the
+    # host's; a host binary on PATH wins, and this is the fallback
+    bundled = (
+        get_runtime_directory().parent.parent / "libexec" / "tbc-video-export" / name
+    )
+    if bundled.is_file():
+        return bundled
+
     raise exceptions.FileIOError(f"{name} not in PATH or script dir.")
