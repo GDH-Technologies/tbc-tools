@@ -31,6 +31,7 @@
 #include <QKeyEvent>
 #include <QPointer>
 #include <QRect>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QVector>
 #include <QActionGroup>
@@ -288,7 +289,10 @@ private:
     QImage cursorReadoutImage;
     QTimer* playbackTimer = nullptr;
     QTimer* resizeTimer = nullptr;
-    double playbackTickCarryMs = 0.0;
+    // Real-time playback clock: ticks are scheduled against deadlines on
+    // this clock so render time does not stretch the frame period.
+    QElapsedTimer playbackClock;
+    qint32 playbackStartNumber = 0;  // frame (or field in field view) when playback started
     bool playbackRunning = false;
     QTimer* rgbScopeRefreshTimer = nullptr;
     bool rgbScopeRefreshPending = false;
@@ -339,7 +343,6 @@ private:
     QString framesToDurationTimecode(qint32 frameCount) const;
     qint32 timecodeToFrame(const QString &timecodeText, bool *ok = nullptr) const;
     void updatePositionEditorValue(qint32 currentNumber);
-    bool playbackUseFastMode() const;
     QString playbackStartToolTip() const;
     double playbackFrameIntervalMs() const;
     void scheduleNextPlaybackTick();

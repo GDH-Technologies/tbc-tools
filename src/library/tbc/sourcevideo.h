@@ -52,6 +52,11 @@ public:
 
     // Field handling methods
     Data getVideoField(qint32 fieldNumber, qint32 startFieldLine = -1, qint32 endFieldLine = -1);
+    // For a piped input that begins at |fieldNumber| rather than field 1
+    void setStreamStartField(qint32 fieldNumber);
+    // Read a file straight through in large blocks, taking turns with any other
+    // tbc-tools process doing the same on that disk (see getVideoField)
+    void setChunkedReads(bool enabled);
 
     // Get and set methods
     bool isSourceValid();
@@ -69,6 +74,14 @@ private:
     qint32 fieldLineLength;
 
     Data outputFieldData;
+
+    // Chunked sequential reads
+    bool chunkedReads = false;
+    QByteArray chunkBuffer;
+    qint64 chunkStart = -1;
+    QString chunkLockPath;
+    bool chunkLockAbandoned = false;
+    bool readChunk(qint64 position);
 
     // Field caching
     QCache<qint32, Data> fieldCache;

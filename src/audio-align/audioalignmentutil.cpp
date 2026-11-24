@@ -178,7 +178,15 @@ QString resolveBundledOrPathTool(const QString &baseName)
         }
     }
 
-    return QString();
+    // GDH fork: the Nix package keeps its ffmpeg/ffprobe in
+    // libexec/tbc-video-export (outside bin/, so it never shadows the host's);
+    // used only when the host has none
+    QStringList libexecCandidates;
+    for (const QString &name : names) {
+        appendUniqueCandidate(libexecCandidates,
+                              QDir(appDir).filePath(QStringLiteral("../libexec/tbc-video-export/") + name));
+    }
+    return findFirstExistingExecutable(libexecCandidates);
 }
 
 QString resolveAudioAlignExecutablePath()

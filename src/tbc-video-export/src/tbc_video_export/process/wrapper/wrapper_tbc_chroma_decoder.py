@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from tbc_video_export.program_state import ProgramState
 
 
-class WrapperLDChromaDecoder(Wrapper):
+class WrapperTBCChromaDecoder(Wrapper):
     """Wrapper for ld-tools-decoder."""
 
     def __init__(self, state: ProgramState, config: WrapperConfig[Pipe, Pipe]) -> None:
@@ -222,6 +222,14 @@ class WrapperLDChromaDecoder(Wrapper):
             ),
         )
 
+        # Input piped from tbc-dropout-correct that starts mid-TBC
+        if (
+            not self._state.opts.no_dropout_correct
+            and (frame_range := self._state.dropout_correct_range) is not None
+            and frame_range[0] > 1
+        ):
+            decoder_opts.append(("--input-start-frame", frame_range[0]))
+
         if self._state.video_system is VideoSystem.NTSC:
             # True unless ld detected
             add_phase_check = not self._state.file_helper.is_combined_ld
@@ -245,7 +253,7 @@ class WrapperLDChromaDecoder(Wrapper):
 
     @cached_property
     def process_name(self) -> ProcessName:  # noqa: D102
-        return ProcessName.LD_CHROMA_DECODER
+        return ProcessName.TBC_CHROMA_DECODER
 
     @cached_property
     def supported_pipe_types(self) -> PipeType:  # noqa: D102

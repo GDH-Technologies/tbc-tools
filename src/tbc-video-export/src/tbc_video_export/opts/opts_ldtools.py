@@ -353,6 +353,18 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
     )
 
     dropout_correct_opts.add_argument(
+        "--overcorrect",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Heavy dropout correction (tbc-dropout-correct --overcorrect).\n"
+            "  - Default: on for tape sources (metadata tapeFormat set), off\n"
+            "    for LaserDisc. --no-overcorrect forces basic correction."
+            "\n\n"
+        ),
+    )
+
+    dropout_correct_opts.add_argument(
         "--dropout-correct-threads",
         type=int,
         metavar="int",
@@ -410,32 +422,6 @@ def add_ldtool_opts(parent: argparse.ArgumentParser) -> None:
             "  - This overrides --threads, and setting to 0 uses process defaults."
             "\n\n"
         ),
-    )
-
-    # process-efm (EXPTERIMENTAL)
-    process_efm = parent.add_argument_group("process efm (EXPERIMENTAL)")
-    process_efm.add_argument(
-        "--process-efm",
-        action="store_true",
-        default=False,
-        help=argparse.SUPPRESS,
-        # help="Run ld-process-efm before exporting. (default: no)\n\n",
-    )
-
-    process_efm.add_argument(
-        "--process-efm-keep-going",
-        action="store_true",
-        default=False,
-        help=argparse.SUPPRESS,
-        # help="Keep going on errors. (default: no)\n\n",
-    )
-
-    process_efm.add_argument(
-        "--process-efm-dts",
-        action="store_true",
-        default=False,
-        help=argparse.SUPPRESS,
-        # help="Audio is DTS rather than PCM. (default: no)\n\n",
     )
 
     # export-metadata

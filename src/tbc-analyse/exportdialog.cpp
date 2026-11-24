@@ -32,6 +32,7 @@
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QCheckBox>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QtMath>
@@ -284,90 +285,6 @@ void normalizeAudioTrackLineEditPath(QLineEdit *lineEdit)
     }
     const QSignalBlocker blocker(lineEdit);
     lineEdit->setText(normalized);
-}
-
-QStringList defaultExecutableSearchDirs(const QString &currentInputFile)
-{
-    QStringList candidateDirs;
-    auto appendUniqueDir = [&candidateDirs](const QString &dirPath) {
-        if (dirPath.isEmpty()) {
-            return;
-        }
-        for (const QString &existing : candidateDirs) {
-            if (existing.compare(dirPath, Qt::CaseInsensitive) == 0) {
-                return;
-            }
-        }
-        candidateDirs << dirPath;
-    };
-    const QString appFilePath = QCoreApplication::applicationFilePath();
-    if (!appFilePath.isEmpty()) {
-        const QFileInfo appFileInfo(appFilePath);
-        const QString canonicalAppFilePath = appFileInfo.canonicalFilePath();
-        if (!canonicalAppFilePath.isEmpty()) {
-            appendUniqueDir(QFileInfo(canonicalAppFilePath).absolutePath());
-        }
-        appendUniqueDir(appFileInfo.absolutePath());
-    }
-
-    const QString appDir = QCoreApplication::applicationDirPath();
-    if (!appDir.isEmpty()) {
-        appendUniqueDir(appDir);
-
-        QDir parentDir(appDir);
-        for (int i = 0; i < 4; ++i) {
-            if (!parentDir.cdUp()) {
-                break;
-            }
-            appendUniqueDir(parentDir.absolutePath());
-        }
-    }
-
-    const QString currentDir = QDir::currentPath();
-    if (!currentDir.isEmpty()) {
-        appendUniqueDir(currentDir);
-        appendUniqueDir(QDir(currentDir).filePath(QStringLiteral("build/bin")));
-    }
-
-    if (!currentInputFile.isEmpty()) {
-        const QString inputDir = QFileInfo(currentInputFile).absolutePath();
-        appendUniqueDir(inputDir);
-    }
-
-    const QString homeDir = QDir::homePath();
-    if (!homeDir.isEmpty()) {
-        const QString localBin = QDir(homeDir).filePath(QStringLiteral(".local/bin"));
-        const QString userBin = QDir(homeDir).filePath(QStringLiteral("bin"));
-        appendUniqueDir(localBin);
-        appendUniqueDir(userBin);
-    }
-
-#if defined(Q_OS_MACOS)
-    const QStringList platformDirs = {
-        QStringLiteral("/opt/homebrew/bin"),
-        QStringLiteral("/opt/homebrew/sbin"),
-        QStringLiteral("/usr/local/bin"),
-        QStringLiteral("/usr/local/sbin"),
-        QStringLiteral("/usr/bin"),
-        QStringLiteral("/bin")
-    };
-#elif defined(Q_OS_UNIX)
-    const QStringList platformDirs = {
-        QStringLiteral("/usr/local/bin"),
-        QStringLiteral("/usr/local/sbin"),
-        QStringLiteral("/usr/bin"),
-        QStringLiteral("/bin"),
-        QStringLiteral("/snap/bin")
-    };
-#else
-    const QStringList platformDirs;
-#endif
-
-    for (const QString &dir : platformDirs) {
-        appendUniqueDir(dir);
-    }
-
-    return candidateDirs;
 }
 
 void prependUniquePathEntries(QStringList *pathEntries, const QStringList &prependDirs)
@@ -1268,6 +1185,29 @@ ExportDialog::ExportDialog(QWidget *parent) :
     ui->setupUi(this);
 
     ui->inputLineEdit->setReadOnly(true);
+
+    // Ticking a track, or loading a different file into one, while playing
+    // restarts the monitor at the current position with the new set of files
+    const auto restartAudioMonitor = [this]() {
+        if (!audioMonitorClock.isValid()) return;
+        startAudioMonitor(audioMonitorStartSeconds + audioMonitorClock.nsecsElapsed() / 1e9);
+    };
+    for (QCheckBox *monitorCheckBox : {ui->audio1MonitorCheckBox, ui->audio2MonitorCheckBox,
+                                       ui->audio3MonitorCheckBox, ui->audio4MonitorCheckBox}) {
+        connect(monitorCheckBox, &QCheckBox::toggled, this, restartAudioMonitor);
+        // Ticks are remembered between sessions
+        connect(monitorCheckBox, &QCheckBox::toggled, this, [this]() {
+            QString tracks;
+            for (const QCheckBox *box : {ui->audio1MonitorCheckBox, ui->audio2MonitorCheckBox,
+                                         ui->audio3MonitorCheckBox, ui->audio4MonitorCheckBox}) {
+                tracks += box->isChecked() ? QLatin1Char('1') : QLatin1Char('0');
+            }
+            emit audioMonitorTracksChanged(tracks);
+        });
+    }
+    for (QLineEdit *trackLineEdit : {ui->audio1LineEdit, ui->audio2LineEdit, ui->audio3LineEdit, ui->audio4LineEdit}) {
+        connect(trackLineEdit, &QLineEdit::textChanged, this, restartAudioMonitor);
+    }
     ui->profileComboBox->setEditable(false);
     if (ui->profileLabel) {
         ui->profileLabel->setText(tr("Encoding"));
@@ -1794,6 +1734,7 @@ ExportDialog::ExportDialog(QWidget *parent) :
 
 ExportDialog::~ExportDialog()
 {
+    stopAudioMonitor();
     // Before `delete ui`: the QProcess members are children destroyed after
     // this body, and one destroyed while running emits errorOccurred, whose
     // handler touches the UI (a segfault when tbc-analyse quit mid-export).
@@ -1941,6 +1882,8 @@ void ExportDialog::setShotBoundaryProvider(std::function<QVector<ShotBoundary>()
 
 void ExportDialog::setSource(TbcSource *source)
 {
+    // A new source starts audio monitoring from a clean state
+    stopAudioMonitor();
     tbcSource = source;
     updateFromSource();
     refreshResolutionOptions();
@@ -2518,6 +2461,13 @@ void ExportDialog::updateFromSource()
             sourceChanged = true;
             currentInputFile = inputFile;
             ui->inputLineEdit->setText(inputFile);
+            // Tape captures default to heavy dropout correction, LaserDisc to basic
+            if (ui->dropoutModeComboBox) {
+                const QString defaultMode = tbcSource->getVideoParameters().isTapeSource()
+                                                ? QStringLiteral("heavy") : QStringLiteral("basic");
+                const int modeIndex = ui->dropoutModeComboBox->findData(defaultMode);
+                if (modeIndex >= 0) ui->dropoutModeComboBox->setCurrentIndex(modeIndex);
+            }
             if (outputAutoSet || ui->outputLineEdit->text().trimmed().isEmpty()) {
                 ui->outputLineEdit->setText(defaultOutputBaseName(inputFile));
                 outputAutoSet = true;
@@ -3700,7 +3650,7 @@ bool ExportDialog::startExportJob(const ExportJob &job, QString *errorMessage)
     exportProcess->setWorkingDirectory(QFileInfo(currentInputFile).absolutePath());
     QProcessEnvironment launchEnvironment = QProcessEnvironment::systemEnvironment();
     {
-        const QStringList prependDirs = defaultExecutableSearchDirs(currentInputFile);
+        const QStringList prependDirs = ExportArguments::defaultExecutableSearchDirs();
         QStringList pathEntries = launchEnvironment.value(QStringLiteral("PATH"))
                                       .split(QDir::listSeparator(), Qt::SkipEmptyParts);
         prependUniquePathEntries(&pathEntries, prependDirs);
@@ -4167,6 +4117,11 @@ void ExportDialog::processOutputLine(const QString &line, QString *lastStatus, c
         return;
     }
 
+    // The status readout is the last status-worthy line of each tbc-video-export
+    // progress redraw - its "Size: ... Duration: ... Bitrate: ... Remaining: ...
+    // Finishes: ..." footer, which summarises the current encode state and the
+    // completion estimate. It must go through lastStatus (never appendStatus, which
+    // would bypass and then be overwritten by the per-feed Main/Proxy status lines).
     if (lastStatus) {
         *lastStatus = trimmed;
     }
@@ -4224,10 +4179,22 @@ void ExportDialog::flushPendingProcessOutput(const QString &feedTag)
     pendingStderrBuffer.clear();
 }
 
+// Keep only the end of the export's output: it is read at the end (failure
+// detection, details) and the progress redraws would otherwise grow it for the
+// whole export - hundreds of MB over a multi-hour run
+static void appendOutputTail(QString &output, const QString &chunk)
+{
+    constexpr qsizetype kMaxOutputChars = 512 * 1024;
+    output += chunk;
+    if (output.size() > 2 * kMaxOutputChars) {
+        output.remove(0, output.size() - kMaxOutputChars);
+    }
+}
+
 void ExportDialog::handleProcessStdout()
 {
     const QString chunk = QString::fromLocal8Bit(exportProcess->readAllStandardOutput());
-    processStdout += chunk;
+    appendOutputTail(processStdout, chunk);
     const QString feedTag = activeRunStage == RunStage::ProxyExport ? kStatsFeedProxy : kStatsFeedMain;
     consumeProcessOutputChunk(chunk, &pendingStdoutBuffer, feedTag);
 }
@@ -4235,7 +4202,7 @@ void ExportDialog::handleProcessStdout()
 void ExportDialog::handleProcessStderr()
 {
     const QString chunk = QString::fromLocal8Bit(exportProcess->readAllStandardError());
-    processStderr += chunk;
+    appendOutputTail(processStderr, chunk);
     const QString feedTag = activeRunStage == RunStage::ProxyExport ? kStatsFeedProxy : kStatsFeedMain;
     consumeProcessOutputChunk(chunk, &pendingStderrBuffer, feedTag);
 }
@@ -4243,14 +4210,14 @@ void ExportDialog::handleProcessStderr()
 void ExportDialog::handleParallelProxyProcessStdout()
 {
     const QString chunk = QString::fromLocal8Bit(parallelProxyProcess->readAllStandardOutput());
-    parallelProxyStdout += chunk;
+    appendOutputTail(parallelProxyStdout, chunk);
     consumeProcessOutputChunk(chunk, &pendingParallelProxyStdoutBuffer, kStatsFeedProxy);
 }
 
 void ExportDialog::handleParallelProxyProcessStderr()
 {
     const QString chunk = QString::fromLocal8Bit(parallelProxyProcess->readAllStandardError());
-    parallelProxyStderr += chunk;
+    appendOutputTail(parallelProxyStderr, chunk);
     consumeProcessOutputChunk(chunk, &pendingParallelProxyStderrBuffer, kStatsFeedProxy);
 }
 
@@ -4549,7 +4516,7 @@ void ExportDialog::setBusy(bool busy)
 
 QString ExportDialog::resolveVideoExportPath() const
 {
-    const QStringList candidateDirs = defaultExecutableSearchDirs(currentInputFile);
+    const QStringList candidateDirs = ExportArguments::defaultExecutableSearchDirs();
 
     QStringList candidateNames;
 #if defined(Q_OS_WIN)
@@ -4575,15 +4542,15 @@ QString ExportDialog::resolveVideoExportPath() const
     return QString();
 }
 
-QString ExportDialog::resolveFfmpegPath() const
+QString ExportDialog::resolveFfmpegPath(const QString &toolName) const
 {
-    const QStringList candidateDirs = defaultExecutableSearchDirs(currentInputFile);
+    const QStringList candidateDirs = ExportArguments::defaultExecutableSearchDirs();
 
     QStringList candidateNames;
 #if defined(Q_OS_WIN)
-    candidateNames << QStringLiteral("ffmpeg.exe") << QStringLiteral("ffmpeg");
+    candidateNames << toolName + QStringLiteral(".exe") << toolName;
 #else
-    candidateNames << QStringLiteral("ffmpeg");
+    candidateNames << toolName;
 #endif
 
     for (const QString &dir : candidateDirs) {
@@ -4596,12 +4563,107 @@ QString ExportDialog::resolveFfmpegPath() const
         }
     }
 
-    const QString fromPath = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    const QString fromPath = QStandardPaths::findExecutable(toolName);
     if (!fromPath.isEmpty()) {
         return fromPath;
     }
 
+    // GDH fork: the Nix package keeps its ffmpeg/ffprobe/ffplay in
+    // libexec/tbc-video-export (outside bin/, so it never shadows the host's);
+    // used only when the host has none
+    for (const QString &name : candidateNames) {
+        const QFileInfo bundled(QDir(QCoreApplication::applicationDirPath())
+                                    .filePath(QStringLiteral("../libexec/tbc-video-export/") + name));
+        if (bundled.exists() && bundled.isExecutable()) {
+            return bundled.absoluteFilePath();
+        }
+    }
+
     return QString();
+}
+
+void ExportDialog::startAudioMonitor(double startSeconds)
+{
+    stopAudioMonitor();
+
+    // The clock runs while playback does, even with nothing ticked, so a
+    // track ticked later starts at the right place
+    audioMonitorStartSeconds = qMax(0.0, startSeconds);
+    audioMonitorClock.start();
+
+    const QCheckBox *monitorCheckBoxes[] = {ui->audio1MonitorCheckBox, ui->audio2MonitorCheckBox,
+                                            ui->audio3MonitorCheckBox, ui->audio4MonitorCheckBox};
+    const QLineEdit *trackLineEdits[] = {ui->audio1LineEdit, ui->audio2LineEdit,
+                                         ui->audio3LineEdit, ui->audio4LineEdit};
+    QStringList tracks;
+    for (int i = 0; i < 4; ++i) {
+        const QString track = normalizeAudioTrackPathInput(trackLineEdits[i]->text());
+        if (monitorCheckBoxes[i]->isChecked() && !track.isEmpty() && QFileInfo(track).isFile()) tracks << track;
+    }
+    if (tracks.isEmpty()) return;
+
+    const QString ffmpegPath = resolveFfmpegPath();
+    const QString ffplayPath = resolveFfmpegPath(QStringLiteral("ffplay"));
+    if (ffmpegPath.isEmpty() || ffplayPath.isEmpty()) {
+        qWarning() << "Audio monitor: ffmpeg and ffplay are both needed to play monitored tracks";
+        return;
+    }
+
+    // Decode each track from the position (raw .pcm is ld-decode's 44.1 kHz
+    // stereo s16le), mix them, and stream the result to ffplay
+    QStringList decodeArgs = {QStringLiteral("-hide_banner"), QStringLiteral("-v"), QStringLiteral("error"),
+                              QStringLiteral("-nostdin")};
+    const QString startArg = QString::number(audioMonitorStartSeconds, 'f', 6);
+    for (const QString &track : tracks) {
+        decodeArgs << QStringLiteral("-ss") << startArg;
+        if (QFileInfo(track).suffix().compare(QStringLiteral("pcm"), Qt::CaseInsensitive) == 0) {
+            decodeArgs << QStringLiteral("-f") << QStringLiteral("s16le") << QStringLiteral("-ar")
+                       << QStringLiteral("44100") << QStringLiteral("-ac") << QStringLiteral("2");
+        }
+        decodeArgs << QStringLiteral("-i") << track;
+    }
+    if (tracks.size() > 1) {
+        QString inputs;
+        for (int i = 0; i < tracks.size(); ++i) inputs += QStringLiteral("[%1:a:0]").arg(i);
+        decodeArgs << QStringLiteral("-filter_complex")
+                   << inputs + QStringLiteral("amix=inputs=%1:normalize=0:duration=longest[mix]").arg(tracks.size())
+                   << QStringLiteral("-map") << QStringLiteral("[mix]");
+    } else {
+        decodeArgs << QStringLiteral("-map") << QStringLiteral("0:a:0");
+    }
+    decodeArgs << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le") << QStringLiteral("-f") << QStringLiteral("nut")
+               << QStringLiteral("-");
+
+    audioMonitorDecoder = new QProcess(this);
+    audioMonitorPlayer = new QProcess(this);
+    audioMonitorDecoder->setStandardOutputProcess(audioMonitorPlayer);
+    audioMonitorPlayer->start(ffplayPath, {QStringLiteral("-hide_banner"), QStringLiteral("-v"), QStringLiteral("error"),
+                                           QStringLiteral("-nodisp"), QStringLiteral("-autoexit"),
+                                           QStringLiteral("-i"), QStringLiteral("-")});
+    audioMonitorDecoder->start(ffmpegPath, decodeArgs);
+}
+
+void ExportDialog::setAudioMonitorTracks(const QString &tracks)
+{
+    QCheckBox *monitorCheckBoxes[] = {ui->audio1MonitorCheckBox, ui->audio2MonitorCheckBox,
+                                      ui->audio3MonitorCheckBox, ui->audio4MonitorCheckBox};
+    for (int i = 0; i < 4; ++i) {
+        const QSignalBlocker blocker(monitorCheckBoxes[i]);
+        monitorCheckBoxes[i]->setChecked((i < tracks.size() && tracks.at(i) == QLatin1Char('1')));
+    }
+}
+
+void ExportDialog::stopAudioMonitor()
+{
+    audioMonitorClock.invalidate();
+    for (QProcess *process : {audioMonitorDecoder, audioMonitorPlayer}) {
+        if (!process) continue;
+        process->kill();
+        process->waitForFinished(1000);
+        process->deleteLater();
+    }
+    audioMonitorDecoder = nullptr;
+    audioMonitorPlayer = nullptr;
 }
 
 QString ExportDialog::defaultOutputBaseName(const QString &inputFile) const
@@ -4969,7 +5031,7 @@ bool ExportDialog::startProxyExport(QString *errorMessage, bool forceOverwrite)
 
     exportProcess->setWorkingDirectory(QFileInfo(currentInputFile).absolutePath());
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    const QStringList prependDirs = defaultExecutableSearchDirs(currentInputFile);
+    const QStringList prependDirs = ExportArguments::defaultExecutableSearchDirs();
     QStringList pathEntries = env.value(QStringLiteral("PATH"))
                                   .split(QDir::listSeparator(), Qt::SkipEmptyParts);
     prependUniquePathEntries(&pathEntries, prependDirs);
@@ -5191,6 +5253,10 @@ QStringList ExportDialog::buildArguments(QString *errorMessage, const QString &i
         if (dropoutMode == QStringLiteral("heavy")
             && executableSupportsOption(exportPath, QStringLiteral("--overcorrect"))) {
             args << QStringLiteral("--overcorrect");
+        } else if (dropoutMode == QStringLiteral("basic")
+                   && executableSupportsOption(exportPath, QStringLiteral("--no-overcorrect"))) {
+            // tbc-video-export defaults tape sources to heavy, so ask for basic
+            args << QStringLiteral("--no-overcorrect");
         }
         if (supportsDropoutInterfieldCorrection) {
             const QString correctionValue = dropoutInterfieldCorrectionValue(tbcSource, correctionMode);

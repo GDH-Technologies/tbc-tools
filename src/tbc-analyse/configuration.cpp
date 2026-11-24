@@ -206,6 +206,11 @@ void Configuration::writeConfiguration(void)
     configuration->setValue("threads", settings.exportAdvancedOptions.threads);
     configuration->endGroup();
 
+    // Export tab audio Monitor ticks
+    configuration->beginGroup("audioMonitor");
+    configuration->setValue("tracks", settings.audioMonitorTracks);
+    configuration->endGroup();
+
     // RF segment export (FLAC-Chop)
     configuration->beginGroup("rfExport");
     configuration->setValue("flacChopPath", settings.rfExport.flacChopPath);
@@ -219,6 +224,7 @@ void Configuration::writeConfiguration(void)
     configuration->beginGroup("theme");
     configuration->setValue("keepChoice", settings.theme.keepChoice);
     configuration->setValue("mode", settings.theme.mode);
+    configuration->setValue("style", settings.theme.style);
     configuration->endGroup();
 
     // Sync the settings with disk
@@ -309,6 +315,17 @@ void Configuration::readConfiguration(void)
     settings.cudaPlugin.enabled = configuration->value("enabled", false).toBool();
     settings.cudaPlugin.trusted = configuration->value("trusted", false).toBool();
     settings.cudaPlugin.installPath = configuration->value("installPath", QString()).toString();
+    // Older builds wrote the install record with lower-case keys; without this
+    // fallback an installed plugin reads back as not installed
+    if (settings.cudaPlugin.installedVersion.isEmpty()) {
+        settings.cudaPlugin.installedVersion = configuration->value("installedversion", QString()).toString();
+    }
+    if (settings.cudaPlugin.releaseTag.isEmpty()) {
+        settings.cudaPlugin.releaseTag = configuration->value("releasetag", QString()).toString();
+    }
+    if (settings.cudaPlugin.installPath.isEmpty()) {
+        settings.cudaPlugin.installPath = configuration->value("installpath", QString()).toString();
+    }
     configuration->endGroup();
 
     // VBI processing options (additive keys - older config files fall back to defaults)
@@ -360,6 +377,11 @@ void Configuration::readConfiguration(void)
     if (settings.exportAdvancedOptions.threads < 0) settings.exportAdvancedOptions.threads = 0;
     configuration->endGroup();
 
+    // Export tab audio Monitor ticks (additive key - older config files fall back to none)
+    configuration->beginGroup("audioMonitor");
+    settings.audioMonitorTracks = configuration->value("tracks", QStringLiteral("0000")).toString();
+    configuration->endGroup();
+
     // RF segment export (additive keys - older config files fall back to defaults)
     configuration->beginGroup("rfExport");
     settings.rfExport.flacChopPath = configuration->value("flacChopPath", QString()).toString();
@@ -371,16 +393,17 @@ void Configuration::readConfiguration(void)
     if (settings.rfExport.padAfterMs < 0) settings.rfExport.padAfterMs = 0;
     configuration->endGroup();
 
-    // Theme options (additive keys - older config files fall back to defaults)
-    configuration->beginGroup("theme");
-    settings.theme.keepChoice = configuration->value("keepChoice", false).toBool();
-    settings.theme.mode = configuration->value("mode", QStringLiteral("stock-system")).toString();
-    if (settings.theme.mode != QStringLiteral("stock-dark")
-        && settings.theme.mode != QStringLiteral("stock-light")) {
-        // Anything else (including stock-system and garbage) follows the OS.
-        settings.theme.mode = QStringLiteral("stock-system");
-    }
-    configuration->endGroup();
+        // Theme options (additive keys - older config files fall back to defaults)
+        configuration->beginGroup("theme");
+        settings.theme.keepChoice = configuration->value("keepChoice", false).toBool();
+        settings.theme.mode = configuration->value("mode", QStringLiteral("stock-system")).toString();
+        if (settings.theme.mode != QStringLiteral("stock-dark")
+            && settings.theme.mode != QStringLiteral("stock-light")) {
+            // Anything else (including stock-system and garbage) follows the OS.
+            settings.theme.mode = QStringLiteral("stock-system");
+        }
+        settings.theme.style = configuration->value("style", QString()).toString();
+        configuration->endGroup();
 }
 
 void Configuration::setDefault(void)
@@ -449,6 +472,7 @@ void Configuration::setDefault(void)
 
     // Advanced export options (defaults match tbc-video-export CLI defaults)
     settings.exportAdvancedOptions = ExportAdvancedOptions();
+    settings.audioMonitorTracks = QStringLiteral("0000");
 
     // RF segment export (FLAC-Chop)
     settings.rfExport.flacChopPath = QString();
@@ -460,6 +484,7 @@ void Configuration::setDefault(void)
     // Theme options (Themes menu persistence defaults: do not keep, follow OS)
     settings.theme.keepChoice = false;
     settings.theme.mode = QStringLiteral("stock-system");
+    settings.theme.style = QString();
 
     // Write the configuration
     writeConfiguration();
@@ -950,6 +975,16 @@ SlideshowExtractOptions Configuration::getSlideshowExtractOptions(void)
 }
 
 // Advanced export options
+void Configuration::setAudioMonitorTracks(const QString &tracks)
+{
+    settings.audioMonitorTracks = tracks;
+}
+
+QString Configuration::getAudioMonitorTracks(void)
+{
+    return settings.audioMonitorTracks;
+}
+
 void Configuration::setExportAdvancedOptions(const ExportAdvancedOptions &options)
 {
     settings.exportAdvancedOptions = options;
@@ -979,4 +1014,14 @@ void Configuration::setThemeMode(QString themeMode)
 QString Configuration::getThemeMode(void)
 {
     return settings.theme.mode;
+}
+
+void Configuration::setThemeStyle(QString themeStyle)
+{
+    settings.theme.style = themeStyle;
+}
+
+QString Configuration::getThemeStyle(void)
+{
+    return settings.theme.style;
 }

@@ -90,6 +90,7 @@
 #include "../tbc-export-metadata/metadataexportdialog.h"
 #include "tbc/uistyle.h"
 #include "tbc/buildinfo.h"
+#include "composite_vectorscope.h"
 namespace {
 QString sanitizedFileToken(const QString &value)
 {
@@ -597,8 +598,12 @@ QString resolveMetadataFilenameForSource(const QString &sourceFilename,
 
 double frameRateForSystem(VideoSystem system)
 {
+    // ITU-R BT.1700 Annex 1: 625-line systems (PAL, SECAM) run at 25 frames/s;
+    // 525-line systems (NTSC, PAL-M) at 30000/1001.
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return 25.0;
     case PAL_M:
     case NTSC:
@@ -611,6 +616,8 @@ int nominalFrameRateForSystem(VideoSystem system)
 {
     switch (system) {
     case PAL:
+    case SECAM:
+    case MESECAM:
         return 25;
     case PAL_M:
     case NTSC:
@@ -1468,6 +1475,11 @@ MainWindow::MainWindow(QString inputFilenameParam, bool metadataOnlyParam, QWidg
     exportDialog->setExportProfileConfigPreference(configuration.getExportProfileConfigEnabled(),
                                                    configuration.getExportProfileConfigPath());
     exportDialog->setExportAdvancedOptions(configuration.getExportAdvancedOptions());
+    exportDialog->setAudioMonitorTracks(configuration.getAudioMonitorTracks());
+    connect(exportDialog, &ExportDialog::audioMonitorTracksChanged, this, [this](const QString &tracks) {
+        configuration.setAudioMonitorTracks(tracks);
+        configuration.writeConfiguration();
+    });
     connect(exportDialog, &ExportDialog::userEditRangeSelectionChanged,
             this, &MainWindow::exportRangeSelectionChangedSignalHandler);
     connect(exportDialog, &ExportDialog::proxyGenerationPreferenceChanged, this, [this](bool enabled) {
@@ -1903,7 +1915,9 @@ void MainWindow::populateThemesMenu()
         tbc::ui::applyStockThemeFollowingSystemToApp();
         refreshThemeDependentUi();
         if (configuration.getKeepThemeChoice()) {
+            // Presets run on Fusion, so they replace any stored style override
             configuration.setThemeMode(QStringLiteral("stock-system"));
+            configuration.setThemeStyle(QString());
             configuration.writeConfiguration();
         }
         // Mirror the user's successful "second press" behavior: re-apply once
@@ -1929,7 +1943,9 @@ void MainWindow::populateThemesMenu()
         tbc::ui::applyStockDarkThemeToApp();
         refreshThemeDependentUi();
         if (configuration.getKeepThemeChoice()) {
+            // Presets run on Fusion, so they replace any stored style override
             configuration.setThemeMode(QStringLiteral("stock-dark"));
+            configuration.setThemeStyle(QString());
             configuration.writeConfiguration();
         }
         // Mirror the user's successful "second press" behavior: re-apply once
@@ -1955,7 +1971,9 @@ void MainWindow::populateThemesMenu()
         tbc::ui::applyStockLightThemeToApp();
         refreshThemeDependentUi();
         if (configuration.getKeepThemeChoice()) {
+            // Presets run on Fusion, so they replace any stored style override
             configuration.setThemeMode(QStringLiteral("stock-light"));
+            configuration.setThemeStyle(QString());
             configuration.writeConfiguration();
         }
         QTimer::singleShot(24, this, [this, lightAction]() {
@@ -1967,32 +1985,44 @@ void MainWindow::populateThemesMenu()
         });
     });
 
-    // Keep-theme-choice toggle: when enabled, the selected preset
-    // (System/Dark/Light) is persisted and restored on the next launch; when
-    // disabled the app always starts following the OS light/dark scheme.
-    // Independent of the exclusive preset group.
+    // Keep-theme-choice toggle: when enabled, the selected theme is
+    // persisted and restored on the next launch - regardless of type: the
+    // stock presets (System/Dark/Light) store their mode, and Qt style
+    // overrides (Fusion, Windows, ...) store the style name. When disabled
+    // the app always starts following the OS light/dark scheme with no
+    // style override. Independent of the exclusive preset group.
+    // The palette mode actually running (System follows the OS; Dark/Light
+    // are pinned), and the style override (empty when running on Fusion,
+    // which is the presets' own style)
+    const auto activePaletteMode = []() {
+        auto *themedApp = tbc::ui::themedApplicationInstance();
+        if (!themedApp || themedApp->isFollowingSystemTheme()) return QStringLiteral("stock-system");
+        return qApp->property("isDarkTheme").toBool() ? QStringLiteral("stock-dark") : QStringLiteral("stock-light");
+    };
+    const auto activeStyleOverride = []() {
+        const QString styleName = tbc::ui::applicationStyleName();
+        return styleName.compare(QStringLiteral("Fusion"), Qt::CaseInsensitive) == 0 ? QString() : styleName;
+    };
+
     QAction *keepThemeAction = ui->menuThemes->addAction(tr("Keep theme choice"));
     keepThemeAction->setCheckable(true);
     keepThemeAction->setData(QStringLiteral("keep-theme-choice"));
     keepThemeAction->setChecked(configuration.getKeepThemeChoice());
     keepThemeAction->setToolTip(tr(
-        "Remember the selected theme (System, Dark or Light) between sessions. "
-        "When unchecked, tbc-analyse always starts following the OS light/dark "
-        "setting."));
-    connect(keepThemeAction, &QAction::toggled, this, [this](bool checked) {
+        "Remember the selected theme (System, Dark, Light or a Qt style) "
+        "between sessions. When unchecked, tbc-analyse always starts "
+        "following the OS light/dark setting."));
+    connect(keepThemeAction, &QAction::toggled, this, [this, activePaletteMode, activeStyleOverride](bool checked) {
         configuration.setKeepThemeChoice(checked);
         if (checked) {
-            // Persist the currently active preset (style overrides are not
-            // persisted; only the stock presets carry a stored mode).
-            if (themesActionGroup && themesActionGroup->checkedAction()) {
-                const QString checkedData = themesActionGroup->checkedAction()->data().toString();
-                if (checkedData.startsWith(QStringLiteral("stock-"))) {
-                    configuration.setThemeMode(checkedData);
-                }
-            }
+            // Persist what is running: the palette mode and the style
+            // override (none when on Fusion) are stored independently
+            configuration.setThemeMode(activePaletteMode());
+            configuration.setThemeStyle(activeStyleOverride());
         } else {
-            // Clear the stored override so the next launch follows the OS.
+            // Clear the stored overrides so the next launch follows the OS.
             configuration.setThemeMode(QStringLiteral("stock-system"));
+            configuration.setThemeStyle(QString());
         }
         configuration.writeConfiguration();
     });
@@ -2023,7 +2053,7 @@ void MainWindow::populateThemesMenu()
         return;
     }
 
-    const QString currentStyleName = QApplication::style() ? QApplication::style()->objectName() : QString();
+    const QString currentStyleName = tbc::ui::applicationStyleName();
 
     for (const QString &styleName : availableThemes) {
         QAction *themeAction = ui->menuThemes->addAction(styleName);
@@ -2036,45 +2066,40 @@ void MainWindow::populateThemesMenu()
             themeAction->setChecked(true);
         }
 
-        connect(themeAction, &QAction::triggered, this, [this, themeAction](bool checked) {
+        connect(themeAction, &QAction::triggered, this, [this, themeAction, activePaletteMode, activeStyleOverride](bool checked) {
             if (!checked) {
                 return;
             }
             applyThemeStyle(themeAction->data().toString());
+            // Persist the style regardless of type when Keep theme choice is
+            // on; the palette mode stays as it is (styles don't change it)
+            if (configuration.getKeepThemeChoice()) {
+                configuration.setThemeMode(activePaletteMode());
+                configuration.setThemeStyle(activeStyleOverride());
+                configuration.writeConfiguration();
+            }
         });
     }
 
-    // Ensure the stock preset matching the active theme is checked. This
-    // unchecks any Qt style action the loop above may have auto-checked (the
-    // stock preset owns the active palette; style actions below are advanced
-    // overrides).
-    for (QAction *action : {systemAction, darkAction, lightAction}) {
-        if (action->data().toString() == activeThemeData) {
-            action->setChecked(true);
+    // Tick what is actually running: a style override when one is active,
+    // otherwise the preset. Fusion is the presets' own style, so the loop
+    // above ticking "Fusion" must not hide the preset.
+    if (activeStyleOverride().isEmpty()) {
+        for (QAction *action : {systemAction, darkAction, lightAction}) {
+            if (action->data().toString() == activeThemeData) {
+                action->setChecked(true);
+            }
         }
     }
 }
 
 void MainWindow::applyThemeStyle(const QString &styleName)
 {
-    if (styleName.isEmpty()) {
+    if (styleName.isEmpty() || !tbc::ui::setApplicationStyle(styleName)) {
         return;
     }
 
-    const QString currentStyleName = QApplication::style() ? QApplication::style()->objectName() : QString();
-    if (!currentStyleName.isEmpty() &&
-        styleName.compare(currentStyleName, Qt::CaseInsensitive) == 0) {
-        return;
-    }
-
-    QStyle *style = QStyleFactory::create(styleName);
-    if (!style) {
-        return;
-    }
-
-    QApplication::setStyle(style);
-
-    const QString activeStyleName = QApplication::style() ? QApplication::style()->objectName() : styleName;
+    const QString activeStyleName = tbc::ui::applicationStyleName();
     if (themesActionGroup) {
         for (QAction *action : themesActionGroup->actions()) {
             action->setChecked(action->data().toString().compare(activeStyleName, Qt::CaseInsensitive) == 0);
@@ -3835,6 +3860,54 @@ void MainWindow::updateVectorscopeDialogue()
     if (asyncFrameRenderInProgress && shouldRenderFrameAsync()) {
         return;
     }
+
+    // Advanced (composite measurement) scope tab: the engine demodulates
+    // chroma straight from the raw TBC composite against a burst-locked
+    // reference, so the scope shows the signal rather than the decode.
+    if (vectorscopeDialog->isAdvancedTabSelected()) {
+        std::optional<tbc::cvbs::VectorscopeData> compositeResult;
+        if (tbcSource.getIsSourceLoaded() && !tbcSource.getIsMetadataOnly()) {
+            const VideoSystem system = tbcSource.getSystem();
+            if (system == PAL || system == NTSC || system == PAL_M) {
+                const TbcSource::FieldTimingData timingData = tbcSource.getFieldTimingData();
+                if (timingData.valid) {
+                    const TbcMetaData::VideoParameters &videoParameters = tbcSource.getVideoParameters();
+                    // Separate luma/chroma captures (vhs-decode's .tbc + _chroma.tbc):
+                    // the luma file has no burst, so rebuild the composite the way
+                    // the decoder's combine mode does - luma + chroma, removing the
+                    // chroma file's 32767 offset
+                    const auto withChroma = [](const std::vector<uint16_t> &luma, const std::vector<uint16_t> &chroma) {
+                        if (chroma.size() != luma.size()) return luma;
+                        std::vector<uint16_t> composite(luma.size());
+                        for (size_t i = 0; i < luma.size(); ++i) {
+                            const qint32 sum = static_cast<qint32>(luma[i]) + static_cast<qint32>(chroma[i]) - 32767;
+                            composite[i] = static_cast<uint16_t>(qBound(0, sum, 65535));
+                        }
+                        return composite;
+                    };
+                    const std::vector<int16_t> compositeFrame = tbc::cvbs::assemble_composite_frame(
+                        withChroma(timingData.firstFieldComposite, timingData.firstFieldChroma),
+                        withChroma(timingData.secondFieldComposite, timingData.secondFieldChroma),
+                        videoParameters);
+                    if (!compositeFrame.empty()) {
+                        const tbc::cvbs::CompositeScopeParameters parameters =
+                            tbc::cvbs::make_composite_scope_parameters(
+                                videoParameters, timingData.firstFieldHeight,
+                                timingData.secondFieldHeight);
+                        vectorscopeDialog->setCompositeGeometry(parameters.frame_lines());
+                        compositeResult = tbc::cvbs::extract_composite_vectorscope(
+                            compositeFrame.data(), compositeFrame.size(), parameters,
+                            static_cast<uint64_t>(currentFrameNumber),
+                            vectorscopeDialog->compositeOptions());
+                    }
+                }
+            }
+        }
+        vectorscopeDialog->showCompositeTrace(compositeResult, tbcSource.getVideoParameters(),
+                                              tbcSource.getViewMode(), currentFieldNumber % 2);
+        return;
+    }
+
     // Update the vectorscope dialogue
     vectorscopeDialog->showTraceImage(tbcSource.getComponentFrame(), tbcSource.getVideoParameters(),
                                       tbcSource.getViewMode(), currentFieldNumber % 2);
@@ -4029,57 +4102,57 @@ void MainWindow::updatePositionEditorValue(qint32 currentNumber)
     }
 }
 
-bool MainWindow::playbackUseFastMode() const
-{
-    if (!tbcSource.getIsSourceLoaded()) {
-        return false;
-    }
-
-    if (!tbcSource.getChromaDecoder()) {
-        return true;
-    }
-
-    return tbcSource.getSourceMode() == TbcSource::LUMA_SOURCE;
-}
-
 QString MainWindow::playbackStartToolTip() const
 {
-    const bool isPalSystem = (tbcSource.getIsSourceLoaded() && tbcSource.getSystem() == PAL);
-    if (playbackUseFastMode()) {
-        const QString fastFpsText = isPalSystem ? QStringLiteral("50.00") : QStringLiteral("59.94");
-        return tr("Play at %1 fps (luma/source mode)").arg(fastFpsText);
+    const double fps = timecodeFrameRate();
+    if (tbcSource.getIsSourceLoaded() && tbcSource.getFieldViewEnabled()) {
+        return tr("Play at %1 fields/s").arg(QString::number(fps * 2.0, 'f', 2));
     }
-
-    const QString fpsText = isPalSystem ? QStringLiteral("25.00") : QStringLiteral("29.97");
-    return tr("Play at %1 fps").arg(fpsText);
+    return tr("Play at %1 fps").arg(QString::number(fps, 'f', 2));
 }
 
+// Real-time period of one playback step: a frame in frame view (25 or
+// 29.97 fps), a field in field view (50 or 59.94 fields/s, every field shown).
 double MainWindow::playbackFrameIntervalMs() const
 {
-    if (tbcSource.getIsSourceLoaded() && tbcSource.getSystem() == PAL) {
-        return 1000.0 / 25.0;
-    }
-    return 1000.0 * 1001.0 / 30000.0;
+    const double frameMs = 1000.0 / timecodeFrameRate();
+    return tbcSource.getFieldViewEnabled() ? (frameMs / 2.0) : frameMs;
 }
 
+// Schedule the next step against the playback clock rather than "one period
+// after this step finished": rendering a frame takes time, and waiting a full
+// period after it would stretch every frame by the render time.  If rendering
+// falls more than two periods behind, the deadline resyncs to now instead of
+// bursting through the backlog.
 void MainWindow::scheduleNextPlaybackTick()
 {
     if (!playbackRunning || !playbackTimer) {
         return;
     }
-    double intervalMs = playbackFrameIntervalMs();
-    if (playbackUseFastMode()) {
-        intervalMs *= 0.5;
-    }
-    playbackTickCarryMs += intervalMs;
-    const int timerIntervalMs = qMax(1, static_cast<int>(qFloor(playbackTickCarryMs)));
-    playbackTickCarryMs -= static_cast<double>(timerIntervalMs);
-    playbackTimer->start(timerIntervalMs);
+    // Playback follows the wall clock (as the monitored audio does): the next
+    // tick is when the frame after the shown one is due
+    const qint32 shownNumber = tbcSource.getFieldViewEnabled() ? currentFieldNumber : currentFrameNumber;
+    const double dueMs = (shownNumber - playbackStartNumber + 1) * playbackFrameIntervalMs();
+    const double nowMs = static_cast<double>(playbackClock.nsecsElapsed()) / 1.0e6;
+    playbackTimer->start(qMax(0, static_cast<int>(std::lround(dueMs - nowMs))));
 }
 
 void MainWindow::setPlaybackRunning(bool running)
 {
     playbackRunning = running && tbcSource.getIsSourceLoaded();
+    tbcSource.setPlaybackPrefetch(playbackRunning);
+    if (exportDialog) {
+        if (playbackRunning) {
+            // Monitored audio starts at the shown frame/field's time
+            const double fps = timecodeFrameRate();
+            const double startSeconds = tbcSource.getFieldViewEnabled()
+                                            ? (currentFieldNumber - 1) / (fps * 2.0)
+                                            : (currentFrameNumber - 1) / fps;
+            exportDialog->startAudioMonitor(startSeconds);
+        } else {
+            exportDialog->stopAudioMonitor();
+        }
+    }
     if (playbackTimer && !playbackRunning) {
         playbackTimer->stop();
     }
@@ -4094,7 +4167,8 @@ void MainWindow::setPlaybackRunning(bool running)
     }
 
     if (playbackRunning) {
-        playbackTickCarryMs = 0.0;
+        playbackClock.start();
+        playbackStartNumber = tbcSource.getFieldViewEnabled() ? currentFieldNumber : currentFrameNumber;
         ui->playPushButton->setIcon(QIcon(QStringLiteral(":/icons/Graphics/stop-playback.svg")));
         ui->playPushButton->setToolTip(tr("Stop playback"));
         scheduleNextPlaybackTick();
@@ -4112,9 +4186,13 @@ void MainWindow::stepPlayback()
         return;
     }
 
+    // Show the frame the clock is at; when rendering falls behind this skips
+    // frames rather than letting video drift from the audio
+    const double elapsedMs = static_cast<double>(playbackClock.nsecsElapsed()) / 1.0e6;
+    const qint32 dueNumber = playbackStartNumber + static_cast<qint32>(elapsedMs / playbackFrameIntervalMs());
     qint32 currentNumber = currentFrameNumber;
     if (tbcSource.getFieldViewEnabled()) {
-        const qint32 nextField = currentFieldNumber + 2;
+        const qint32 nextField = qMax(currentFieldNumber + 1, dueNumber);
         if (nextField > tbcSource.getNumberOfFields()) {
             setPlaybackRunning(false);
             return;
@@ -4122,7 +4200,7 @@ void MainWindow::stepPlayback()
         setCurrentField(nextField);
         currentNumber = currentFieldNumber;
     } else {
-        const qint32 nextFrame = currentFrameNumber + 1;
+        const qint32 nextFrame = qMax(currentFrameNumber + 1, dueNumber);
         if (nextFrame > tbcSource.getNumberOfFrames()) {
             setPlaybackRunning(false);
             return;

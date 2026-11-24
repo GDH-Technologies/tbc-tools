@@ -152,6 +152,16 @@ int main(int argc, char *argv[])
                                         QCoreApplication::translate("main", "number"));
     parser.addOption(threadsOption);
 
+    // Frame range (sequential frames), so a ranged export only corrects what it uses
+    QCommandLineOption startFrameOption(QStringList() << "s" << "start",
+                                        QCoreApplication::translate("main", "Specify the start frame number"),
+                                        QCoreApplication::translate("main", "frame"));
+    parser.addOption(startFrameOption);
+    QCommandLineOption lengthOption(QStringList() << "l" << "length",
+                                    QCoreApplication::translate("main", "Specify the number of frames to process"),
+                                    QCoreApplication::translate("main", "frames"));
+    parser.addOption(lengthOption);
+
     // Positional argument to specify input video file
     parser.addPositionalArgument("inputs", QCoreApplication::translate(
                                      "main", "Specify input TBC files (- as first source for piped input)"));
@@ -346,6 +356,8 @@ int main(int argc, char *argv[])
             qInfo() << "Please verify that the specified source video files exist with the correct file permissions";
             return 1;
         }
+        // A single source is read straight through: read it in shared-disk blocks
+        if (totalNumberOfInputFiles == 1) sourceVideos[i]->setChunkedReads(true);
 
         // Verify TBC and metadata input fields match
         if (sourceVideos[i]->getNumberOfAvailableFields() != metaData[i]->getNumberOfFields()) {
@@ -384,6 +396,8 @@ int main(int argc, char *argv[])
     CorrectorPool correctorPool(outputFilename, outputMetadataFilename, maxThreads,
                                 metaData, sourceVideos,
                                 reverse, intraField, overCorrect);
+    correctorPool.setFrameRange(parser.isSet(startFrameOption) ? parser.value(startFrameOption).toInt() : 1,
+                                parser.isSet(lengthOption) ? parser.value(lengthOption).toInt() : -1);
     if (!correctorPool.process()) result = 1;
 
     // Report on the result of the correction process

@@ -399,16 +399,27 @@ jobs:
       - name: Ensure ONNX Runtime
         run: |
           $ErrorActionPreference = 'Stop'
-          $onnxFile = "onnxruntime-win-x64-gpu-$env:ONNXRUNTIME_VERSION.zip"
+          # Microsoft purged the onnxruntime GitHub releases on 2026-11-20, so
+          # ORT comes from the immutable nuget.org package, as upstream's
+          # build_windows_tools.yml does. The nupkg keeps headers and natives
+          # under buildTransitive/ and runtimes/; arrange them into the
+          # include/ + lib/ tree ONNXRUNTIME_ROOT expects. The directory name
+          # is new, so a cache left from the GitHub zip is never reused.
+          $nupkg = "Microsoft.ML.OnnxRuntime.Gpu.Windows"
           $extractRoot = "$env:TOOLS_ROOT\external\onnxruntime"
-          $onnxRoot = Join-Path $extractRoot ($onnxFile -replace '\.zip$','')
+          $onnxRoot = Join-Path $extractRoot "onnxruntime-win-x64-gpu-nuget-$env:ONNXRUNTIME_VERSION"
           if (-not (Test-Path "$onnxRoot\include\onnxruntime_cxx_api.h")) {
-            New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-            $archivePath = Join-Path $extractRoot $onnxFile
+            $nupkgRoot = Join-Path $extractRoot "$nupkg.$env:ONNXRUNTIME_VERSION"
+            New-Item -ItemType Directory -Force -Path $nupkgRoot | Out-Null
+            $archivePath = Join-Path $extractRoot "$nupkg.$env:ONNXRUNTIME_VERSION.nupkg.zip"
             if (-not (Test-Path $archivePath)) {
-              Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ONNXRUNTIME_VERSION/$onnxFile" -OutFile $archivePath
+              Invoke-WebRequest "https://www.nuget.org/api/v2/package/$nupkg/$env:ONNXRUNTIME_VERSION" -OutFile $archivePath
             }
-            Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force
+            Expand-Archive -Path $archivePath -DestinationPath $nupkgRoot -Force
+            New-Item -ItemType Directory -Force -Path "$onnxRoot\include", "$onnxRoot\lib" | Out-Null
+            Copy-Item -Path "$nupkgRoot\buildTransitive\native\include\*" -Destination "$onnxRoot\include" -Recurse -Force
+            Copy-Item -Path "$nupkgRoot\runtimes\win-x64\native\*" -Destination "$onnxRoot\lib" -Recurse -Force
+            Copy-Item -Path "$nupkgRoot\LICENSE" -Destination $onnxRoot -Force
           }
           if (-not (Test-Path "$onnxRoot\lib\onnxruntime.lib")) {
             throw "ONNX Runtime import library not found in $onnxRoot\lib"
@@ -672,6 +683,10 @@ jobs:
           Copy-Item -Path "$env:FFMPEG_DIR\bin\ffmpeg.exe" -Destination release\
           if (Test-Path "$env:FFMPEG_DIR\bin\ffprobe.exe") {
             Copy-Item -Path "$env:FFMPEG_DIR\bin\ffprobe.exe" -Destination release\
+          }
+          # ffplay plays the Export tab's monitored audio tracks (optional)
+          if (Test-Path "$env:FFMPEG_DIR\bin\ffplay.exe") {
+            Copy-Item -Path "$env:FFMPEG_DIR\bin\ffplay.exe" -Destination release\
           }
           Copy-Item -Path "$env:FFMPEG_DIR\bin\*.dll" -Destination release\
           Copy-Item -Path "$env:FLAC_DIR\Win64\*" -Destination release\

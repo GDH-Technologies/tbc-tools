@@ -1,4 +1,5 @@
 #include "exportarguments.h"
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QStringList>
@@ -84,6 +85,90 @@ bool lumaOnlyNeedsYuv422(const QString &profileName)
            || normalizedName == QStringLiteral("prores_lt")
            || normalizedName == QStringLiteral("prores_proxy")
            || normalizedName == QStringLiteral("prores_hq");
+}
+
+// Directories searched for tbc-video-export, ffmpeg, ffprobe and ffplay before
+// PATH, and prepended to the export's PATH. Never the input file's directory or
+// the working directory: an executable there named ffmpeg (beside a capture on
+// shared storage, say) would run in place of the real one. A directory anyone
+// can write to is skipped too: the parent walk below reaches /tmp from an
+// AppImage's mount point.
+QStringList defaultExecutableSearchDirs()
+{
+    QStringList candidateDirs;
+    auto appendUniqueDir = [&candidateDirs](const QString &dirPath) {
+        if (dirPath.isEmpty()) {
+            return;
+        }
+#if !defined(Q_OS_WIN)
+        if (QFileInfo(dirPath).permission(QFileDevice::WriteOther)) {
+            return;
+        }
+#endif
+        for (const QString &existing : candidateDirs) {
+            if (existing.compare(dirPath, Qt::CaseInsensitive) == 0) {
+                return;
+            }
+        }
+        candidateDirs << dirPath;
+    };
+    const QString appFilePath = QCoreApplication::applicationFilePath();
+    if (!appFilePath.isEmpty()) {
+        const QFileInfo appFileInfo(appFilePath);
+        const QString canonicalAppFilePath = appFileInfo.canonicalFilePath();
+        if (!canonicalAppFilePath.isEmpty()) {
+            appendUniqueDir(QFileInfo(canonicalAppFilePath).absolutePath());
+        }
+        appendUniqueDir(appFileInfo.absolutePath());
+    }
+
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (!appDir.isEmpty()) {
+        appendUniqueDir(appDir);
+
+        QDir parentDir(appDir);
+        for (int i = 0; i < 4; ++i) {
+            if (!parentDir.cdUp()) {
+                break;
+            }
+            appendUniqueDir(parentDir.absolutePath());
+        }
+    }
+
+    const QString homeDir = QDir::homePath();
+    if (!homeDir.isEmpty()) {
+        const QString localBin = QDir(homeDir).filePath(QStringLiteral(".local/bin"));
+        const QString userBin = QDir(homeDir).filePath(QStringLiteral("bin"));
+        appendUniqueDir(localBin);
+        appendUniqueDir(userBin);
+    }
+
+#if defined(Q_OS_MACOS)
+    const QStringList platformDirs = {
+        QStringLiteral("/opt/homebrew/bin"),
+        QStringLiteral("/opt/homebrew/sbin"),
+        QStringLiteral("/usr/local/bin"),
+        QStringLiteral("/usr/local/sbin"),
+        QStringLiteral("/usr/bin"),
+        QStringLiteral("/bin")
+    };
+#elif defined(Q_OS_UNIX)
+    const QStringList platformDirs = {
+        QStringLiteral("/usr/local/bin"),
+        QStringLiteral("/usr/local/sbin"),
+        QStringLiteral("/usr/bin"),
+        QStringLiteral("/bin"),
+        QStringLiteral("/snap/bin")
+    };
+#else
+    const QStringList platformDirs;
+#endif
+
+    for (const QString &dir : platformDirs) {
+        appendUniqueDir(dir);
+    }
+
+    return candidateDirs;
 }
 
 }

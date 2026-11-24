@@ -172,7 +172,7 @@ class ProgramState:
     def _effective_active_frame_lines(self) -> tuple[int, int]:
         """Return the (first, last) active frame lines the chroma decoder will use.
 
-        Resolution mirrors WrapperLDChromaDecoder._get_active_line_opts:
+        Resolution mirrors WrapperTBCChromaDecoder._get_active_line_opts:
         user opts take priority, then a non-default active-line preset, then the
         TBC JSON, then the video-system default preset.
         """
@@ -238,6 +238,26 @@ class ProgramState:
                 self.video_system,
             )
         )
+
+    @cached_property
+    def dropout_correct_range(self) -> tuple[int, int | None] | None:
+        """Frames tbc-dropout-correct processes for a ranged export.
+
+        Returns (start, length) - length None meaning to the end - or None when
+        the whole TBC is processed. The range reaches 8 frames either side of
+        the export so the decoders' look-behind and look-ahead are covered.
+        """
+        margin = 8
+        export_start = 1 if self.opts.start is None else max(1, self.opts.start)
+        if export_start == 1 and self.opts.length is None:
+            return None
+        start = max(1, export_start - margin)
+        length = (
+            None
+            if self.opts.length is None
+            else (export_start - start) + self.opts.length + margin
+        )
+        return start, length
 
     @cached_property
     def total_frames(self) -> int:

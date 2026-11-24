@@ -81,6 +81,7 @@ class Opts(argparse.Namespace):
 
     # dropout-correct
     no_dropout_correct: bool
+    overcorrect: bool | None
     dropout_correct_threads: int | None
     dropout_interfield_correction: TBCType
 
@@ -92,11 +93,6 @@ class Opts(argparse.Namespace):
     process_vbi: bool
     process_vbi_keep_going: bool
     process_vbi_threads: int | None
-
-    # process-efm
-    process_efm: bool
-    process_efm_keep_going: bool
-    process_efm_dts: bool
 
     # export-metadata
     export_metadata: bool
