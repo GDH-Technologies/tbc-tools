@@ -80,6 +80,7 @@ private:
     QByteArray chunkBuffer;
     qint64 chunkStart = -1;
     QString chunkLockPath;
+    bool chunkLockAbandoned = false;
     bool readChunk(qint64 position);
 
     // Field caching

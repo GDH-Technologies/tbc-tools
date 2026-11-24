@@ -29,6 +29,7 @@
 #include <QDir>
 #include <QLockFile>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QStorageInfo>
 #include "tbc/logging.h"
 
@@ -153,13 +154,27 @@ void SourceVideo::setChunkedReads(bool enabled)
     chunkedReads = enabled && isSourceVideoOpen && availableFields != -1;
     chunkBuffer.clear();
     chunkStart = -1;
+    chunkLockAbandoned = false;
     if (!chunkedReads) return;
 
     // One lock per disk, so readers on different disks don't wait for each other
     const QStorageInfo storage(inputFile.fileName());
     QString device = QString::fromLocal8Bit(storage.isValid() ? storage.device() : QByteArray("tbc-tools"));
     device.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")), QStringLiteral("_"));
-    chunkLockPath = QDir(QDir::tempPath()).filePath(QStringLiteral("tbc-tools-read-%1.lock").arg(device));
+
+    // A per-user directory: in the shared /tmp a lock left behind by another
+    // user cannot be removed (sticky bit), and readers would wait on it.
+    // macOS and Windows temp directories are already per-user. Without
+    // XDG_RUNTIME_DIR (a build sandbox, some services) Qt would warn on every
+    // run, so /tmp stays there and readChunk()'s timeout bounds the wait.
+    QString lockDir = QDir::tempPath();
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+    if (qEnvironmentVariableIsSet("XDG_RUNTIME_DIR")) {
+        const QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        if (!runtimeDir.isEmpty()) lockDir = runtimeDir;
+    }
+#endif
+    chunkLockPath = QDir(lockDir).filePath(QStringLiteral("tbc-tools-read-%1.lock").arg(device));
 }
 
 // Read the block starting at |position|. On a shared disk (a separate luma and
@@ -172,8 +187,20 @@ bool SourceVideo::readChunk(qint64 position)
     if (length <= 0) return false;
     chunkBuffer.resize(length);
 
+    // A chunk takes about 0.3-1.5 s to read, so only a stuck lock (a hung
+    // reader, or one that cannot be removed) makes a reader wait this long.
+    // Then the run reads without the lock rather than stalling, and stops
+    // trying, so it pays the wait once rather than per chunk.
+    constexpr int kChunkLockTimeoutMs = 30000;
     QLockFile lock(chunkLockPath);
-    const bool locked = lock.lock();
+    bool locked = false;
+    if (!chunkLockAbandoned) {
+        locked = lock.tryLock(kChunkLockTimeoutMs);
+        if (!locked) {
+            qWarning() << "Could not take the read lock" << chunkLockPath << "- reading without it";
+            chunkLockAbandoned = true;
+        }
+    }
     qint64 total = 0;
     if (inputFile.seek(position)) {
         while (total < length) {
