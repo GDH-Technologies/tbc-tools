@@ -87,16 +87,6 @@ QStringList metadataCandidatesForInput(const QString &inputFilename)
     return candidates;
 }
 
-QString resolveDefaultMetadataFilename(const QString &inputFilename)
-{
-    const QStringList candidates = metadataCandidatesForInput(inputFilename);
-    for (const QString &candidate : candidates) {
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
-        }
-    }
-    return candidates.isEmpty() ? (inputFilename + QStringLiteral(".db")) : candidates.first();
-}
 
 QString backupFilenameForMetadata(const QString &inputMetadataFilename, const QString &backupSuffix)
 {
@@ -122,6 +112,17 @@ QString defaultTeletextHtmlDirectoryForInput(const QString &inputFilename)
     return QDir(inputInfo.absolutePath())
         .filePath(inputInfo.completeBaseName() + QStringLiteral("_teletext_html"));
 }
+}
+
+static QString resolveDefaultMetadataFilename(const QString &inputFilename)
+{
+    const QStringList candidates = metadataCandidatesForInput(inputFilename);
+    for (const QString &candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+    return candidates.isEmpty() ? (inputFilename + QStringLiteral(".db")) : candidates.first();
 }
 
 static int runCli(int argc, char *argv[])
@@ -322,6 +323,9 @@ static int runCli(int argc, char *argv[])
         }
     }
 
+    // The source's video parameters (the teletext tape profile follows them)
+    const TbcMetaData::VideoParameters &sourceParameters = metaData.getVideoParameters();
+
     // Perform the processing
     qInfo() << "Beginning VBI processing...";
     DecoderPool decoderPool(inputFilename, outputMetadataFilename, maxThreads, metaData, processingOptions);
@@ -337,6 +341,14 @@ static int runCli(int argc, char *argv[])
         }
         teletextOptions.maxThreads = maxThreads;
         teletextOptions.tapeFormat = parser.value(teletextTapeFormatOption);
+        if (!parser.isSet(teletextTapeFormatOption) && sourceParameters.isTapeSource()) {
+            // Pick the vhs-teletext profile from the capture's tape format
+            const QString format = sourceParameters.tapeFormat.toUpper();
+            if (format.contains(QLatin1String("BETA"))) teletextOptions.tapeFormat = QStringLiteral("betamax");
+            else if (format.contains(QLatin1String("2X4"))) teletextOptions.tapeFormat = QStringLiteral("grundig_2x4");
+            qInfo().noquote() << "Teletext tape format profile:" << teletextOptions.tapeFormat
+                              << "(from metadata tape format" << sourceParameters.tapeFormat.trimmed() + ")";
+        }
         teletextOptions.minDuplicates = teletextMinDuplicates;
         qInfo().nospace().noquote() << "Teletext export output directory: " << teletextOptions.outputDirectory;
 

@@ -52,6 +52,9 @@ public:
     // Returns true on success; on failure, prints a message and returns false.
     bool process();
 
+    // Optional luma TBC used as an edge guide by decoders that support it (SECAM)
+    void setGuideFile(const QString &fileName) { guideFileName = fileName; }
+
     // For worker threads: get the configured OutputWriter
     OutputWriter &getOutputWriter() {
         return outputWriter;
@@ -74,6 +77,8 @@ public:
     // Returns true if a frame was returned, false if the end of the input has
     // been reached.
     bool getInputFrames(qint32 &startFrameNumber, QVector<SourceField> &fields, qint32 &startIndex, qint32 &endIndex);
+    // The piped input begins at this frame (tbc-dropout-correct --start)
+    void setInputStartFrame(qint32 frame) { inputStartFrame = frame; }
 
     // For worker threads: return decoded frames to write to the output file.
     //
@@ -105,11 +110,15 @@ private:
     // Input stream information (all guarded by inputMutex while threads are running)
     QMutex inputMutex;
     qint32 decoderLookBehind;
+    qint32 inputStartFrame = 1;
     qint32 decoderLookAhead;
     qint32 inputFrameNumber;
     qint32 lastFrameNumber;
     TbcMetaData &metaData;
     SourceVideo sourceVideo;
+    QString guideFileName;
+    SourceVideo guideVideo;
+    bool guideOpen = false;
 
     // Output stream information (all guarded by outputMutex while threads are running)
     QMutex outputMutex;

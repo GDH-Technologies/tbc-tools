@@ -170,6 +170,11 @@ public:
     bool getKeepThemeChoice(void);
     void setThemeMode(QString themeMode);
     QString getThemeMode(void);
+    // Widget style override persistence (Themes menu Qt style actions, e.g.
+    // Fusion/Windows). Empty = no style override. Like the mode, only
+    // applied at startup when keepChoice is true.
+    void setThemeStyle(QString themeStyle);
+    QString getThemeStyle(void);
 
     // Get and set methods - CUDA plugin registry
     void setCudaPluginInstalledVersion(QString version);
@@ -197,6 +202,9 @@ public:
     void setSlideshowExtractOptions(const SlideshowExtractOptions &options);
     SlideshowExtractOptions getSlideshowExtractOptions(void);
     // Get and set methods - advanced export options
+    // Export tab audio Monitor ticks, one '0'/'1' per track ("0000" = none)
+    void setAudioMonitorTracks(const QString &tracks);
+    QString getAudioMonitorTracks(void);
     void setExportAdvancedOptions(const ExportAdvancedOptions &options);
     ExportAdvancedOptions getExportAdvancedOptions(void);
 
@@ -278,6 +286,7 @@ private:
     struct Theme {
         bool keepChoice;          // Keep the user's theme choice between sessions
         QString mode;             // stock-system, stock-dark or stock-light
+        QString style;            // Qt widget style override (empty = none)
     };
 
     // Overall settings structure
@@ -294,6 +303,7 @@ private:
         FrameSnapshot::Options frameSnapshot;
         SlideshowExtractOptions slideshowExtract;
         ExportAdvancedOptions exportAdvancedOptions;
+        QString audioMonitorTracks;
     } settings;
 
     void setDefault(void);

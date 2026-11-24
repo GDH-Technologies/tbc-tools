@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from tbc_video_export.program_state import ProgramState
 
 
-class WrapperLDDropoutCorrect(Wrapper):
+class WrapperTBCDropoutCorrect(Wrapper):
     """Wrapper for tbc-dropout-correct."""
 
     def __init__(self, state: ProgramState, config: WrapperConfig[None, Pipe]) -> None:
@@ -36,8 +36,10 @@ class WrapperLDDropoutCorrect(Wrapper):
             (
                 self.binary,
                 self._get_thread_opts(),
+                self._get_range_opts(),
                 self._state.file_helper.tbcs[self._config.tbc_type],
                 None if self.dropout_interfield_correction else "-i",
+                "--overcorrect" if self.overcorrect else None,
                 "--input-json",
                 self._state.file_helper.tbc_json.file_name,
                 "--output-json",
@@ -51,6 +53,18 @@ class WrapperLDDropoutCorrect(Wrapper):
             f"tbc-video-export-{self._config.tbc_type}-{uuid4().hex}.dropout.db"
         )
 
+    def _get_range_opts(self) -> FlatList | None:
+        """Only correct the frames a ranged export uses."""
+        if (frame_range := self._state.dropout_correct_range) is None:
+            return None
+        start, length = frame_range
+        opts = FlatList()
+        if start > 1:
+            opts.append(("-s", start))
+        if length is not None:
+            opts.append(("-l", length))
+        return opts
+
     def _get_thread_opts(self) -> FlatList | None:
         thread_count = self._state.opts.threads
 
@@ -63,8 +77,15 @@ class WrapperLDDropoutCorrect(Wrapper):
         return None
 
     @cached_property
+    def overcorrect(self) -> bool:
+        """Heavy dropout correction: as requested, else on for tape sources."""
+        if self._state.opts.overcorrect is not None:
+            return self._state.opts.overcorrect
+        return self._state.file_helper.tbc_json.is_tape_source
+
+    @cached_property
     def process_name(self) -> ProcessName:  # noqa: D102
-        return ProcessName.LD_DROPOUT_CORRECT
+        return ProcessName.TBC_DROPOUT_CORRECT
 
     @cached_property
     def supported_pipe_types(self) -> PipeType:  # noqa: D102

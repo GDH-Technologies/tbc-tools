@@ -87,9 +87,31 @@ bool DecoderPool::process()
         qInfo() << "Unable to open ld-decode video file";
         return false;
     }
+    // Read straight through in shared-disk blocks (no effect on piped input)
+    sourceVideo.setChunkedReads(true);
+
+    // Optional luma guide (same geometry as the input)
+    if (!guideFileName.isEmpty()) {
+        if (!guideVideo.open(guideFileName, videoParameters.fieldWidth * videoParameters.fieldHeight)) {
+            qInfo() << "Unable to open luma guide file" << guideFileName;
+            return false;
+        }
+        guideOpen = true;
+    }
 
     // If no startFrame parameter was specified, set the start frame to 1
     if (startFrame == -1) startFrame = 1;
+
+    // A piped input that starts mid-TBC: position the reader at its first field
+    if (inputStartFrame > 1) {
+        if (startFrame - decoderLookBehind < inputStartFrame) {
+            qCritical() << "The input starts at frame" << inputStartFrame << "but decoding from frame" << startFrame
+                        << "needs frame" << startFrame - decoderLookBehind;
+            return false;
+        }
+        sourceVideo.setStreamStartField(qMin(metaData.getFirstFieldNumber(inputStartFrame),
+                                             metaData.getSecondFieldNumber(inputStartFrame)));
+    }
 
     if (startFrame > metaData.getNumberOfFrames()) {
         qInfo() << "Specified start frame is out of bounds, only" << metaData.getNumberOfFrames() << "frames available";
@@ -211,6 +233,20 @@ bool DecoderPool::getInputFrames(qint32 &startFrameNumber, QVector<SourceField> 
     SourceField::loadFields(sourceVideo, metaData,
                             startFrameNumber, batchFrames, decoderLookBehind, decoderLookAhead,
                             fields, startIndex, endIndex);
+
+    if (guideOpen) {
+        const TbcMetaData::VideoParameters &vp = metaData.getVideoParameters();
+        for (qint32 i = 0; i < fields.size(); i++) {
+            if (fields[i].fieldNumber < 1) continue;
+            fields[i].guide = guideVideo.getVideoField(fields[i].fieldNumber);
+            // Same second-field realignment as SourceField::loadFields applies to the input
+            if (!fields[i].field.isFirstField && vp.isSubcarrierLocked
+                && (vp.system == PAL || vp.system == PAL_M || vp.system == SECAM || vp.system == MESECAM)) {
+                fields[i].guide.remove(0, 2);
+                for (int j = 0; j < 2; j++) fields[i].guide.append(static_cast<quint16>(vp.black16bIre));
+            }
+        }
+    }
 
     return true;
 }

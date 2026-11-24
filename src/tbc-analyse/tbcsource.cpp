@@ -693,17 +693,24 @@ QImage renderYuvRangeOverlayImage(const ComponentFrame &componentFrame,
 
 TbcSource::TbcSource(QObject *parent) : QObject(parent)
 {
+    prefetchPool.setMaxThreadCount(qBound(1, QThread::idealThreadCount() - 1, 6));
+
     resetState();
 
     // Configure the chroma decoder
-    palConfiguration = palColour.getConfiguration();
+    palConfiguration = decoders.palColour.getConfiguration();
     palConfiguration.chromaFilter = PalColour::transform2DFilter;
-    ntscConfiguration = ntscColour.getConfiguration();
+    ntscConfiguration = decoders.ntscColour.getConfiguration();
     outputConfiguration.pixelFormat = OutputWriter::PixelFormat::RGB48;
     outputConfiguration.paddingAmount = 1;
     outputConfiguration.trimToActiveRegion = false;
     outputConfiguration.fullFrameDecode = false;
     chromaDecodeMode = HYBRID_CHROMA_MODE;
+}
+
+TbcSource::~TbcSource()
+{
+    stopPrefetch();
 }
 
 // Public methods -----------------------------------------------------------------------------------------------------
@@ -779,7 +786,7 @@ void TbcSource::loadMetadata(QString metadataFilename, QString displayFilename)
 // Method to unload a TBC source file
 void TbcSource::unloadSource()
 {
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
     sourceVideo.close();
     if (sourceMode != ONE_SOURCE) chromaSourceVideo.close();
     resetState();
@@ -839,7 +846,7 @@ void TbcSource::setChromaDecoder(bool _state)
     if (chromaOn == _state) {
         return;
     }
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
     invalidateImageCache();
     chromaOn = _state;
 }
@@ -849,7 +856,7 @@ void TbcSource::setChromaDecodeMode(TbcSource::ChromaDecodeMode mode)
     if (chromaDecodeMode == mode) {
         return;
     }
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
 
     chromaDecodeMode = mode;
     switch (chromaDecodeMode) {
@@ -906,6 +913,7 @@ void TbcSource::setFieldOrder(bool _state)
 void TbcSource::setCombine(bool _state)
 {
 	combine = _state;
+    prefetchGeneration++;
 }
 
 // Method to get the state of the highlight dropouts mode
@@ -973,7 +981,7 @@ void TbcSource::setSourceMode(TbcSource::SourceMode _sourceMode)
     if (sourceMode == ONE_SOURCE) return;
     if (sourceMode == _sourceMode) return;
 
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
     invalidateImageCache();
     sourceMode = _sourceMode;
 }
@@ -987,7 +995,7 @@ void TbcSource::load(qint32 frameNumber, qint32 fieldNumber)
     if (!sourceReady || loadedFrameNumber == frameNumber) return;
     loadedFrameNumber = frameNumber;
     inputFieldsValid = false;
-    invalidateImageCache();
+    invalidateImageCache(true);
 
     // Get the required field numbers
     firstFieldNumber = metaData.getFirstFieldNumber(frameNumber);
@@ -1303,7 +1311,7 @@ const TbcMetaData::VideoParameters &TbcSource::getVideoParameters() const
 // Update the VideoParameters for the current source
 void TbcSource::setVideoParameters(const TbcMetaData::VideoParameters &videoParameters)
 {
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
     invalidateImageCache();
 
     // Update the metadata
@@ -1720,7 +1728,7 @@ qint32 TbcSource::getCcData1() const
 void TbcSource::setChromaConfiguration(const PalColour::Configuration &_palConfiguration,
                                        const Comb::Configuration &_ntscConfiguration)
 {
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
     invalidateImageCache();
 
     palConfiguration = _palConfiguration;
@@ -1731,7 +1739,7 @@ void TbcSource::setChromaConfiguration(const PalColour::Configuration &_palConfi
 
 void TbcSource::requestNnTransform3DCancel()
 {
-    ntscColour.requestNnTransform3DCancel();
+    decoders.ntscColour.requestNnTransform3DCancel();
 }
 
 const PalColour::Configuration &TbcSource::getPalConfiguration() const
@@ -1925,8 +1933,12 @@ void TbcSource::resetState()
 }
 
 // Mark any cached data for the current field/frame as invalid
-void TbcSource::invalidateImageCache()
+void TbcSource::invalidateImageCache(bool keepPrefetch)
 {
+    // Anything other than moving to another frame may change the decoded
+    // output, so decode-ahead results made before it can't be used
+    if (!keepPrefetch) prefetchGeneration++;
+
     // Note this includes the input fields, because the number of fields we
     // load depends on the decoder parameters
     inputFieldsValid = false;
@@ -1940,7 +1952,7 @@ void TbcSource::invalidateImageCache()
 }
 
 // Configure the chroma decoder for its settings and the VideoParameters
-void TbcSource::configureChromaDecoder()
+void TbcSource::configureDecoders(ChromaDecoders &set)
 {
     // Configure the chroma decoder
     TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
@@ -1953,12 +1965,12 @@ void TbcSource::configureChromaDecoder()
     if (videoParameters.system == PAL || videoParameters.system == PAL_M
         || videoParameters.system == SECAM || videoParameters.system == MESECAM) {
 		monoConfiguration.yNRLevel = palConfiguration.yNRLevel;
-        palColour.updateConfiguration(decodeVideoParameters, palConfiguration);
+        set.palColour.updateConfiguration(decodeVideoParameters, palConfiguration);
     } else {
 		monoConfiguration.yNRLevel = ntscConfiguration.yNRLevel;
-        ntscColour.updateConfiguration(decodeVideoParameters, ntscConfiguration);
+        set.ntscColour.updateConfiguration(decodeVideoParameters, ntscConfiguration);
     }
-	monoDecoder.updateConfiguration(decodeVideoParameters, monoConfiguration);
+	set.monoDecoder.updateConfiguration(decodeVideoParameters, monoConfiguration);
     if (videoParameters.system == PAL || videoParameters.system == PAL_M
         || videoParameters.system == SECAM || videoParameters.system == MESECAM) {
         // The SECAM decoder measures each line's rest carrier inside the
@@ -1973,17 +1985,37 @@ void TbcSource::configureChromaDecoder()
         // un-widened metadata). The decoder zeroes V-interval chroma below
         // this in full-frame/hybrid mode.
         secamConfiguration.nominalFirstActiveFieldLine = videoParameters.firstActiveFieldLine;
-        secamDecoder.updateConfiguration(videoParameters, secamConfiguration);
+        set.secamDecoder.updateConfiguration(videoParameters, secamConfiguration);
         // The pre-demod SECAM decoder does no FM demodulation; it only needs
         // the line geometry plus the chroma gain and the live first-line
         // identity override (set from the chroma config dialog).
         secamPredemodConfiguration.chromaGain = palConfiguration.chromaGain;
         secamPredemodConfiguration.firstLineIsRedOverride = secamPredemodFirstLineIsRedOverride;
-        secamPredemodDecoder.updateConfiguration(videoParameters, secamPredemodConfiguration);
+        set.secamPredemodDecoder.updateConfiguration(videoParameters, secamPredemodConfiguration);
     }
+
+    set.generation = prefetchGeneration;
+}
+
+// Point a decoder set at the decoder the current settings select
+void TbcSource::updateDecodeRouting(ChromaDecoders &set)
+{
+    set.system = getSystem();
+    set.chromaFilter = palConfiguration.chromaFilter;
+    set.ntscDimensions = ntscConfiguration.dimensions;
+    set.separateChroma = !combine && sourceMode == BOTH_SOURCES;
+    set.videoParameters = metaData.getVideoParameters();
+}
+
+// Configure the chroma decoder for its settings and the VideoParameters
+void TbcSource::configureChromaDecoder()
+{
+    prefetchGeneration++;
+    configureDecoders(decoders);
 
     // Configure the OutputWriter.
     // Because we have padding disabled, this won't change the VideoParameters.
+    TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
     outputWriter.updateConfiguration(videoParameters, outputConfiguration);
 }
 
@@ -1995,7 +2027,7 @@ void TbcSource::setSecamPredemodFirstLineIsRedOverride(qint8 override)
     const TbcMetaData::VideoParameters videoParameters = metaData.getVideoParameters();
     if (videoParameters.system == PAL || videoParameters.system == PAL_M
         || videoParameters.system == SECAM || videoParameters.system == MESECAM) {
-        secamPredemodDecoder.updateConfiguration(videoParameters, secamPredemodConfiguration);
+        decoders.secamPredemodDecoder.updateConfiguration(videoParameters, secamPredemodConfiguration);
     }
     invalidateImageCache();
 }
@@ -2234,11 +2266,9 @@ TbcMetaData::VideoParameters TbcSource::getVideoParametersWithViewChroma() const
 }
 
 // Ensure the SourceFields for the current frame are loaded
-void TbcSource::loadInputFields()
+void TbcSource::loadFrameFields(qint32 frameNumber, QVector<SourceField> &fields, QVector<SourceField> &chromaFields,
+                                qint32 &startIndex, qint32 &endIndex)
 {
-    if (metadataOnly) return;
-    if (inputFieldsValid) return;
-
     // Work out how many frames ahead/behind we need to fetch
     qint32 lookBehind, lookAhead;
     if (getSystem() == PAL || getSystem() == PAL_M || getSystem() == SECAM || getSystem() == MESECAM) {
@@ -2252,29 +2282,29 @@ void TbcSource::loadInputFields()
     if (sourceMode == CHROMA_SOURCE) {
         // Load chroma directly into inputFields
         SourceField::loadFields(chromaSourceVideo, metaData,
-                                loadedFrameNumber, 1, lookBehind, lookAhead,
-                                inputFields, inputStartIndex, inputEndIndex);
+                                frameNumber, 1, lookBehind, lookAhead,
+                                fields, startIndex, endIndex);
     } else {
         // Load the only source, or luma, into inputFields
         SourceField::loadFields(sourceVideo, metaData,
-                                loadedFrameNumber, 1, lookBehind, lookAhead,
-                                inputFields, inputStartIndex, inputEndIndex);
+                                frameNumber, 1, lookBehind, lookAhead,
+                                fields, startIndex, endIndex);
     }
 
     if (sourceMode == BOTH_SOURCES) {
         // Load chroma into chromaInputFields
         SourceField::loadFields(chromaSourceVideo, metaData,
-                                loadedFrameNumber, 1, lookBehind, lookAhead,
-                                chromaInputFields, inputStartIndex, inputEndIndex);
+                                frameNumber, 1, lookBehind, lookAhead,
+                                chromaFields, startIndex, endIndex);
 		if(combine)
 		{
 			// Separate chroma is offset (see chroma_to_u16 in vhsdecode/chroma.py)
 			static constexpr qint32 CHROMA_OFFSET = 32767;
 
 			// Add chroma to luma, removing the offset
-			for (qint32 fieldIndex = inputStartIndex; fieldIndex < inputEndIndex; fieldIndex++) {
-				auto &sourceData = inputFields[fieldIndex].data;
-				const auto &chromaData = chromaInputFields[fieldIndex].data;
+			for (qint32 fieldIndex = startIndex; fieldIndex < endIndex; fieldIndex++) {
+				auto &sourceData = fields[fieldIndex].data;
+				const auto &chromaData = chromaFields[fieldIndex].data;
 
 				for (qint32 i = 0; i < sourceData.size(); i++) {
 					qint32 sum = static_cast<qint32>(sourceData[i]) + static_cast<qint32>(chromaData[i]) - CHROMA_OFFSET;
@@ -2283,49 +2313,49 @@ void TbcSource::loadInputFields()
 			}
 		}
     }
+}
 
+void TbcSource::loadInputFields()
+{
+    if (metadataOnly) return;
+    if (inputFieldsValid) return;
+
+    loadFrameFields(loadedFrameNumber, inputFields, chromaInputFields, inputStartIndex, inputEndIndex);
     inputFieldsValid = true;
 }
 
-// Ensure the current frame has been decoded
-void TbcSource::decodeFrame()
+// Decode one frame's source fields to components with this decoder set
+void ChromaDecoders::decode(const QVector<SourceField> &inputFields, const QVector<SourceField> &chromaInputFields,
+                            qint32 startIndex, qint32 endIndex, QVector<ComponentFrame> &componentFrames)
 {
-    if (metadataOnly) return;
-    if (decodedFrameValid) return;
-
-    loadInputFields();
-	
 	bool isMono = false;
 
-    // Decode the current frame to components
+    QVector<ComponentFrame> yFrames(1), cFrames(1);
     componentFrames.resize(1);
-    yFrames.resize(1);
-    cFrames.resize(1);
-	if(!combine && sourceMode == BOTH_SOURCES)
+	if (separateChroma)
 	{
-		monoDecoder.decodeFrames(inputFields, inputStartIndex, inputEndIndex, yFrames);
-		if ((getSystem() == PAL || getSystem() == PAL_M || getSystem() == SECAM || getSystem() == MESECAM) && palConfiguration.chromaFilter == PalColour::secam) {
+		monoDecoder.decodeFrames(inputFields, startIndex, endIndex, yFrames);
+		if ((system == PAL || system == PAL_M || system == SECAM || system == MESECAM) && chromaFilter == PalColour::secam) {
 			// SECAM source: the chroma TBC carries a restored studio SECAM FM block
-			secamDecoder.decodeFrames(chromaInputFields, inputStartIndex, inputEndIndex, cFrames);
-		} else if ((getSystem() == PAL || getSystem() == PAL_M || getSystem() == SECAM || getSystem() == MESECAM) && palConfiguration.chromaFilter == PalColour::secamPredemod) {
+			secamDecoder.decodeFrames(chromaInputFields, startIndex, endIndex, cFrames);
+		} else if ((system == PAL || system == PAL_M || system == SECAM || system == MESECAM) && chromaFilter == PalColour::secamPredemod) {
 			// SECAM source: the chroma TBC carries pre-demodulated Dr/Db
-			secamPredemodDecoder.decodeFrames(chromaInputFields, inputStartIndex, inputEndIndex, cFrames);
-		} else if ((getSystem() == PAL || getSystem() == PAL_M || getSystem() == SECAM || getSystem() == MESECAM) && palConfiguration.chromaFilter != PalColour::mono) {
+			secamPredemodDecoder.decodeFrames(chromaInputFields, startIndex, endIndex, cFrames);
+		} else if ((system == PAL || system == PAL_M || system == SECAM || system == MESECAM) && chromaFilter != PalColour::mono) {
 			// PAL source
-			palColour.decodeFrames(chromaInputFields, inputStartIndex, inputEndIndex, cFrames);
-		} else if(getSystem() == NTSC && ntscConfiguration.dimensions != 0){
+			palColour.decodeFrames(chromaInputFields, startIndex, endIndex, cFrames);
+		} else if(system == NTSC && ntscDimensions != 0){
 			// NTSC source
-			ntscColour.decodeFrames(chromaInputFields, inputStartIndex, inputEndIndex, cFrames);
+			ntscColour.decodeFrames(chromaInputFields, startIndex, endIndex, cFrames);
 		}
 		else
 		{
 			isMono = true;
 		}
 		
-		for (qint32 fieldIndex = inputStartIndex, frameIndex = 0; fieldIndex < inputEndIndex; fieldIndex += 2, frameIndex++)
+		for (qint32 fieldIndex = startIndex, frameIndex = 0; fieldIndex < endIndex; fieldIndex += 2, frameIndex++)
 		{
-			//isMono ? cFrames[frameIndex].init(metaData.getVideoParameters(), false);
-			componentFrames[frameIndex].init(metaData.getVideoParameters(), false);
+			componentFrames[frameIndex].init(videoParameters, false);
 			componentFrames[frameIndex].setY(*yFrames[frameIndex].getY());
 			if(!isMono){	
 				componentFrames[frameIndex].setU(*cFrames[frameIndex].getU());
@@ -2335,30 +2365,130 @@ void TbcSource::decodeFrame()
 	}
 	else
 	{
-		if (getSystem() == PAL || getSystem() == PAL_M || getSystem() == SECAM || getSystem() == MESECAM) {
-			if(palConfiguration.chromaFilter == palColour.ChromaFilterMode::mono){
-				monoDecoder.decodeFrames(inputFields, inputStartIndex, inputEndIndex, componentFrames);
-			} else if(palConfiguration.chromaFilter == palColour.ChromaFilterMode::secam){
+		if (system == PAL || system == PAL_M || system == SECAM || system == MESECAM) {
+			if(chromaFilter == PalColour::mono){
+				monoDecoder.decodeFrames(inputFields, startIndex, endIndex, componentFrames);
+			} else if(chromaFilter == PalColour::secam){
 				// SECAM source: restored studio FM block
-				secamDecoder.decodeFrames(inputFields, inputStartIndex, inputEndIndex, componentFrames);
-			} else if(palConfiguration.chromaFilter == palColour.ChromaFilterMode::secamPredemod){
+				secamDecoder.decodeFrames(inputFields, startIndex, endIndex, componentFrames);
+			} else if(chromaFilter == PalColour::secamPredemod){
 				// SECAM source: pre-demodulated Dr/Db
-				secamPredemodDecoder.decodeFrames(inputFields, inputStartIndex, inputEndIndex, componentFrames);
+				secamPredemodDecoder.decodeFrames(inputFields, startIndex, endIndex, componentFrames);
 			} else {
 				// PAL source
-				palColour.decodeFrames(inputFields, inputStartIndex, inputEndIndex, componentFrames);
+				palColour.decodeFrames(inputFields, startIndex, endIndex, componentFrames);
 			}
 		} else {
-			if(ntscConfiguration.dimensions == 0){
-				monoDecoder.decodeFrames(inputFields, inputStartIndex, inputEndIndex, componentFrames);
+			if(ntscDimensions == 0){
+				monoDecoder.decodeFrames(inputFields, startIndex, endIndex, componentFrames);
 			} else {
 				// NTSC source
-				ntscColour.decodeFrames(inputFields, inputStartIndex, inputEndIndex, componentFrames);
+				ntscColour.decodeFrames(inputFields, startIndex, endIndex, componentFrames);
 			}
 		}
 	}
+}
+
+// Ensure the current frame has been decoded
+void TbcSource::decodeFrame()
+{
+    if (metadataOnly) return;
+    if (decodedFrameValid) return;
+
+    loadInputFields();
+
+    // Take the frame from decode-ahead if a worker has decoded (or is decoding) it
+    bool decoded = false;
+    for (auto it = prefetchJobs.begin(); it != prefetchJobs.end(); ++it) {
+        PrefetchJob &job = **it;
+        if (job.frameNumber != loadedFrameNumber || job.generation != prefetchGeneration) continue;
+        job.future.waitForFinished();
+        componentFrames = std::move(job.componentFrames);
+        prefetchJobs.erase(it);
+        decoded = true;
+        break;
+    }
+
+    if (!decoded) {
+        updateDecodeRouting(decoders);
+        decoders.decode(inputFields, chromaInputFields, inputStartIndex, inputEndIndex, componentFrames);
+    }
 
     decodedFrameValid = true;
+    schedulePrefetch();
+}
+
+void TbcSource::setPlaybackPrefetch(bool enabled)
+{
+    playbackPrefetch = enabled;
+    if (!enabled) stopPrefetch();
+}
+
+// Keep the worker threads decoding the frames after the loaded one
+void TbcSource::schedulePrefetch()
+{
+    if (!playbackPrefetch || !chromaOn) return;
+    if (getSystem() == NTSC && ntscConfiguration.nnTransform3D) return;
+
+    const qint32 depth = prefetchPool.maxThreadCount();
+    const qint32 lastFrame = qMin(loadedFrameNumber + depth, getNumberOfFrames());
+
+    // Drop finished results that are stale or outside the window
+    prefetchJobs.erase(std::remove_if(prefetchJobs.begin(), prefetchJobs.end(),
+                                      [&](const std::unique_ptr<PrefetchJob> &job) {
+        const bool wanted = job->generation == prefetchGeneration
+                            && job->frameNumber > loadedFrameNumber && job->frameNumber <= lastFrame;
+        return !wanted && job->future.isFinished();
+    }), prefetchJobs.end());
+
+    if (prefetchDecoders.empty()) {
+        for (qint32 i = 0; i < depth; i++) prefetchDecoders.push_back(std::make_unique<ChromaDecoders>());
+    }
+
+    for (qint32 frameNumber = loadedFrameNumber + 1; frameNumber <= lastFrame; frameNumber++) {
+        bool queued = false;
+        for (const auto &job : prefetchJobs) {
+            if (job->frameNumber == frameNumber && job->generation == prefetchGeneration) queued = true;
+        }
+        if (queued) continue;
+
+        // Find a decoder set that no running job is using
+        size_t decoderIndex = prefetchDecoders.size();
+        for (size_t i = 0; i < prefetchDecoders.size() && decoderIndex == prefetchDecoders.size(); i++) {
+            bool busy = false;
+            for (const auto &job : prefetchJobs) {
+                if (job->decoderIndex == i && !job->future.isFinished()) busy = true;
+            }
+            if (!busy) decoderIndex = i;
+        }
+        if (decoderIndex == prefetchDecoders.size()) return;
+
+        // Decoder setup (FFTW planning) isn't thread-safe, so it happens here
+        ChromaDecoders *set = prefetchDecoders[decoderIndex].get();
+        if (set->generation != prefetchGeneration) configureDecoders(*set);
+        updateDecodeRouting(*set);
+
+        // Reading the TBC files stays on this thread too
+        auto job = std::make_unique<PrefetchJob>();
+        job->frameNumber = frameNumber;
+        job->generation = prefetchGeneration;
+        job->decoderIndex = decoderIndex;
+        loadFrameFields(frameNumber, job->inputFields, job->chromaInputFields, job->startIndex, job->endIndex);
+        PrefetchJob *jobPointer = job.get();
+        job->future = QtConcurrent::run(&prefetchPool, [set, jobPointer]() {
+            set->decode(jobPointer->inputFields, jobPointer->chromaInputFields,
+                        jobPointer->startIndex, jobPointer->endIndex, jobPointer->componentFrames);
+        });
+        prefetchJobs.push_back(std::move(job));
+    }
+}
+
+void TbcSource::stopPrefetch()
+{
+    for (const auto &set : prefetchDecoders) set->ntscColour.requestNnTransform3DCancel();
+    for (const auto &job : prefetchJobs) job->future.waitForFinished();
+    prefetchJobs.clear();
+    prefetchDecoders.clear();
 }
 
 // Method to create a QImage for a source video frame
