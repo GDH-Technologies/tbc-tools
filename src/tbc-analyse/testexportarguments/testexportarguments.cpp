@@ -27,8 +27,11 @@
 #undef NDEBUG
 #include <cassert>
 #include <iostream>
+#include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QTemporaryDir>
 
 #include "exportarguments.h"
 
@@ -121,12 +124,64 @@ void testLumaOnlyNeedsYuv422()
     assert(!ExportArguments::lumaOnlyNeedsYuv422(QStringLiteral("v210")));
 }
 
-int main()
+
+void testDefaultExecutableSearchDirs()
 {
+    cerr << "Testing ExportArguments::defaultExecutableSearchDirs\n";
+
+    QTemporaryDir scratch;
+    assert(scratch.isValid());
+    const QDir root(scratch.path());
+    const QString inputDir = root.filePath(QStringLiteral("input"));
+    const QString cwdDir = root.filePath(QStringLiteral("cwd"));
+    const QString homeDir = root.filePath(QStringLiteral("home"));
+    assert(QDir().mkpath(inputDir));
+    assert(QDir().mkpath(QDir(cwdDir).filePath(QStringLiteral("build/bin"))));
+    assert(QDir().mkpath(QDir(homeDir).filePath(QStringLiteral(".local/bin"))));
+    assert(QDir().mkpath(QDir(homeDir).filePath(QStringLiteral("bin"))));
+    const QString localBin = QDir(homeDir).filePath(QStringLiteral(".local/bin"));
+    const QString userBin = QDir(homeDir).filePath(QStringLiteral("bin"));
+#if !defined(Q_OS_WIN)
+    // ~/bin writable by anyone: it must be skipped
+    assert(QFile::setPermissions(userBin, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                              | QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+                                              | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther));
+#endif
+
+    const QString savedCwd = QDir::currentPath();
+    const QByteArray savedHome = qgetenv("HOME");
+    assert(QDir::setCurrent(cwdDir));
+    qputenv("HOME", QFile::encodeName(homeDir));
+
+    const QStringList dirs = ExportArguments::defaultExecutableSearchDirs();
+
+    QDir::setCurrent(savedCwd);
+    qputenv("HOME", savedHome);
+
+    // The working directory and the input's directory are never searched
+    for (const QString &dir : dirs) {
+        const QString clean = QDir::cleanPath(dir);
+        assert(clean != QDir::cleanPath(cwdDir));
+        assert(clean != QDir::cleanPath(QDir(cwdDir).filePath(QStringLiteral("build/bin"))));
+        assert(clean != QDir::cleanPath(inputDir));
+        assert(!clean.startsWith(QDir::cleanPath(root.path()) + QLatin1Char('/'))
+               || clean == QDir::cleanPath(localBin));
+    }
+#if !defined(Q_OS_WIN)
+    // HOME is honoured on Unix: ~/.local/bin stays, the world-writable ~/bin goes
+    assert(dirs.contains(localBin));
+    assert(!dirs.contains(userBin));
+#endif
+}
+
+int main(int argc, char *argv[])
+{
+    QCoreApplication app(argc, argv);
     testDropoutDisablePolicy();
     testDefaultActiveAreaFramingPolicy();
     testSanitizeOutputBasePath();
     testShouldExportLumaOnly();
     testLumaOnlyNeedsYuv422();
+    testDefaultExecutableSearchDirs();
     return 0;
 }

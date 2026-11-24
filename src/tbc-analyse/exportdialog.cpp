@@ -287,90 +287,6 @@ void normalizeAudioTrackLineEditPath(QLineEdit *lineEdit)
     lineEdit->setText(normalized);
 }
 
-QStringList defaultExecutableSearchDirs(const QString &currentInputFile)
-{
-    QStringList candidateDirs;
-    auto appendUniqueDir = [&candidateDirs](const QString &dirPath) {
-        if (dirPath.isEmpty()) {
-            return;
-        }
-        for (const QString &existing : candidateDirs) {
-            if (existing.compare(dirPath, Qt::CaseInsensitive) == 0) {
-                return;
-            }
-        }
-        candidateDirs << dirPath;
-    };
-    const QString appFilePath = QCoreApplication::applicationFilePath();
-    if (!appFilePath.isEmpty()) {
-        const QFileInfo appFileInfo(appFilePath);
-        const QString canonicalAppFilePath = appFileInfo.canonicalFilePath();
-        if (!canonicalAppFilePath.isEmpty()) {
-            appendUniqueDir(QFileInfo(canonicalAppFilePath).absolutePath());
-        }
-        appendUniqueDir(appFileInfo.absolutePath());
-    }
-
-    const QString appDir = QCoreApplication::applicationDirPath();
-    if (!appDir.isEmpty()) {
-        appendUniqueDir(appDir);
-
-        QDir parentDir(appDir);
-        for (int i = 0; i < 4; ++i) {
-            if (!parentDir.cdUp()) {
-                break;
-            }
-            appendUniqueDir(parentDir.absolutePath());
-        }
-    }
-
-    const QString currentDir = QDir::currentPath();
-    if (!currentDir.isEmpty()) {
-        appendUniqueDir(currentDir);
-        appendUniqueDir(QDir(currentDir).filePath(QStringLiteral("build/bin")));
-    }
-
-    if (!currentInputFile.isEmpty()) {
-        const QString inputDir = QFileInfo(currentInputFile).absolutePath();
-        appendUniqueDir(inputDir);
-    }
-
-    const QString homeDir = QDir::homePath();
-    if (!homeDir.isEmpty()) {
-        const QString localBin = QDir(homeDir).filePath(QStringLiteral(".local/bin"));
-        const QString userBin = QDir(homeDir).filePath(QStringLiteral("bin"));
-        appendUniqueDir(localBin);
-        appendUniqueDir(userBin);
-    }
-
-#if defined(Q_OS_MACOS)
-    const QStringList platformDirs = {
-        QStringLiteral("/opt/homebrew/bin"),
-        QStringLiteral("/opt/homebrew/sbin"),
-        QStringLiteral("/usr/local/bin"),
-        QStringLiteral("/usr/local/sbin"),
-        QStringLiteral("/usr/bin"),
-        QStringLiteral("/bin")
-    };
-#elif defined(Q_OS_UNIX)
-    const QStringList platformDirs = {
-        QStringLiteral("/usr/local/bin"),
-        QStringLiteral("/usr/local/sbin"),
-        QStringLiteral("/usr/bin"),
-        QStringLiteral("/bin"),
-        QStringLiteral("/snap/bin")
-    };
-#else
-    const QStringList platformDirs;
-#endif
-
-    for (const QString &dir : platformDirs) {
-        appendUniqueDir(dir);
-    }
-
-    return candidateDirs;
-}
-
 void prependUniquePathEntries(QStringList *pathEntries, const QStringList &prependDirs)
 {
     if (!pathEntries) {
@@ -3734,7 +3650,7 @@ bool ExportDialog::startExportJob(const ExportJob &job, QString *errorMessage)
     exportProcess->setWorkingDirectory(QFileInfo(currentInputFile).absolutePath());
     QProcessEnvironment launchEnvironment = QProcessEnvironment::systemEnvironment();
     {
-        const QStringList prependDirs = defaultExecutableSearchDirs(currentInputFile);
+        const QStringList prependDirs = ExportArguments::defaultExecutableSearchDirs();
         QStringList pathEntries = launchEnvironment.value(QStringLiteral("PATH"))
                                       .split(QDir::listSeparator(), Qt::SkipEmptyParts);
         prependUniquePathEntries(&pathEntries, prependDirs);
@@ -4600,7 +4516,7 @@ void ExportDialog::setBusy(bool busy)
 
 QString ExportDialog::resolveVideoExportPath() const
 {
-    const QStringList candidateDirs = defaultExecutableSearchDirs(currentInputFile);
+    const QStringList candidateDirs = ExportArguments::defaultExecutableSearchDirs();
 
     QStringList candidateNames;
 #if defined(Q_OS_WIN)
@@ -4628,7 +4544,7 @@ QString ExportDialog::resolveVideoExportPath() const
 
 QString ExportDialog::resolveFfmpegPath(const QString &toolName) const
 {
-    const QStringList candidateDirs = defaultExecutableSearchDirs(currentInputFile);
+    const QStringList candidateDirs = ExportArguments::defaultExecutableSearchDirs();
 
     QStringList candidateNames;
 #if defined(Q_OS_WIN)
@@ -5115,7 +5031,7 @@ bool ExportDialog::startProxyExport(QString *errorMessage, bool forceOverwrite)
 
     exportProcess->setWorkingDirectory(QFileInfo(currentInputFile).absolutePath());
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    const QStringList prependDirs = defaultExecutableSearchDirs(currentInputFile);
+    const QStringList prependDirs = ExportArguments::defaultExecutableSearchDirs();
     QStringList pathEntries = env.value(QStringLiteral("PATH"))
                                   .split(QDir::listSeparator(), Qt::SkipEmptyParts);
     prependUniquePathEntries(&pathEntries, prependDirs);
