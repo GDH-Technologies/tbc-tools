@@ -56,18 +56,31 @@ trap 'rm -f "$PROFILE"' EXIT
 profile_list > "$PROFILE"
 cat "$PROFILE"
 
-# Same check as air0: a github: lock reads github:owner/repo/<sha>.
-if ! grep -q "Locked flake URL:.*$SHA" "$PROFILE"; then
-  echo "$HOST profile is not at $SHA. Locked flake URL reads:" >&2
-  grep "Locked flake URL:" "$PROFILE" >&2 || true
-  exit 1
-fi
+# The tbc-tools record's Locked flake URL and Store paths. Scoped to the record,
+# like ORIGINAL above. A github: lock reads github:owner/repo/<rev>?narHash=...
+record_field() {
+  awk -v field="$1" '/^Name:[[:space:]]+tbc-tools$/ { found = 1; next }
+                     found && /^Name:/ { exit }
+                     found && index($0, field ":") == 1 { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }' "$PROFILE"
+}
+LOCKED="$(record_field "Locked flake URL")"
+LOCKED_REV="$(printf '%s\n' "$LOCKED" | sed -nE 's#^github:[^/]+/[^/?]+/([0-9a-f]{40}).*#\1#p')"
+INSTALLED="$(record_field "Store paths" | awk '{ print $1 }')"
 
-INSTALLED="$(awk '/^Name:[[:space:]]+tbc-tools$/ { found = 1; next }
-                  found && /^Store paths:/ { print $3; exit }' "$PROFILE")"
+# The store path is the real check: it is derived from every input of the
+# build, and it must be the one wm built and copied here. The profile follows
+# main, so when another PR merges between the release and this job, the lock
+# names that later commit. If it builds the same store path (a change outside
+# the flake's filtered source, such as .github/), the host runs the release's
+# exact build, so that passes too (2026-11-26: #82 merged a minute after #80's
+# release, and every fleet host was refused despite holding the right build).
 if [ "$INSTALLED" != "$STORE" ]; then
   echo "Refusing to report success on $HOST: the profile resolved $INSTALLED, not wm's $STORE." >&2
+  echo "Locked flake URL: $LOCKED" >&2
   exit 1
+fi
+if [ "$LOCKED_REV" != "$SHA" ]; then
+  echo "::notice::$HOST: the profile locks ${LOCKED_REV:-<unparsed: $LOCKED>}, not $SHA, but resolved the same store path ($STORE), so it runs the release's build."
 fi
 
 # The deploy then runs ci/gdh/smoke_installed.sh on this host.

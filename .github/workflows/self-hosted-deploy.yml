@@ -328,12 +328,35 @@ jobs:
             nix profile "$ADD" --refresh -L "$FLAKE_URL"
           fi
 
-          # A github: lock reads github:owner/repo/<sha>.
+          # The tbc-tools record's lock and store path. A github: lock reads
+          # github:owner/repo/<rev>?narHash=...
           nix profile list | sed -e 's/\x1b\[[0-9;]*m//g' > "$RUNNER_TEMP/profile.txt"
-          if ! grep -q "Locked flake URL:.*$SHA" "$RUNNER_TEMP/profile.txt"; then
-            echo "air0 profile is not at $SHA. Locked flake URL reads:" >&2
-            grep "Locked flake URL:" "$RUNNER_TEMP/profile.txt" >&2 || true
-            exit 1
+          record_field() {
+            awk -v field="$1" '/^Name:[[:space:]]+tbc-tools$/ { found = 1; next }
+                               found && /^Name:/ { exit }
+                               found && index($0, field ":") == 1 { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }' \
+              "$RUNNER_TEMP/profile.txt"
+          }
+          LOCKED="$(record_field "Locked flake URL")"
+          LOCKED_REV="$(printf '%s\n' "$LOCKED" | sed -nE 's#^github:[^/]+/[^/?]+/([0-9a-f]{40}).*#\1#p')"
+          INSTALLED="$(record_field "Store paths" | awk '{ print $1 }')"
+
+          # The profile follows main, so a PR merged between the release and
+          # this job moves the lock past $SHA. That still passes when the later
+          # commit builds the same store path as the release commit (a change
+          # outside the flake's filtered source, such as .github/): air0 then
+          # runs the release's exact build. Anything else is refused, as before.
+          # (2026-11-26: #82 merged a minute after #80's release.)
+          if [ "$LOCKED_REV" != "$SHA" ]; then
+            SYSTEM="$(nix eval --impure --raw --expr builtins.currentSystem)"
+            EXPECTED="$(nix eval --raw "$FLAKE_URL/$SHA#packages.$SYSTEM.default.outPath")"
+            if [ "$INSTALLED" != "$EXPECTED" ]; then
+              echo "air0 profile is not at $SHA and its build differs from the release's." >&2
+              echo "Locked flake URL: $LOCKED" >&2
+              echo "Installed: $INSTALLED; $SHA builds: $EXPECTED" >&2
+              exit 1
+            fi
+            echo "::notice::air0: the profile locks ${LOCKED_REV:-<unparsed: $LOCKED>}, not $SHA, but resolved the release's store path ($EXPECTED)."
           fi
 
       - name: Smoke test
