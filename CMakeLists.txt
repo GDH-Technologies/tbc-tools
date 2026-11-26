@@ -131,14 +131,24 @@ pkg_check_modules(FFTW REQUIRED IMPORTED_TARGET fftw3)
 set(FFTW_INCLUDE_DIR ${FFTW_INCLUDE_DIRS})
 set(FFTW_LIBRARY PkgConfig::FFTW)
 
-find_package(onnxruntime CONFIG QUIET)
+set(_ONNXRUNTIME_SEARCH_ROOTS
+    ${ONNXRUNTIME_ROOT}
+    $ENV{ONNXRUNTIME_ROOT}
+)
+# Forward slashes: vcpkg's find_package() is a macro that re-parses its
+# arguments, and a Windows "C:\ci-tools\..." root fails there as an escape.
+string(REPLACE "\\" "/" _ONNXRUNTIME_SEARCH_ROOTS "${_ONNXRUNTIME_SEARCH_ROOTS}")
+list(FILTER _ONNXRUNTIME_SEARCH_ROOTS EXCLUDE REGEX "^$")
+list(REMOVE_DUPLICATES _ONNXRUNTIME_SEARCH_ROOTS)
+if(_ONNXRUNTIME_SEARCH_ROOTS)
+    # An explicit ONNXRUNTIME_ROOT is the only ORT this build may use: a host
+    # onnxruntimeConfig.cmake (e.g. /usr/lib64/cmake/onnxruntime) must not win.
+    unset(onnxruntime_DIR CACHE)
+    find_package(onnxruntime CONFIG QUIET PATHS ${_ONNXRUNTIME_SEARCH_ROOTS} NO_DEFAULT_PATH)
+else()
+    find_package(onnxruntime CONFIG QUIET)
+endif()
 if(NOT TARGET onnxruntime::onnxruntime)
-    set(_ONNXRUNTIME_SEARCH_ROOTS
-        ${ONNXRUNTIME_ROOT}
-        $ENV{ONNXRUNTIME_ROOT}
-    )
-    list(FILTER _ONNXRUNTIME_SEARCH_ROOTS EXCLUDE REGEX "^$")
-    list(REMOVE_DUPLICATES _ONNXRUNTIME_SEARCH_ROOTS)
     unset(ONNXRUNTIME_INCLUDE_DIR CACHE)
     unset(ONNXRUNTIME_LIBRARY CACHE)
     if(WIN32)
@@ -191,9 +201,9 @@ if(NOT TARGET onnxruntime::onnxruntime)
             INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}"
         )
     endif()
-    unset(_ONNXRUNTIME_SEARCH_ROOTS)
     unset(ONNXRUNTIME_DLL)
 endif()
+unset(_ONNXRUNTIME_SEARCH_ROOTS)
 
 function(stage_windows_onnxruntime_runtime target_name)
     if(NOT WIN32)
