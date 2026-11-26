@@ -36,9 +36,6 @@ concurrency:
   group: tbc-tools-air0-macos-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   test:
     name: Build and test tbc-tools (arm64, air0-test)
@@ -61,12 +58,13 @@ jobs:
           nix --version
           xcode-select -p
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         # Shallow, no tags, no submodules: the Nix build reads only the tree,
         # and a depth-1 checkout evaluates to the same derivation as a full
         # one. Full history is 6.8 GB -- a fresh workspace spent 40 minutes
         # cloning it at air0's download rate.
         with:
+          persist-credentials: false
           fetch-depth: 1
           fetch-tags: false
           submodules: false
