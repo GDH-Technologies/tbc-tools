@@ -90,7 +90,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   TOOLS_ROOT: 'C:\ci-tools'
   VCPKG_ROOT: 'C:\ci-tools\vcpkg'
   VCPKG_BINARY_CACHE_DIR: 'C:\ci-tools\vcpkg-binary-cache\x64-windows'
@@ -348,12 +347,13 @@ jobs:
         run: |
           Remove-Item -Recurse -Force build, release -ErrorAction SilentlyContinue
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         # Full history and tags -- git describe and gdh_version.py need them --
         # but a partial clone: file contents only for what is checked out. A
         # fresh runner's full clone is 6.8 GB of mostly old blobs (40 minutes
         # on air0's link). A release build checks out the release commit.
         with:
+          persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
           filter: blob:none

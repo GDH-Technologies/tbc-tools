@@ -62,9 +62,6 @@ concurrency:
   group: tbc-tools-gdh-release
   cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   release:
     name: Cut the release
@@ -82,8 +79,11 @@ jobs:
     steps:
       - name: Checkout main
         # Pinned to a commit: this job holds a write token.
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Kept: gdh_version.py release --push pushes the release commit and
+          # tag with this job's token.
+          persist-credentials: true
           # The latest main, not the pushed commit, and all of its history
           # and tags: the release covers everything since the last tag.
           ref: main

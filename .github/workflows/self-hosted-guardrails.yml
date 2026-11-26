@@ -25,9 +25,6 @@ concurrency:
   group: tbc-tools-guardrails-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   guardrails:
     name: CI guardrails
@@ -42,8 +39,9 @@ jobs:
           || github.event.pull_request.head.repo.full_name == github.repository }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # The version tests resolve with `git describe`, and check-pr needs
           # the base; a shallow checkout would answer wrongly.
           fetch-depth: 0

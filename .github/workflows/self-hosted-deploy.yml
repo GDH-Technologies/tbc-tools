@@ -41,9 +41,6 @@ concurrency:
   group: tbc-tools-self-hosted-deploy
   cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   probe:
     name: Resolve the commit and probe hosts
@@ -133,9 +130,10 @@ jobs:
       # runner's own CI workspace is a different checkout entirely.
       CHECKOUT: /home/rdodge/Repos/tbc-tools
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         # Only for ci/gdh's scripts.
         with:
+          persist-credentials: false
           ref: ${{ needs.probe.outputs.sha }}
           fetch-depth: 1
           sparse-checkout: ci/gdh
@@ -250,8 +248,9 @@ jobs:
       STORE: ${{ needs.wm.outputs.store_path }}
       HOSTS: ${{ needs.probe.outputs.fleet_hosts }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           ref: ${{ needs.probe.outputs.sha }}
           fetch-depth: 1
           sparse-checkout: ci/gdh
@@ -296,9 +295,10 @@ jobs:
       # air0 installs from the public fork rather than a local checkout.
       FLAKE_URL: github:GDH-Technologies/tbc-tools
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         # Only for ci/gdh's scripts; a full clone is 6.8 GB.
         with:
+          persist-credentials: false
           ref: ${{ needs.probe.outputs.sha }}
           fetch-depth: 1
           sparse-checkout: ci/gdh
