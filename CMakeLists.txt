@@ -135,6 +135,9 @@ set(_ONNXRUNTIME_SEARCH_ROOTS
     ${ONNXRUNTIME_ROOT}
     $ENV{ONNXRUNTIME_ROOT}
 )
+# Forward slashes: vcpkg's find_package() is a macro that re-parses its
+# arguments, and a Windows "C:\ci-tools\..." root fails there as an escape.
+string(REPLACE "\\" "/" _ONNXRUNTIME_SEARCH_ROOTS "${_ONNXRUNTIME_SEARCH_ROOTS}")
 list(FILTER _ONNXRUNTIME_SEARCH_ROOTS EXCLUDE REGEX "^$")
 list(REMOVE_DUPLICATES _ONNXRUNTIME_SEARCH_ROOTS)
 if(_ONNXRUNTIME_SEARCH_ROOTS)
