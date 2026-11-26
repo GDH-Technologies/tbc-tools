@@ -12,7 +12,7 @@ name: "Self-hosted Windows build (win0-test)"
 # dependencies -- and most of that is qtbase, which drags in icu, harfbuzz,
 # freetype, libpng, brotli, pcre2, zstd, double-conversion and openssl. So Qt
 # does not come from vcpkg here: it comes prebuilt from the Qt project via
-# aqtinstall, pinned to 6.10.1, the version the flake gives the Linux and macOS
+# aqtinstall, pinned to 6.12.0, the version the flake gives the Linux and macOS
 # builds. (The hosted job's vcpkg baseline still builds 6.8.3; the code has to
 # compile on both.) vcpkg is left with fftw3,
 # libflac, ffmpeg and sqlite3, in classic mode so the shared vcpkg.json -- which
@@ -99,7 +99,7 @@ env:
   # The version the flake's locked nixpkgs gives the Linux and macOS builds, so
   # every GDH platform runs the same Qt. Fork-owned: the hosted job's vcpkg
   # baseline (ports/qtbase 6.8.3) is upstream's and is left alone.
-  QT_VERSION: "6.10.1"
+  QT_VERSION: "6.12.0"
   QT_ARCH: "win64_msvc2022_64"
   QT_DIR_NAME: "msvc2022_64"
   # Pinned to CMake 3.x: fftw3 does not yet support CMake 4.x. Same pin the
@@ -262,13 +262,16 @@ jobs:
             Write-Host "No Qt $env:QT_VERSION found in: $($candidates -join '; ')"
             python -m pip install --upgrade aqtinstall
             if ($LASTEXITCODE -ne 0) { throw "aqtinstall install failed" }
-            # No `-m qtsvg`: in Qt 6.8 and 6.10 Svg is not an optional module,
-            # it is an archive inside the base package, and asking for it as a
-            # module fails with "The packages ['qtsvg'] were not found".
+            # No `-m qtsvg`: in Qt 6.8, 6.10 and 6.12 Svg is not an optional
+            # module, it is an archive inside the base package, and asking for
+            # it as a module fails with "The packages ['qtsvg'] were not found".
             # Confirmed against `aqt list-qt windows desktop --archives 6.10.1
             # win64_msvc2022_64`, which lists qtbase, qtsvg, qttools,
             # qtdeclarative, qttranslations, d3dcompiler_47 and opengl32sw
-            # (the same set 6.8.3 had).
+            # (the same set 6.8.3 had). 6.12.0's qt.qt6.6120.win64_msvc2022_64
+            # package in download.qt.io's Updates.xml lists the same set plus
+            # qtdoc (checked 2026-11-26). 6.12 moved each architecture into its
+            # own repository directory (qt6_6120/qt6_6120_msvc2022_64/).
             #
             # Take only the three that are needed -- qtbase for Core/Gui/
             # Widgets/Sql/Network, qtsvg for Svg, qttools for windeployqt --

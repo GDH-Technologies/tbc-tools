@@ -11,7 +11,14 @@
     };
   };
   outputs = { self, nixpkgs, nixpkgsLegacy, flake-utils, ezpwd }:
-    flake-utils.lib.eachDefaultSystem (system:
+    # No x86_64-darwin (Intel macOS). Nixpkgs 26.11 throws on import for it,
+    # and the locked nixpkgs is past that (Qt 6.12.0 landed after it), so with
+    # eachDefaultSystem the whole flake failed to evaluate, Linux included.
+    # nixpkgs' `allowDeprecatedx86_64Darwin = "force"` would get past the
+    # throw, but nothing would come from the binary cache. The fork dropped
+    # Intel macOS at the Qt 6.12 migration (2026-11-26); upstream's hosted
+    # macos-15-intel job is disabled in the fork.
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgsUnstable = import nixpkgs {
           inherit system;
@@ -26,7 +33,7 @@
         isDarwin = pkgsUnstable.stdenv.hostPlatform.isDarwin;
         isLinuxX86_64 = isLinux && pkgsUnstable.stdenv.hostPlatform.isx86_64;
         enableCuda = isLinuxX86_64;
-        # Every platform builds from the locked nixpkgs (Qt 6.10.1). The
+        # Every platform builds from the locked nixpkgs (Qt 6.12.0). The
         # nixpkgsLegacy pin (nixos-24.11) is kept only for what unstable has
         # removed: the CUDA 11.8 / cuDNN 8.9 / gcc11 toolchain for GTX-1000
         # (Pascal) support, and so packages.cuda, cuda-plugin-linux-deps and
